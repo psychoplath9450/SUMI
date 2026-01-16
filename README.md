@@ -61,7 +61,7 @@ SUMI is custom firmware that turns your Inkplate into a little e-ink companion d
 - Weather display
 - Games (Chess, Sudoku, etc.)
 - Flashcards
-- An e-reader (that crashes sometimes, see below)
+- An e-reader (non functional currently)
 - And other stuff
 
 The whole idea is that you configure everything through a nice web interface on your phone/computer rather than navigating menus with 5 buttons on a slow e-ink screen.
@@ -94,7 +94,6 @@ Let me be real about where things stand:
 - **PDF Support** - Listed in the portal but barely functional. Don't expect this to work.
 - **Images App** - Only supports BMP format currently. The portal will let you upload JPG/PNG but the device can't actually display them (I know, I know, I need to fix the portal to stop lying about this).
 - **Maps** - Placeholder, not actually implemented.
-- **Bluetooth Keyboard** - Pairing works sometimes. Connection is flaky.
 
 ---
 
@@ -118,8 +117,8 @@ Let me be real about where things stand:
 
 1. **Clone the repo:**
    ```bash
-   git clone https://github.com/yourusername/sumi.git
-   cd sumi
+   git clone https://github.com/psychoplath9450/SUMI.git
+   cd SUMI
    ```
 
 2. **Build the portal HTML** (packages the web interface into the firmware):
@@ -247,7 +246,6 @@ Controls:
 | Library/Reader | ❌ Unstable | Crashes on complex EPUBs |
 | Images | ⚠️ Partial | BMP only, needs work |
 | Maps | ❌ Not Done | Placeholder only |
-| Bluetooth KB | ⚠️ Flaky | Pairing works sometimes |
 
 ---
 
@@ -298,8 +296,8 @@ sumi/
 # Install PlatformIO CLI or VS Code extension first
 
 # Clone
-git clone https://github.com/yourusername/sumi.git
-cd sumi
+git clone https://github.com/psychoplath9450/SUMI.git
+cd SUMI
 
 # Build portal (required before first build)
 cd portal && python build.py && cd ..
