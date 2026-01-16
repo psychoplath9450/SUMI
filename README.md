@@ -2,15 +2,14 @@
 
 **Ink, Simplified.**
 
-Custom firmware for the Inkplate 4.26" ESP32-C3 e-ink device.
-
+Custom firmware for the Xteink X4
 ---
 
 ## ⚠️ Important: Read This First
 
 **This project is very much a work in progress.** If you're looking for a stable, daily-driver e-reader experience, this is not it. Seriously. Go use:
 
-- **[Crosspoint](https://github.com/nicholasglazer/crosspoint)** - A more mature alternative firmware
+- **[ https://github.com/crosspoint-reader/crosspoint-reader.git )** - A more mature alternative firmware
 - **Factory firmware** - What came on your device, it actually works reliably
 
 SUMI is a hobby project I've been hacking on. Some things work great. Some things crash. The e-reader functionality in particular needs a lot of work. I'm sharing it because maybe someone finds it interesting or wants to contribute, not because it's ready for real use.
@@ -347,8 +346,7 @@ MIT. Do whatever you want with it.
 
 ## Final Thoughts
 
-This project exists because I wanted to learn embedded development and I like e-ink. It's not trying to compete with Kindle or Kobo or even other Inkplate firmwares. It's just a thing I made.
+This project exists because I wanted to learn embedded development and I like e-ink. It's not trying to compete with Kindle or Kobo or any other firmwares. It's just a thing I made.
 
-If you flash this and it works for you, cool! If it crashes and eats your SD card, sorry. You were warned.
 
 Happy hacking.
