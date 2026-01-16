@@ -44,7 +44,7 @@ SD Card Root/
 3. Create a folder called `images` (not "Pictures" or "Photos")
 4. Create any other folders you need from the list above
 5. Add your files to the appropriate folders
-6. Insert SD card into your Inkplate
+6. Insert SD card
 
 
 ---
@@ -53,7 +53,7 @@ SD Card Root/
 
 ## What Even Is This?
 
-SUMI is custom firmware that turns your Inkplate into a little e-ink companion device with:
+SUMI is custom firmware that turns your Xteink X4 into a little e-ink companion device with:
 
 - A customizable home screen with apps you choose
 - A web-based portal for configuration (no tiny screen menus!)
@@ -127,7 +127,7 @@ Let me be real about where things stand:
    cd ..
    ```
 
-3. **Connect your Inkplate via USB-C**
+3. **Connect your Xteink X4 via USB-C**
 
 4. **Build and upload:**
    ```bash
@@ -337,7 +337,6 @@ MIT. Do whatever you want with it.
 
 ## Acknowledgments
 
-- [Inkplate](https://inkplate.io/) for making cool e-ink hardware
 - [GxEPD2](https://github.com/ZinggJM/GxEPD2) for the display library
 - [OpenWeatherMap](https://openweathermap.org/) for the free weather API
 - Everyone who's worked on ESP32 Arduino libraries
