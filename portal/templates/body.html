@@ -1,0 +1,795 @@
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+    <div class="logo">SUMI</div>
+    <div class="header-status">
+      <div class="status-badge">
+        <span class="status-dot"></span>
+        <span id="headerStatus">Connected</span>
+      </div>
+      <span id="headerBattery">🔋 --%</span>
+    </div>
+  </header>
+  
+  <div class="main">
+    <nav class="sidebar" id="sidebar">
+      <div class="nav-section">
+        <div class="nav-section-title">Setup</div>
+        <div class="nav-item active" data-page="home"><span class="nav-icon">🏠</span>Dashboard</div>
+        <div class="nav-item" data-page="builder"><span class="nav-icon">🎨</span>Customize</div>
+        <div class="nav-item" data-page="wifi"><span class="nav-icon">📶</span>WiFi</div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">Content</div>
+        <div class="nav-item" data-page="files"><span class="nav-icon">📁</span>Files</div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">Settings</div>
+        <div class="nav-item" data-page="weather"><span class="nav-icon">🌤️</span>Weather</div>
+        <div class="nav-item" data-page="display"><span class="nav-icon">🖥️</span>Display</div>
+        <div class="nav-item" data-page="bluetooth"><span class="nav-icon">⌨️</span>Keyboard</div>
+        <div class="nav-item" data-page="power"><span class="nav-icon">🔋</span>Power</div>
+        <div class="nav-item" data-page="about"><span class="nav-icon">ℹ️</span>About</div>
+      </div>
+    </nav>
+    
+    <main class="content">
+      <!-- HOME PAGE -->
+      <div class="page active" id="page-home">
+        <div class="page-header">
+          <h1 class="page-title">Welcome to Sumi</h1>
+          <p class="page-desc">Your e-ink companion is ready to be configured</p>
+        </div>
+        
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">🔋</div>
+            <div class="stat-value" id="statBattery">--%</div>
+            <div class="stat-label">Battery</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">💾</div>
+            <div class="stat-value" id="statStorage">--</div>
+            <div class="stat-label">Storage</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📶</div>
+            <div class="stat-value" id="statWifi">--</div>
+            <div class="stat-label">WiFi</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">⏱️</div>
+            <div class="stat-value" id="statUptime">--</div>
+            <div class="stat-label">Uptime</div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Quick Setup</span>
+          </div>
+          <div class="card-body">
+            <p style="color:var(--text-muted);margin-bottom:20px;">Get started with these essential steps:</p>
+            <div class="btn-group" style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
+              <button class="btn btn-primary" onclick="showPage('wifi')">📶 Connect WiFi</button>
+              <button class="btn btn-secondary" onclick="showPage('builder')">🎨 Customize Device</button>
+              <button class="btn btn-secondary" onclick="showPage('files')">📁 Manage Files</button>
+              <button class="btn btn-secondary" onclick="showPage('bluetooth')">⌨️ Pair Keyboard</button>
+              <button class="btn btn-secondary" onclick="api('/api/refresh','POST');toast('Display refreshed','success')" style="grid-column:span 2">🔄 Refresh Screen</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Device Info</span>
+          </div>
+          <div class="card-body">
+            <table style="width:100%;font-size:14px;">
+              <tr><td style="color:var(--text-muted);padding:10px 0">Firmware</td><td style="text-align:right" id="infoFirmware">--</td></tr>
+              <tr><td style="color:var(--text-muted);padding:10px 0">Display</td><td style="text-align:right">4.26" 800×480 E-Ink</td></tr>
+              <tr><td style="color:var(--text-muted);padding:10px 0">IP Address</td><td style="text-align:right" id="infoIP">--</td></tr>
+              <tr><td style="color:var(--text-muted);padding:10px 0">Free Memory</td><td style="text-align:right" id="infoMem">--</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- BUILDER PAGE -->
+      <div class="page" id="page-builder">
+        <div class="page-header">
+          <h1 class="page-title">Customize Your Sumi</h1>
+          <p class="page-desc">Choose your apps, theme, and layout</p>
+        </div>
+        
+        <div class="builder-layout">
+          <div class="builder-options">
+            <div class="builder-tabs">
+              <div class="builder-tab active" onclick="showBuilderTab('apps')">📱 Apps</div>
+              <div class="builder-tab" onclick="showBuilderTab('theme')">🎨 Theme</div>
+              <div class="builder-tab" onclick="showBuilderTab('layout')">📐 Layout</div>
+              <div class="builder-tab" onclick="showBuilderTab('lockscreen')">🔒 Lock Screen</div>
+              <div class="builder-tab" onclick="showBuilderTab('sleep')">😴 Sleep Screen</div>
+            </div>
+            
+            <!-- APPS TAB -->
+            <div class="builder-panel active" id="panel-apps">
+              <p style="color:var(--text-muted);margin-bottom:20px;">Select the apps to show on your home screen:</p>
+              
+              <div class="plugin-category">
+                <h4>Core Apps</h4>
+                <div class="plugin-grid" id="plugins-core"></div>
+              </div>
+              
+              <div class="plugin-category">
+                <h4>Games</h4>
+                <div class="plugin-grid" id="plugins-games"></div>
+              </div>
+              
+              <div class="plugin-category">
+                <h4>Tools</h4>
+                <div class="plugin-grid" id="plugins-tools"></div>
+              </div>
+              
+              <div class="plugin-category">
+                <h4>Widgets</h4>
+                <div class="plugin-grid" id="plugins-widgets"></div>
+              </div>
+              
+              <div class="plugin-category">
+                <h4>System</h4>
+                <div class="plugin-grid" id="plugins-system"></div>
+              </div>
+            </div>
+            
+            <!-- THEME TAB -->
+            <div class="builder-panel" id="panel-theme">
+              <div class="option-section">
+                <h3>Color Theme</h3>
+                <div class="style-options">
+                  <label class="style-option selected" onclick="selectTheme(0)">
+                    <div class="theme-preview light"></div>
+                    <span>Light</span>
+                  </label>
+                  <label class="style-option" onclick="selectTheme(1)">
+                    <div class="theme-preview dark"></div>
+                    <span>Dark</span>
+                  </label>
+                  <label class="style-option" onclick="selectTheme(2)">
+                    <div class="theme-preview contrast"></div>
+                    <span>High Contrast</span>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="option-section">
+                <h3>Corner Style</h3>
+                <div class="style-options">
+                  <label class="style-option selected" onclick="selectIconStyle('rounded')">
+                    <div class="icon-preview rounded">Abc</div>
+                    <span>Rounded</span>
+                  </label>
+                  <label class="style-option" onclick="selectIconStyle('square')">
+                    <div class="icon-preview square">Abc</div>
+                    <span>Square</span>
+                  </label>
+                  <label class="style-option" onclick="selectIconStyle('circle')">
+                    <div class="icon-preview circle">Abc</div>
+                    <span>Circle</span>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="option-section">
+                <h3>Font Size</h3>
+                <div class="slider-row">
+                  <span class="slider-label">App Labels</span>
+                  <input type="range" class="slider-input" id="fontSizeSlider" min="10" max="24" value="12" oninput="updateFontSize(this.value)">
+                  <span class="slider-value" id="fontSizeVal">12px</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- LAYOUT TAB -->
+            <div class="builder-panel" id="panel-layout">
+              <div class="option-section">
+                <h3>Screen Orientation</h3>
+                <div class="style-options" style="grid-template-columns: repeat(2, 1fr);">
+                  <label class="style-option" onclick="selectOrientation('landscape')">
+                    <div class="orient-preview landscape"></div>
+                    <span>Landscape</span>
+                  </label>
+                  <label class="style-option selected" onclick="selectOrientation('portrait')">
+                    <div class="orient-preview portrait"></div>
+                    <span>Portrait</span>
+                  </label>
+                </div>
+                <p style="color:var(--text-muted);font-size:12px;margin-top:10px;">App grid will automatically adjust based on enabled apps</p>
+              </div>
+              
+              <div class="option-section">
+                <h3>Status Bar</h3>
+                <div class="toggle"><span class="toggle-label">Show Status Bar</span><div class="toggle-switch on" id="togStatusBar" onclick="toggleBuilder(this,'showStatusBar')"></div></div>
+                <div class="toggle"><span class="toggle-label">Show Battery</span><div class="toggle-switch on" id="togBattery" onclick="toggleBuilder(this,'showBattery')"></div></div>
+                <div class="toggle"><span class="toggle-label">Show Clock</span><div class="toggle-switch on" id="togClock" onclick="toggleBuilder(this,'showClock')"></div></div>
+                <div class="toggle"><span class="toggle-label">Show WiFi</span><div class="toggle-switch" id="togWifi" onclick="toggleBuilder(this,'showWifi')"></div></div>
+              </div>
+            </div>
+            
+            <!-- LOCKSCREEN TAB -->
+            <div class="builder-panel" id="panel-lockscreen">
+              <div class="option-section">
+                <h3>Lock Screen Style</h3>
+                <div class="style-options" style="grid-template-columns: repeat(2, 1fr);">
+                  <label class="style-option selected" onclick="selectLockStyle('clock')">
+                    <div class="lock-opt-icon">12:34</div>
+                    <span>Clock</span>
+                  </label>
+                  <label class="style-option" onclick="selectLockStyle('photo')">
+                    <div class="lock-opt-icon">IMG</div>
+                    <span>Photo</span>
+                  </label>
+                  <label class="style-option" onclick="selectLockStyle('quote')">
+                    <div class="lock-opt-icon">" "</div>
+                    <span>Quote</span>
+                  </label>
+                  <label class="style-option" onclick="selectLockStyle('minimal')">
+                    <div class="lock-opt-icon minimal">○</div>
+                    <span>Minimal</span>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="option-section" id="lockPhotoOptions" style="display:none;">
+                <h3>Photo Source</h3>
+                <div class="style-options">
+                  <label class="style-option selected" onclick="selectPhotoSource('shuffle')">
+                    <div class="lock-opt-icon small">RND</div>
+                    <span>Shuffle</span>
+                  </label>
+                  <label class="style-option" onclick="selectPhotoSource('select')">
+                    <div class="lock-opt-icon small">ONE</div>
+                    <span>Single</span>
+                  </label>
+                  <label class="style-option" onclick="selectPhotoSource('folder')">
+                    <div class="lock-opt-icon small">DIR</div>
+                    <span>Folder</span>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="option-section">
+                <h3>Lock Screen Info</h3>
+                <div class="toggle"><span class="toggle-label">Show Date</span><div class="toggle-switch on" id="togLockDate" onclick="toggleBuilder(this,'showDate')"></div></div>
+                <div class="toggle"><span class="toggle-label">Show Battery</span><div class="toggle-switch on" id="togLockBattery" onclick="toggleBuilder(this,'showBatteryLock')"></div></div>
+                <div class="toggle"><span class="toggle-label">Show Weather</span><div class="toggle-switch" id="togLockWeather" onclick="toggleBuilder(this,'showWeatherLock')"></div></div>
+              </div>
+            </div>
+            
+            <!-- SLEEP SCREEN TAB -->
+            <div class="builder-panel" id="panel-sleep">
+              <div class="option-section">
+                <h3>Sleep Screen Display</h3>
+                <p style="color:var(--text-muted);font-size:13px;margin-bottom:14px;">What to show when device enters deep sleep mode</p>
+                <div class="style-options" style="grid-template-columns: repeat(3, 1fr);">
+                  <label class="style-option" onclick="selectSleepStyle('book')">
+                    <div class="sleep-opt-icon">📕</div>
+                    <span>Book Cover</span>
+                  </label>
+                  <label class="style-option" onclick="selectSleepStyle('shuffle')">
+                    <div class="sleep-opt-icon">🔀</div>
+                    <span>Shuffle Images</span>
+                  </label>
+                  <label class="style-option selected" onclick="selectSleepStyle('off')">
+                    <div class="sleep-opt-icon">💤</div>
+                    <span>Wake Me Up</span>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="option-section">
+                <h3>Sleep Options</h3>
+                <div class="toggle"><span class="toggle-label">Show Battery Warning</span><div class="toggle-switch on" id="togSleepBattery" onclick="toggleBuilder(this,'showBatterySleep')"></div></div>
+              </div>
+              
+              <div class="option-section">
+                <h3>Wake Button</h3>
+                <div class="select-wrap">
+                  <select id="wakeButton" onchange="builderConfig.wakeButton=this.value">
+                    <option value="any">Any Button</option>
+                    <option value="select">Select Button Only</option>
+                    <option value="power">Power Button Only</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- PREVIEW -->
+          <div class="builder-preview">
+            <div class="preview-header">
+              <span>📱 Live Preview</span>
+              <span class="preview-badge" id="previewBadge">Home</span>
+            </div>
+            <div class="preview-tabs">
+              <div class="preview-tab active" onclick="setPreviewMode('home')">🏠 Home</div>
+              <div class="preview-tab" onclick="setPreviewMode('lock')">🔒 Lock</div>
+              <div class="preview-tab" onclick="setPreviewMode('sleep')">😴 Sleep</div>
+            </div>
+            <div class="device-container">
+              <div class="device-outer portrait" id="deviceFrame">
+                <div class="device-inner">
+                  <div class="eink-screen light" id="einkScreen"></div>
+                </div>
+              </div>
+            </div>
+            <div id="previewStats" style="margin-top:16px;text-align:center;font-size:11px;color:var(--text-muted)"></div>
+            <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
+              <button class="btn btn-sm btn-secondary" onclick="resetToDefaults()">↩️ Reset All</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WIFI PAGE -->
+      <div class="page" id="page-wifi">
+        <div class="page-header">
+          <h1 class="page-title">WiFi Settings</h1>
+          <p class="page-desc">Connect to your home network</p>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Current Connection</span>
+          </div>
+          <div class="card-body">
+            <div id="wifiStatus" style="font-size:16px;">Checking...</div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Available Networks</span>
+            <button class="btn btn-sm btn-secondary" onclick="scanWifi()" id="wifiScanBtn">🔍 Scan</button>
+          </div>
+          <div class="card-body">
+            <div id="wifiList"><p style="color:var(--text-muted);text-align:center;padding:20px;">Click Scan to find networks</p></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FILES PAGE -->
+      <div class="page" id="page-files">
+        <div class="page-header">
+          <h1 class="page-title">File Manager</h1>
+          <p class="page-desc">Manage your books, images, and more</p>
+        </div>
+        
+        <div class="file-tabs">
+          <div class="file-tab active" onclick="showFileTab('books')">📚 Books <span class="count" id="countBooks">0</span></div>
+          <div class="file-tab" onclick="showFileTab('images')">🖼️ Images <span class="count" id="countImages">0</span></div>
+          <div class="file-tab" onclick="showFileTab('maps')">🗺️ Maps <span class="count" id="countMaps">0</span></div>
+          <div class="file-tab" onclick="showFileTab('flashcards')">🎴 Flashcards <span class="count" id="countFlashcards">0</span></div>
+          <div class="file-tab" onclick="showFileTab('notes')">📝 Notes <span class="count" id="countNotes">0</span></div>
+        </div>
+        
+        <!-- Books Panel -->
+        <div class="file-panel active" id="panel-books">
+          <div class="upload-zone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event,'books')">
+            <div class="icon">📚</div>
+            <div class="text">Drop books here or click to upload</div>
+            <div class="hint">Supports: EPUB, PDF, TXT</div>
+            <input type="file" accept=".epub,.pdf,.txt" multiple onchange="uploadFiles(this.files,'books')">
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Your Books</span>
+              <button class="btn btn-sm btn-secondary" onclick="refreshFiles('books')">🔄 Refresh</button>
+            </div>
+            <div class="card-body">
+              <div class="file-grid" id="bookGrid">
+                <div class="file-empty"><div class="icon">📚</div><div>No books yet</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Reader Settings</span></div>
+            <div class="card-body">
+              <div class="slider-row">
+                <span class="slider-label">Font Size</span>
+                <input type="range" class="slider-input" id="readerFontSize" min="12" max="32" value="18" oninput="updateSlider(this,'readerFontVal','px')">
+                <span class="slider-value" id="readerFontVal">18px</span>
+              </div>
+              <div class="slider-row">
+                <span class="slider-label">Line Spacing</span>
+                <input type="range" class="slider-input" id="readerLineHeight" min="100" max="200" step="10" value="150" oninput="updateSlider(this,'readerLineVal','%')">
+                <span class="slider-value" id="readerLineVal">150%</span>
+              </div>
+              <div class="slider-row">
+                <span class="slider-label">Margins</span>
+                <input type="range" class="slider-input" id="readerMargins" min="5" max="40" value="20" oninput="updateSlider(this,'readerMarginVal','px')">
+                <span class="slider-value" id="readerMarginVal">20px</span>
+              </div>
+              <div class="toggle">
+                <span class="toggle-label">Justify Text</span>
+                <div class="toggle-switch on" id="togJustify" onclick="toggleReaderOpt(this,'textAlign')"></div>
+              </div>
+              <div class="toggle">
+                <span class="toggle-label">Show Progress Bar</span>
+                <div class="toggle-switch on" id="togProgress" onclick="toggleReaderOpt(this,'showProgress')"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Images Panel -->
+        <div class="file-panel" id="panel-images">
+          <div class="upload-zone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event,'images')">
+            <div class="icon">🖼️</div>
+            <div class="text">Drop images here or click to upload</div>
+            <div class="hint">Supports: BMP only (1-bit or 24-bit, 200x240 recommended)</div>
+            <input type="file" accept=".bmp" multiple onchange="uploadFiles(this.files,'images')">
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Your Images</span>
+              <button class="btn btn-sm btn-secondary" onclick="refreshFiles('images')">🔄 Refresh</button>
+            </div>
+            <div class="card-body">
+              <div class="file-grid" id="imageGrid">
+                <div class="file-empty"><div class="icon">🖼️</div><div>No images yet</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Image Settings</span></div>
+            <div class="card-body">
+              <div class="toggle">
+                <div><span class="toggle-label">Auto-convert to grayscale</span><div class="toggle-desc">Optimize colors for e-ink display</div></div>
+                <div class="toggle-switch on" id="togGrayscale" onclick="toggleImageOpt(this,'grayscale')"></div>
+              </div>
+              <div class="toggle">
+                <div><span class="toggle-label">Dither for e-ink</span><div class="toggle-desc">Apply Floyd-Steinberg dithering</div></div>
+                <div class="toggle-switch on" id="togDither" onclick="toggleImageOpt(this,'dither')"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Maps Panel -->
+        <div class="file-panel" id="panel-maps">
+          <div class="upload-zone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event,'maps')">
+            <div class="icon">🗺️</div>
+            <div class="text">Drop map images here or click to upload</div>
+            <div class="hint">Supports: PNG, BMP, JPG (or OSM tile folders)</div>
+            <input type="file" accept=".png,.bmp,.jpg,.jpeg" multiple onchange="uploadFiles(this.files,'maps')">
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Your Maps</span>
+              <button class="btn btn-sm btn-secondary" onclick="refreshFiles('maps')">🔄 Refresh</button>
+            </div>
+            <div class="card-body">
+              <div class="file-grid" id="mapGrid">
+                <div class="file-empty"><div class="icon">🗺️</div><div>No maps yet</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Getting Offline Maps</span></div>
+            <div class="card-body" style="color:var(--text-muted);font-size:14px;">
+              <p style="margin-bottom:12px;"><strong>Option 1: Simple Images</strong><br>
+              Upload any map image (trail maps, campus maps, transit maps) as PNG, BMP, or JPG.</p>
+              <p style="margin-bottom:12px;"><strong>Option 2: OSM Tiles</strong><br>
+              Use <a href="https://mobac.sourceforge.io/" target="_blank" style="color:var(--primary);">Mobile Atlas Creator</a> to download tile sets. Copy the folder to /maps/ on SD card.</p>
+              <p><strong>Tile folder structure:</strong><br>
+              <code style="font-size:12px;">/maps/myarea/12/2048/1365.png</code></p>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Flashcards Panel -->
+        <div class="file-panel" id="panel-flashcards">
+          <div class="btn-group" style="margin-bottom:20px;">
+            <button class="btn btn-primary" onclick="showCreateDeckModal()">➕ Create Deck</button>
+            <label class="btn btn-secondary">
+              📥 Import Anki
+              <input type="file" accept=".apkg,.txt,.csv" style="display:none" onchange="importAnkiDeck(this.files[0])">
+            </label>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Your Decks</span>
+              <button class="btn btn-sm btn-secondary" onclick="refreshFiles('flashcards')">🔄 Refresh</button>
+            </div>
+            <div class="card-body" id="deckList">
+              <div class="file-empty"><div class="icon">🎴</div><div>No flashcard decks yet</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Flashcard Settings</span></div>
+            <div class="card-body">
+              <div class="form-group">
+                <label class="form-label">New Cards Per Day</label>
+                <input type="number" class="form-input" id="fcNewPerDay" value="20" min="0" max="100" onchange="saveFcSetting('newPerDay',this.value)">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Daily Review Limit</label>
+                <input type="number" class="form-input" id="fcReviewLimit" value="200" min="0" max="500" onchange="saveFcSetting('reviewLimit',this.value)">
+              </div>
+              <div class="slider-row">
+                <span class="slider-label">Target Retention</span>
+                <input type="range" class="slider-input" id="fcRetention" min="70" max="99" value="90" oninput="updateSlider(this,'fcRetVal','%')">
+                <span class="slider-value" id="fcRetVal">90%</span>
+              </div>
+              <div class="toggle">
+                <span class="toggle-label">Use FSRS Algorithm</span>
+                <div class="toggle-switch on" id="togFsrs" onclick="toggleFcOpt(this,'useFsrs')"></div>
+              </div>
+              <div class="toggle">
+                <span class="toggle-label">Shuffle New Cards</span>
+                <div class="toggle-switch on" id="togShuffle" onclick="toggleFcOpt(this,'shuffle')"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Notes Panel -->
+        <div class="file-panel" id="panel-notes">
+          <div class="btn-group" style="margin-bottom:20px;">
+            <button class="btn btn-primary" onclick="createNewNote()">📝 New Note</button>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Your Notes</span>
+              <button class="btn btn-sm btn-secondary" onclick="refreshFiles('notes')">🔄 Refresh</button>
+            </div>
+            <div class="card-body">
+              <div class="file-grid" id="noteGrid">
+                <div class="file-empty"><div class="icon">📝</div><div>No notes yet</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WEATHER PAGE -->
+      <div class="page" id="page-weather">
+        <div class="page-header">
+          <h1 class="page-title">Weather & Time</h1>
+          <p class="page-desc">Location and timezone settings</p>
+        </div>
+        
+        <div class="card">
+          <div class="card-header"><span class="card-title">Location</span></div>
+          <div class="card-body">
+            <p style="color:var(--text-muted);margin-bottom:20px;">Enter your ZIP code to get weather for your exact location instead of using IP-based detection.</p>
+            <div class="form-group">
+              <label class="form-label">ZIP Code</label>
+              <div style="display:flex;gap:10px;">
+                <input type="text" class="form-input" id="weatherZip" placeholder="e.g. 80424" maxlength="5" pattern="[0-9]{5}" style="flex:1;">
+                <button class="btn btn-primary" onclick="saveWeatherZip()">Save</button>
+              </div>
+            </div>
+            <div id="weatherLocation" style="margin-top:15px;padding:15px;background:var(--bg-tertiary);border-radius:8px;display:none;">
+              <div style="font-weight:600;" id="weatherCity">--</div>
+              <div style="color:var(--text-muted);font-size:14px;" id="weatherCoords">--</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header"><span class="card-title">Timezone</span></div>
+          <div class="card-body">
+            <p style="color:var(--text-muted);margin-bottom:15px;">Override auto-detected timezone if the time is wrong.</p>
+            <div class="form-group">
+              <label class="form-label">Timezone</label>
+              <select class="form-input" id="timezoneSelect" onchange="saveTimezone(this.value)">
+                <option value="auto">Auto-detect from IP</option>
+                <option value="-18000">Eastern (UTC-5)</option>
+                <option value="-21600">Central (UTC-6)</option>
+                <option value="-25200">Mountain (UTC-7)</option>
+                <option value="-28800">Pacific (UTC-8)</option>
+                <option value="-32400">Alaska (UTC-9)</option>
+                <option value="-36000">Hawaii (UTC-10)</option>
+                <option value="0">UTC</option>
+                <option value="3600">Central Europe (UTC+1)</option>
+                <option value="7200">Eastern Europe (UTC+2)</option>
+                <option value="19800">India (UTC+5:30)</option>
+                <option value="28800">China/Singapore (UTC+8)</option>
+                <option value="32400">Japan/Korea (UTC+9)</option>
+                <option value="36000">Australia East (UTC+10)</option>
+              </select>
+            </div>
+            <div id="currentTime" style="margin-top:15px;padding:12px;background:var(--bg-tertiary);border-radius:8px;font-family:monospace;"></div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header"><span class="card-title">Units</span></div>
+          <div class="card-body">
+            <div class="toggle">
+              <div><span class="toggle-label">Use Celsius</span><div class="toggle-desc">Show temperature in °C instead of °F</div></div>
+              <div class="toggle-switch" id="togCelsius" onclick="toggleWeatherUnit(this)"></div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-body">
+            <button class="btn btn-secondary btn-block" onclick="clearWeatherLocation()">🗑️ Clear Location (Use Auto-Detect)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- DISPLAY PAGE -->
+      <div class="page" id="page-display">
+        <div class="page-header">
+          <h1 class="page-title">Display Settings</h1>
+          <p class="page-desc">Screen and refresh options</p>
+        </div>
+        
+        <div class="card">
+          <div class="card-body">
+            <div class="toggle">
+              <div><span class="toggle-label">Landscape Mode</span><div class="toggle-desc">Rotate screen 90 degrees</div></div>
+              <div class="toggle-switch" id="togLandscape" onclick="toggleOpt(this,'landscape')"></div>
+            </div>
+            <div class="toggle">
+              <div><span class="toggle-label">Invert Colors</span><div class="toggle-desc">White text on black background</div></div>
+              <div class="toggle-switch" id="togInvert" onclick="toggleOpt(this,'invertColors')"></div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header"><span class="card-title">Auto-Sleep</span></div>
+          <div class="card-body">
+            <div class="slider-row">
+              <span class="slider-label">Sleep after</span>
+              <input type="range" class="slider-input" id="sleepSlider" min="5" max="60" step="5" value="15" oninput="updateSlider(this,'sleepVal',' min')">
+              <span class="slider-value" id="sleepVal">15 min</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BLUETOOTH PAGE -->
+      <div class="page" id="page-bluetooth">
+        <div class="page-header">
+          <h1 class="page-title">Bluetooth Keyboard</h1>
+          <p class="page-desc">Connect a wireless keyboard for typing</p>
+        </div>
+        
+        <div class="card">
+          <div class="card-body">
+            <div class="toggle">
+              <div><span class="toggle-label">Enable Bluetooth</span><div class="toggle-desc">Allow keyboard connections</div></div>
+              <div class="toggle-switch" id="btEnabled" onclick="toggleBT(this)"></div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Paired Devices</span>
+          </div>
+          <div class="card-body">
+            <div id="btPaired"><p style="color:var(--text-muted);text-align:center;padding:20px;">No devices paired yet</p></div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Available Devices</span>
+            <button class="btn btn-sm btn-secondary" id="btScanBtn" onclick="scanBT()">🔍 Scan</button>
+          </div>
+          <div class="card-body">
+            <div id="btDiscovered"><p style="color:var(--text-muted);text-align:center;padding:20px;">Click Scan to search for keyboards</p></div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header"><span class="card-title">Keyboard Layout</span></div>
+          <div class="card-body">
+            <div class="select-wrap">
+              <select id="btLayout" onchange="api('/api/bluetooth/layout','POST',{layout:this.value})">
+                <option value="us">US English (QWERTY)</option>
+                <option value="uk">UK English</option>
+                <option value="de">German (QWERTZ)</option>
+                <option value="fr">French (AZERTY)</option>
+                <option value="es">Spanish</option>
+                <option value="jp">Japanese</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- POWER PAGE -->
+      <div class="page" id="page-power">
+        <div class="page-header">
+          <h1 class="page-title">Power Management</h1>
+          <p class="page-desc">Battery and power settings</p>
+        </div>
+        
+        <div class="card">
+          <div class="card-body" style="text-align:center;padding:40px;">
+            <div style="font-size:64px;margin-bottom:16px;">🔋</div>
+            <div style="font-size:48px;font-weight:700;" id="powerPercent">--%</div>
+            <div style="color:var(--text-muted);margin-top:8px;font-size:16px;" id="powerVolts">-- V</div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-body">
+            <div class="toggle">
+              <div><span class="toggle-label">Deep Sleep</span><div class="toggle-desc">Maximum power saving when idle</div></div>
+              <div class="toggle-switch on" id="togDeepSleep" onclick="toggleOpt(this,'deepSleep')"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ABOUT PAGE -->
+      <div class="page" id="page-about">
+        <div class="page-header">
+          <h1 class="page-title">About</h1>
+          <p class="page-desc">Device information and system actions</p>
+        </div>
+        
+        <div class="card">
+          <div class="card-body">
+            <table style="width:100%;font-size:14px;">
+              <tr><td style="color:var(--text-muted);padding:12px 0;">Firmware</td><td style="text-align:right;" id="aboutFirmware">--</td></tr>
+              <tr><td style="color:var(--text-muted);padding:12px 0;">Hardware</td><td style="text-align:right;">ESP32-C3</td></tr>
+              <tr><td style="color:var(--text-muted);padding:12px 0;">Display</td><td style="text-align:right;">GDEQ0426T82 4.26"</td></tr>
+              <tr><td style="color:var(--text-muted);padding:12px 0;">Resolution</td><td style="text-align:right;">800×480</td></tr>
+              <tr><td style="color:var(--text-muted);padding:12px 0;">SD Card</td><td style="text-align:right;" id="aboutSD">--</td></tr>
+              <tr><td style="color:var(--text-muted);padding:12px 0;">Free Memory</td><td style="text-align:right;" id="aboutMem">--</td></tr>
+              <tr><td style="color:var(--text-muted);padding:12px 0;">Uptime</td><td style="text-align:right;" id="aboutUptime">--</td></tr>
+            </table>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header"><span class="card-title">System Actions</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+            <button class="btn btn-secondary btn-block" onclick="refreshDisplay()">🔄 Refresh Display</button>
+            <button class="btn btn-secondary btn-block" onclick="rebootDevice()">🔃 Reboot Device</button>
+            <button class="btn btn-danger btn-block" onclick="factoryReset()">🗑️ Factory Reset</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- FAB -->
+<div class="fab" id="fab">
+  <button class="btn btn-secondary" onclick="resetToDefaults()">↩️ Reset</button>
+  <button class="btn btn-primary" onclick="saveAndDeploy()" id="deployBtn">💾 Save & Deploy</button>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- WiFi Modal -->
+<div class="modal-overlay" id="wifiModal">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">Connect to <span id="wifiModalSSID"></span></div></div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" class="form-input" id="wifiPassword" placeholder="Enter WiFi password">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('wifiModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="connectWifi()">Connect</button>
+    </div>
+  </div>
+</div>
+

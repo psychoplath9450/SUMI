@@ -1,0 +1,33 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Build output
+.build/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
