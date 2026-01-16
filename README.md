@@ -11,7 +11,7 @@ Custom firmware for the Inkplate 4.26" ESP32-C3 e-ink device.
 **This project is very much a work in progress.** If you're looking for a stable, daily-driver e-reader experience, this is not it. Seriously. Go use:
 
 - **[Crosspoint](https://github.com/nicholasglazer/crosspoint)** - A more mature alternative firmware
-- **Factory Inkplate firmware** - What came on your device, it actually works reliably
+- **Factory firmware** - What came on your device, it actually works reliably
 
 SUMI is a hobby project I've been hacking on. Some things work great. Some things crash. The e-reader functionality in particular needs a lot of work. I'm sharing it because maybe someone finds it interesting or wants to contribute, not because it's ready for real use.
 
@@ -67,7 +67,6 @@ Let me be real about where things stand:
 
 ## Hardware Requirements
 
-- **Inkplate 4.26" (ESP32-C3 version)** - This is specifically built for this device
 - **MicroSD Card** - Required for storing books, images, settings. 8GB+ recommended.
 - **USB-C cable** - For flashing firmware
 - **A computer** - For flashing and using the portal
