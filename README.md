@@ -17,7 +17,40 @@ SUMI is a hobby project I've been hacking on. Some things work great. Some thing
 
 **You have been warned.**
 
+
+
+## ⚠️ SD Card Folder Structure (REQUIRED)
+
+**The firmware will only recognize files in folders with these EXACT names.** If your folders are named anything else, SUMI won't find your files.
+
+Create these folders on your SD card **before using SUMI**:
+
+```
+SD Card Root/
+├── books/          ← Put your .epub files here
+├── flashcards/     ← Flashcard deck files go here
+├── images/         ← BMP images only
+└── notes/          ← Text notes
+```
+
+### Important Notes:
+- **Folder names must be lowercase** and spelled exactly as shown
+- **Don't rename these folders** - the firmware looks for these specific names
+- You can create these folders manually, or the firmware will create them when you first use each app
+- The firmware also creates hidden folders (`.cache`, `.config`, `.sumi`) automatically - don't delete these
+
+### Quick Setup:
+1. Insert your SD card into your computer
+2. Create a folder called `books` (not "Books" or "BOOKS" or "My Books")
+3. Create a folder called `images` (not "Pictures" or "Photos")
+4. Create any other folders you need from the list above
+5. Add your files to the appropriate folders
+6. Insert SD card into your Inkplate
+
+
 ---
+
+
 
 ## What Even Is This?
 
