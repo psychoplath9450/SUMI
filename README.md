@@ -24,9 +24,6 @@ Custom firmware for the Xteink X4
 
 SUMI is an active hobby project focused on making the Xteink X4 more useful. I'm sharing it because it might be helpful to others with similar devices.
 
-**You have been warned.**
-
-
 
 ## ⚠️ SD Card Folder Structure (REQUIRED)
 
