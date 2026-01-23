@@ -31,17 +31,32 @@ extern GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display;
 class FlashcardsApp {
 public:
     static const int MAX_DECKS = 20;
-    static const int MAX_CARDS = 100;
-    static const int MAX_TEXT = 120;
+    static const int MAX_CARDS = 50;   // Reduced from 100 - plenty for a session
+    static const int MAX_TEXT = 80;    // Reduced from 120 - sufficient for most cards
     
     enum Mode { 
         MODE_DECKS,      // Deck selection
         MODE_QUESTION,   // Show question
         MODE_ANSWER,     // Show answer
-        MODE_DONE        // Session complete
+        MODE_DONE,       // Session complete
+        MODE_SETTINGS    // Settings menu
     };
     
     enum DeckFormat { FMT_UNKNOWN, FMT_TXT, FMT_CSV, FMT_TSV, FMT_JSON };
+    
+    enum FontSizeSetting { FONT_SMALL = 0, FONT_MEDIUM = 1, FONT_LARGE = 2 };
+    
+    struct FlashcardSettings {
+        uint32_t magic = 0x464C5348;  // "FLSH"
+        FontSizeSetting fontSize = FONT_MEDIUM;
+        bool shuffleOnLoad = true;
+        bool showProgressBar = true;
+        bool showStats = true;
+        uint8_t reserved[10] = {0};
+        
+        void load();
+        void save();
+    };
     
     struct Card {
         char front[MAX_TEXT];
@@ -82,6 +97,10 @@ private:
     bool _needsFullRedraw;
     Mode _lastMode;
     
+    // Settings
+    FlashcardSettings _settings;
+    int _settingsCursor;
+    
     // Format detection
     DeckFormat detectFormat(const char* filename);
     bool isSupportedFormat(const char* filename);
@@ -114,7 +133,11 @@ private:
     void drawCard(bool showAnswer);
     void drawWrappedText(const char* text, int x, int y, int maxWidth, int maxLines);
     void drawDone();
+    void drawSettings();
     void drawProgressBar(int x, int y, int w, int h, int current, int total);
+    
+    // Font helper
+    const GFXfont* getCardFont();
 };
 
 extern FlashcardsApp flashcardsApp;

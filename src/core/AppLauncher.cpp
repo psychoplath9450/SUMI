@@ -44,6 +44,7 @@ extern WeatherApp weatherApp;
 #include "plugins/Images.h"
 #include "plugins/Maps.h"
 #include "plugins/ToolSuite.h"
+#include "plugins/Cube3D.h"
 
 extern NotesApp notesApp;
 extern ChessGame chessGame;
@@ -55,6 +56,7 @@ extern TodoApp todoApp;
 extern ImagesApp imagesApp;
 extern MapsApp mapsApp;
 extern ToolSuiteApp toolSuiteApp;
+extern Cube3DApp cube3DApp;
 #endif
 
 // For placeholder app fallback
@@ -125,6 +127,11 @@ void openAppByItemIndex(uint8_t itemIndex) {
             return;
         case HOME_ITEM_SOLITAIRE:
             runPluginSimple(solitaireGame, "Solitaire");
+            return;
+        
+        // 3D Animation Demo
+        case HOME_ITEM_CUBE3D:
+            runPluginAnimation(cube3DApp, "Demo");
             return;
             
         // Productivity

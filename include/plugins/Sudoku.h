@@ -1,12 +1,13 @@
 /**
  * @file Sudoku.h
  * @brief Sudoku puzzle game for Sumi e-reader
- * @version 2.1.23
+ * @version 2.2.1
  * 
  * Features:
- * - Partial refresh for smooth cursor movement (no black flash)
- * - Proper button handling for portrait mode
- * - Number picker overlay
+ * - Navigate with D-pad, press OK to enter edit mode
+ * - In edit mode: UP/DOWN cycles valid numbers only
+ * - Partial refresh for smooth cursor movement
+ * - Auto-save/resume functionality
  */
 
 #ifndef SUMI_PLUGIN_SUDOKU_H
@@ -17,9 +18,25 @@
 
 #include <Arduino.h>
 #include <GxEPD2_BW.h>
+#include <SD.h>
 #include "core/PluginHelpers.h"
 
 extern GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display;
+
+// Save file path
+#define SUDOKU_SAVE_PATH "/.sumi/sudoku_save.bin"
+
+// Save data structure
+struct SudokuSaveData {
+    uint32_t magic = 0x5355444F;  // "SUDO"
+    uint8_t board[9][9];
+    uint8_t solution[9][9];
+    bool fixed[9][9];
+    int cursorR, cursorC;
+    uint8_t reserved[32];  // For future use
+    
+    bool isValid() const { return magic == 0x5355444F; }
+};
 
 class SudokuGame {
 public:
@@ -38,6 +55,7 @@ private:
     int _prevCursorR, _prevCursorC;  // For dirty tracking
     int _selectedNum;
     bool _inputMode;
+    uint8_t _savedValue;  // Original value before input mode (for cancel)
     int _screenW, _screenH;
     bool _landscape;
     GridLayout _grid;
@@ -46,6 +64,12 @@ private:
     bool _dirtyCells[9][9];
     bool _anyDirty;
     bool _needsFullRedraw;
+    int _actionCount;  // Counter for periodic smooth refresh
+    
+    // Menu state for resume prompt
+    enum MenuState { MENU_NONE, MENU_RESUME_PROMPT };
+    MenuState _menuState;
+    int _menuCursor;
     
     void reset();
     bool handleNumberInput(Button btn);
@@ -57,12 +81,23 @@ private:
     bool isValid(int r, int c, uint8_t num);
     void checkWin();
     
+    // Inline number cycling (no popup menu)
+    void getValidNumbers(int r, int c, uint8_t* validNums, int& count);
+    uint8_t cycleNumber(int r, int c, int direction);
+    
+    // Save/Load functions
+    bool hasSavedGame();
+    bool saveGame();
+    bool loadGame();
+    void deleteSavedGame();
+    
     // Drawing helpers
     void drawFull();
     void drawPartial();
     void drawContent();
     void drawCell(int r, int c);
     void drawThickBorders(int minR, int maxR, int minC, int maxC);
+    void drawMenu();
     void markCellDirty(int r, int c);
     void markCursorDirty();
 };

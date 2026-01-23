@@ -128,6 +128,14 @@ public:
     bool extractCoverImage(const String& outputPath);
     
     /**
+     * Extract any image from EPUB by path
+     * @param imagePath Path to image inside EPUB (relative or absolute from content)
+     * @param outputPath Where to save the image
+     * @return true if successful
+     */
+    bool extractImage(const String& imagePath, const String& outputPath);
+    
+    /**
      * Get all text (concatenated chapters)
      * @return Entire book as plain text
      */
@@ -171,6 +179,7 @@ private:
     String _contentBasePath;    // Base path for content files relative to EPUB root
     String _ncxPath;            // Path to NCX file (table of contents)
     String _coverImagePath;     // Path to cover image
+    String _opfPath;            // Path to OPF file (set by parseContainer)
     
     // Static empty chapter for bounds checking
     static Chapter _emptyChapter;

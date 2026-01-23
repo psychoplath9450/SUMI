@@ -4,33 +4,36 @@
 // SUMI v2.1.30 - E-ink Optimized Plugins
 const PLUGINS = {
   core: [
-    {id:'library', name:'Library', icon:'L', desc:'Browse and read books'},
-    {id:'flashcards', name:'Cards', icon:'F', desc:'Spaced repetition learning'},
-    {id:'notes', name:'Notes', icon:'N', desc:'Quick text notes'},
-    {id:'images', name:'Images', icon:'I', desc:'View images from SD'},
-    {id:'maps', name:'Maps', icon:'P', desc:'Offline map viewer'}
+    {id:'library', name:'Library', icon:'📚', desc:'Browse and read books'},
+    {id:'flashcards', name:'Cards', icon:'🎴', desc:'Spaced repetition learning'},
+    {id:'notes', name:'Notes', icon:'📝', desc:'Quick text notes'},
+    {id:'images', name:'Images', icon:'🖼️', desc:'View images from SD'},
+    {id:'maps', name:'Maps', icon:'🗺️', desc:'Offline map viewer'}
   ],
   games: [
-    {id:'chess', name:'Chess', icon:'C', desc:'Play against AI'},
-    {id:'checkers', name:'Check', icon:'K', desc:'Classic checkers'},
-    {id:'sudoku', name:'Sudoku', icon:'S', desc:'Number puzzles'},
-    {id:'minesweeper', name:'Mines', icon:'M', desc:'Find the mines'},
-    {id:'solitaire', name:'Solit.', icon:'A', desc:'Klondike solitaire'}
+    {id:'chess', name:'Chess', icon:'♟️', desc:'Play against AI'},
+    {id:'checkers', name:'Checkers', icon:'🔴', desc:'Classic checkers'},
+    {id:'sudoku', name:'Sudoku', icon:'🔢', desc:'Number puzzles'},
+    {id:'minesweeper', name:'Mines', icon:'💣', desc:'Find the mines'},
+    {id:'solitaire', name:'Solitaire', icon:'🃏', desc:'Klondike solitaire'},
+    {id:'cube3d', name:'Demo', icon:'🧪', desc:'Development testing demos'}
   ],
   tools: [
-    {id:'tools', name:'Tools', icon:'T', desc:'Calculator, Timer, Stopwatch'},
-    {id:'todo', name:'To-Do', icon:'D', desc:'Task management'}
+    {id:'tools', name:'Tools', icon:'🔧', desc:'Calculator, Timer, Stopwatch'},
+    {id:'todo', name:'To-Do', icon:'✅', desc:'Task management'}
   ],
   widgets: [
-    {id:'weather', name:'Weather', icon:'W', desc:'Current conditions & forecast'}
+    {id:'weather', name:'Weather', icon:'🌤️', desc:'Current conditions & forecast'},
+    {id:'book', name:'Book', icon:'📖', desc:'Current book progress'},
+    {id:'orient', name:'Rotate', icon:'🔄', desc:'Quick orientation toggle'}
   ],
   system: [
-    {id:'settings', name:'Settings', icon:'G', desc:'WiFi, Display, System options', locked:true}
+    {id:'settings', name:'Settings', icon:'⚙️', desc:'WiFi, Display, System options', locked:true}
   ]
 };
 
-// Default apps: Library, Flashcards, Chess, Sudoku, Weather, Settings
-const DEFAULTS = ['library','flashcards','chess','sudoku','weather','settings'];
+// Default apps: Widgets first (all 3), then apps, then settings
+const DEFAULTS = ['weather','orient','book','library','flashcards','chess','cube3d','settings'];
 
 // =============================================================================
 // STATE
@@ -41,8 +44,8 @@ let builderConfig = {
   // Theme & Layout
   theme: 0,
   iconStyle: 'rounded',
-  orientation: 'landscape',
-  grid: '4x2',
+  orientation: 'portrait',
+  grid: '2x3',
   fontSize: 12,
   
   // Home screen indicators
@@ -52,12 +55,8 @@ let builderConfig = {
   showWifi: false,
   
   // Lock screen
-  lockStyle: 'clock',
-  lockPhotoSource: 'shuffle',
-  clockStyle: 'digital',
-  showDate: true,
+  lockStyle: 'shuffle',
   showBatteryLock: true,
-  showWeatherLock: false,
   
   // Sleep screen
   sleepStyle: 'off',
@@ -69,6 +68,7 @@ let builderConfig = {
 let originalConfig = {...builderConfig};
 let previewMode = 'home';
 let pendingWifiSSID = '';
+let wifiConnected = false;  // Track WiFi connection status
 let fileCache = { books: [], images: [], maps: [], flashcards: [], notes: [] };
 
 // =============================================================================
@@ -139,8 +139,15 @@ async function loadStatus() {
   const storage = d.storage?.sd_total_mb ? Math.round(d.storage.sd_total_mb) + ' MB' : 'No SD';
   document.getElementById('statStorage').textContent = storage;
   
-  document.getElementById('statWifi').textContent = d.wifi?.connected ? 'Connected' : 'AP Mode';
-  document.getElementById('headerStatus').textContent = d.wifi?.connected ? 'Connected' : 'Setup Mode';
+  // Track WiFi connection state
+  wifiConnected = d.wifi?.connected ?? false;
+  document.getElementById('statWifi').textContent = wifiConnected ? 'Connected' : 'AP Mode';
+  document.getElementById('headerStatus').textContent = wifiConnected ? 'Connected' : 'Setup Mode';
+  const statusDot = document.getElementById('statusDot');
+  if (statusDot) statusDot.classList.toggle('disconnected', !wifiConnected);
+  
+  // Check for WiFi warnings after status update
+  checkWifiWarnings();
   
   const uptime = Math.floor((d.uptime || 0) / 60);
   document.getElementById('statUptime').textContent = uptime + ' min';
@@ -175,16 +182,15 @@ function renderPlugins() {
       // Settings is always enabled and locked (can't be removed)
       if (p.id === 'settings' || p.locked) {
         return `
-          <div class="plugin-item selected locked" title="${p.desc} (always enabled)">
+          <div class="plugin-card selected locked" title="${p.desc} (always enabled)">
             <div class="plugin-icon">${p.icon}</div>
-            <div class="name">${p.name}</div>
-            <div class="lock-icon">🔒</div>
+            <div class="plugin-name">${p.name}</div>
           </div>`;
       }
       return `
-        <div class="plugin-item ${selected.has(p.id)?'selected':''}" onclick="togglePlugin('${p.id}')" title="${p.desc}">
+        <div class="plugin-card ${selected.has(p.id)?'selected':''}" onclick="togglePlugin('${p.id}')" title="${p.desc}">
           <div class="plugin-icon">${p.icon}</div>
-          <div class="name">${p.name}</div>
+          <div class="plugin-name">${p.name}</div>
         </div>`;
     }).join('');
   }
@@ -197,6 +203,29 @@ function togglePlugin(id) {
   if (selected.has(id)) selected.delete(id);
   else selected.add(id);
   renderPlugins();
+  checkWifiWarnings();
+}
+
+// Check if WiFi-dependent features are enabled without WiFi
+function checkWifiWarnings() {
+  const warningEl = document.getElementById('wifiWarning');
+  if (!warningEl) return;
+  
+  const needsWifi = selected.has('weather');
+  
+  if (needsWifi && !wifiConnected) {
+    warningEl.style.display = 'block';
+    warningEl.innerHTML = `
+      <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:11px;">
+        <strong>⚠️ WiFi Required</strong><br>
+        Weather widget needs WiFi to fetch data. 
+        <a href="#" onclick="navigateTo('page-wifi');return false;" style="color:#856404;">Connect to WiFi →</a>
+      </div>
+    `;
+  } else {
+    warningEl.style.display = 'none';
+    warningEl.innerHTML = '';
+  }
 }
 
 function selectTheme(idx) {
@@ -230,6 +259,11 @@ function selectOrientation(orient) {
     }
   });
   updatePreview();
+}
+
+function togglePreviewOrientation() {
+  const newOrient = builderConfig.orientation === 'portrait' ? 'landscape' : 'portrait';
+  selectOrientation(newOrient);
 }
 
 // Grid is now auto-calculated based on app count - no manual selection needed
@@ -286,7 +320,7 @@ function toggleBuilder(el, key) {
 function setPreviewMode(mode) {
   previewMode = mode;
   document.querySelectorAll('.preview-tab').forEach(t => t.classList.toggle('active', t.onclick.toString().includes(mode)));
-  document.getElementById('previewBadge').textContent = {home:'Home',lock:'Lock',sleep:'Sleep'}[mode];
+  document.getElementById('previewBadge').textContent = {home:'Home',sleep:'Sleep'}[mode];
   updatePreview();
 }
 
@@ -303,8 +337,6 @@ function updatePreview() {
   
   if (previewMode === 'home') {
     renderHomePreview(screen, stats);
-  } else if (previewMode === 'lock') {
-    renderLockPreview(screen, stats);
   } else {
     renderSleepPreview(screen, stats);
   }
@@ -313,46 +345,22 @@ function updatePreview() {
 function renderHomePreview(screen, stats) {
   const isPortrait = builderConfig.orientation === 'portrait';
   
-  // Get enabled plugins first to determine count
+  // Check which widgets are enabled
+  const hasBook = selected.has('book');
+  const hasWeather = selected.has('weather');
+  const hasOrient = selected.has('orient');
+  const widgetCount = (hasBook ? 1 : 0) + (hasWeather ? 1 : 0) + (hasOrient ? 1 : 0);
+  
+  // Get enabled apps (non-widget plugins)
+  const widgetIds = ['weather', 'book', 'orient'];
   const all = Object.values(PLUGINS).flat();
-  let enabled = all.filter(p => selected.has(p.id) && p.id !== 'settings');
+  let apps = all.filter(p => selected.has(p.id) && !widgetIds.includes(p.id) && p.id !== 'settings');
   
-  // Settings item is permanently visible
+  // Settings always at end
   const settingsPlugin = all.find(p => p.id === 'settings');
-  if (settingsPlugin) {
-    enabled.push(settingsPlugin);
-  }
+  if (settingsPlugin) apps.push(settingsPlugin);
   
-  const appCount = enabled.length;
-  
-  // Auto-calculate grid based on app count and orientation
-  let gridClass, cols, rows;
-  if (isPortrait) {
-    // Portrait: prefer 2 columns
-    if (appCount <= 4) { cols = 2; rows = 2; gridClass = 'p-2x2'; }
-    else if (appCount <= 6) { cols = 2; rows = 3; gridClass = 'p-2x3'; }
-    else if (appCount <= 8) { cols = 2; rows = 4; gridClass = 'p-2x4'; }
-    else { cols = 3; rows = 5; gridClass = 'p-3x5'; }
-  } else {
-    // Landscape: prefer 2 rows
-    if (appCount <= 4) { cols = 2; rows = 2; gridClass = 'l-2x2'; }
-    else if (appCount <= 6) { cols = 3; rows = 2; gridClass = 'l-3x2'; }
-    else if (appCount <= 8) { cols = 4; rows = 2; gridClass = 'l-4x2'; }
-    else { cols = 5; rows = 3; gridClass = 'l-5x3'; }
-  }
-  
-  const maxItems = cols * rows;
-  
-  // Icon sizing based on grid density
-  let iconSize, emojiSize, labelSize;
-  if (maxItems <= 4) { iconSize = 44; emojiSize = 24; labelSize = 11; }
-  else if (maxItems <= 6) { iconSize = 36; emojiSize = 20; labelSize = 10; }
-  else if (maxItems <= 8) { iconSize = 32; emojiSize = 18; labelSize = 9; }
-  else if (maxItems <= 10) { iconSize = 28; emojiSize = 16; labelSize = 8; }
-  else { iconSize = 22; emojiSize = 14; labelSize = 7; }
-  
-  // Apply font size scaling
-  labelSize = Math.round(labelSize * (builderConfig.fontSize / 12));
+  const appCount = apps.length;
   
   // Build status bar
   let statusBar = '';
@@ -360,84 +368,185 @@ function renderHomePreview(screen, stats) {
     statusBar = `<div class="eink-statusbar">
       <div class="statusbar-section">${builderConfig.showClock ? '12:34 PM' : ''}</div>
       <div class="statusbar-section">
-        ${builderConfig.showWifi ? '<span style="font-size:10px">WiFi</span>' : ''}
-        ${builderConfig.showBattery ? '85%' : ''}
+        ${builderConfig.showWifi ? '<span style="font-size:7px">WiFi</span>' : ''}
+        ${builderConfig.showBattery ? '100%' : ''}
       </div>
     </div>`;
   }
   
-  // Build app grid - match device appearance 
-  let apps = '';
-  for (let i = 0; i < maxItems; i++) {
-    if (i < enabled.length) {
-      const p = enabled[i];
-      const isSelected = i === 0; // First item selected for preview
-      apps += `<div class="eink-app ${isSelected ? 'selected' : ''}">
-        <div class="eink-app-box style-${builderConfig.iconStyle}" style="font-size:${labelSize}px">${p.name}</div>
-      </div>`;
+  // Build widgets HTML matching actual device layout
+  let widgetsHtml = '';
+  
+  if (widgetCount > 0) {
+    if (isPortrait) {
+      // PORTRAIT MODE - matches HomeScreen.cpp layout
+      if (hasBook && hasWeather && hasOrient) {
+        // All 3: Book left (55%) | Weather + Orient stacked right (45%)
+        widgetsHtml = `<div style="display:flex;gap:3px;height:45%;padding:3px;">
+          <div style="width:60%;display:flex;align-items:stretch;">
+            ${renderBookWidget(true)}
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+            <div style="flex:7;">${renderWeatherWidget(true)}</div>
+            <div style="flex:3;">${renderOrientWidget()}</div>
+          </div>
+        </div>`;
+      } else if (hasBook && hasWeather) {
+        // Book + Weather: side by side
+        widgetsHtml = `<div style="display:flex;gap:3px;height:45%;padding:3px;">
+          <div style="width:60%;">${renderBookWidget(true)}</div>
+          <div style="flex:1;">${renderWeatherWidget(true)}</div>
+        </div>`;
+      } else if (hasBook && hasOrient) {
+        // Book + Orient: Book left, Orient right (slim)
+        widgetsHtml = `<div style="display:flex;gap:3px;height:45%;padding:3px;">
+          <div style="width:60%;">${renderBookWidget(true)}</div>
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;">${renderOrientWidget()}</div>
+        </div>`;
+      } else if (hasWeather && hasOrient) {
+        // Weather + Orient: Both stacked on right side style
+        widgetsHtml = `<div style="display:flex;gap:3px;height:25%;padding:3px;">
+          <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+            <div style="flex:7;">${renderWeatherWidget(true)}</div>
+            <div style="flex:3;">${renderOrientWidget()}</div>
+          </div>
+        </div>`;
+      } else if (hasBook) {
+        // Just Book: centered, large
+        widgetsHtml = `<div style="display:flex;justify-content:center;height:45%;padding:3px;">
+          <div style="width:60%;">${renderBookWidget(true)}</div>
+        </div>`;
+      } else if (hasWeather) {
+        // Just Weather: centered
+        widgetsHtml = `<div style="display:flex;justify-content:center;height:20%;padding:3px;">
+          <div style="width:60%;">${renderWeatherWidget(true)}</div>
+        </div>`;
+      } else if (hasOrient) {
+        // Just Orient: slim bar centered (like in the photo)
+        widgetsHtml = `<div style="display:flex;justify-content:center;align-items:center;height:10%;padding:3px;">
+          ${renderOrientWidget()}
+        </div>`;
+      }
     } else {
-      apps += `<div class="eink-app empty">
-        <div class="eink-app-box style-${builderConfig.iconStyle}" style="font-size:${labelSize}px;opacity:0.3">+</div>
+      // LANDSCAPE MODE - widgets stacked vertically on left
+      let widgetItems = [];
+      if (hasBook) widgetItems.push(renderBookWidget(false));
+      if (hasWeather) widgetItems.push(renderWeatherWidget(false));
+      if (hasOrient) widgetItems.push(renderOrientWidget());
+      
+      widgetsHtml = `<div style="width:30%;display:flex;flex-direction:column;gap:2px;padding:2px;">
+        ${widgetItems.map(w => `<div style="flex:1;">${w}</div>`).join('')}
       </div>`;
     }
   }
   
-  screen.innerHTML = `
-    ${statusBar}
-    <div class="eink-grid ${gridClass} ${builderConfig.showStatusBar ? '' : 'no-status'}">${apps}</div>
-  `;
+  // Calculate app grid
+  let cols, rows;
+  if (isPortrait) {
+    cols = 2;
+    rows = Math.ceil(appCount / cols);
+  } else {
+    if (appCount <= 4) { cols = 2; rows = 2; }
+    else if (appCount <= 6) { cols = 3; rows = 2; }
+    else { cols = 4; rows = 2; }
+  }
+  
+  const labelSize = isPortrait ? 9 : 8;
+  
+  // Build app grid
+  let appsHtml = '';
+  const maxItems = cols * rows;
+  for (let i = 0; i < maxItems; i++) {
+    if (i < apps.length) {
+      const p = apps[i];
+      const isSelected = i === 0; // First app selected
+      appsHtml += `<div class="eink-app ${isSelected ? 'selected' : ''}">
+        <div class="eink-app-box style-${builderConfig.iconStyle}" style="font-size:${labelSize}px">${p.name}</div>
+      </div>`;
+    }
+  }
+  
+  // Combine layout
+  if (isPortrait) {
+    screen.innerHTML = `
+      ${statusBar}
+      <div style="display:flex;flex-direction:column;height:${builderConfig.showStatusBar ? 'calc(100% - 14px)' : '100%'};">
+        ${widgetsHtml}
+        <div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:3px;flex:1;padding:3px;">${appsHtml}</div>
+      </div>
+    `;
+  } else {
+    // Landscape: widgets on left, apps on right
+    screen.innerHTML = `
+      ${statusBar}
+      <div style="display:flex;height:${builderConfig.showStatusBar ? 'calc(100% - 14px)' : '100%'};">
+        ${widgetsHtml}
+        <div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:2px;flex:1;padding:2px;">${appsHtml}</div>
+      </div>
+    `;
+  }
   
   const themeLabel = ['Light', 'Dark', 'High Contrast'][builderConfig.theme];
-  stats.innerHTML = `${appCount} apps · ${themeLabel} theme · ${builderConfig.iconStyle} corners`;
+  stats.innerHTML = `${widgetCount} widgets · ${appCount} apps · ${themeLabel}`;
+}
+
+// Helper functions to render individual widgets
+function renderBookWidget(tall) {
+  const h = tall ? '100%' : 'auto';
+  return `<div class="eink-app-box style-${builderConfig.iconStyle}" style="height:${h};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:4px;">
+    <div style="width:70%;flex:1;min-height:20px;background:linear-gradient(135deg,#8B4513,#654321);border:1px solid #333;border-radius:2px;"></div>
+  </div>`;
+}
+
+function renderWeatherWidget(showDetails) {
+  if (showDetails) {
+    return `<div class="eink-app-box style-${builderConfig.iconStyle}" style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px;">
+      <div style="font-size:5px;opacity:0.7;">Location</div>
+      <div style="font-size:8px;">🌤️</div>
+      <div style="font-size:9px;font-weight:bold;">Temp</div>
+      <div style="font-size:5px;opacity:0.7;">Humidity</div>
+      <div style="font-size:5px;opacity:0.7;">Day</div>
+      <div style="font-size:5px;opacity:0.7;">Date</div>
+    </div>`;
+  }
+  return `<div class="eink-app-box style-${builderConfig.iconStyle}" style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2px;">
+    <div style="font-size:7px;">🌤️ Temp</div>
+  </div>`;
+}
+
+function renderOrientWidget() {
+  const isPortrait = builderConfig.orientation === 'portrait';
+  return `<div class="eink-app-box style-${builderConfig.iconStyle}" style="display:flex;align-items:center;justify-content:center;padding:4px;height:100%;">
+    <div style="width:28px;height:12px;border:1px solid currentColor;border-radius:6px;position:relative;">
+      <div style="width:10px;height:10px;background:currentColor;border-radius:50%;position:absolute;top:0px;${isPortrait ? 'right:0px' : 'left:0px'};"></div>
+    </div>
+  </div>`;
 }
 
 function renderLockPreview(screen, stats) {
   const themeLabel = ['Light', 'Dark', 'High Contrast'][builderConfig.theme];
   let html = '';
   
-  // Background layer for photo mode
-  if (builderConfig.lockStyle === 'photo') {
-    html += `<div class="lock-bg photo"></div>`;
-  }
-  
-  // Main lock content
   html += `<div class="eink-lock">`;
   
-  if (builderConfig.lockStyle === 'quote') {
-    html += `<div class="lock-quote-display">"The journey of a thousand miles begins with a single step."</div>`;
-  } else if (builderConfig.lockStyle === 'minimal') {
+  if (builderConfig.lockStyle === 'minimal') {
     html += `<div class="lock-minimal-display"></div>`;
   } else {
-    // Clock display
-    if (builderConfig.clockStyle === 'analog') {
-      html += `<div class="lock-time-display analog" style="font-size:48px;font-weight:100">10:10</div>`;
-    } else {
-      const fontSize = builderConfig.clockStyle === 'minimal' ? '52px' : '38px';
-      const weight = builderConfig.clockStyle === 'minimal' ? '50' : '100';
-      html += `<div class="lock-time-display" style="font-size:${fontSize};font-weight:${weight}">12:34</div>`;
-    }
-    
-    if (builderConfig.lockShowDate) {
-      html += `<div class="lock-date-display" style="font-size:12px">Thursday, December 18</div>`;
-    }
+    // Shuffle images - show placeholder image grid
+    html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px;padding:8px;width:100%;height:100%;">
+      <div style="background:linear-gradient(135deg,#ddd,#aaa);border-radius:2px;"></div>
+      <div style="background:linear-gradient(45deg,#ccc,#999);border-radius:2px;"></div>
+      <div style="background:linear-gradient(180deg,#bbb,#888);border-radius:2px;"></div>
+      <div style="background:linear-gradient(90deg,#ddd,#aaa);border-radius:2px;"></div>
+    </div>`;
   }
   
   html += `</div>`;
   
-  // Footer info
-  if (builderConfig.lockShowBattery || builderConfig.lockShowWeather) {
-    html += `<div class="lock-info">
-      ${builderConfig.lockShowWeather ? '<span>72°F</span>' : ''}
-      ${builderConfig.lockShowBattery ? '<span>85%</span>' : ''}
-    </div>`;
-  }
-  
   screen.innerHTML = html;
   
-  const styleLabel = {clock: 'Clock', photo: 'Photo', quote: 'Quote', minimal: 'Minimal'}[builderConfig.lockStyle];
-  const clockLabel = (builderConfig.lockStyle !== 'quote' && builderConfig.lockStyle !== 'minimal') ? 
-    ` · ${builderConfig.clockStyle} clock` : '';
-  stats.innerHTML = `${styleLabel} style${clockLabel} · ${themeLabel} theme`;
+  const styleLabel = builderConfig.lockStyle === 'minimal' ? 'Minimal' : 'Shuffle Images';
+  stats.innerHTML = `${styleLabel} · ${themeLabel}`;
 }
 
 function renderSleepPreview(screen, stats) {
@@ -541,7 +650,8 @@ async function saveAndDeploy() {
       reader: {
         fontSize: parseInt(document.getElementById('readerFontSize')?.value) || 18,
         lineHeight: parseInt(document.getElementById('readerLineHeight')?.value) || 150,
-        margins: parseInt(document.getElementById('readerMargins')?.value) || 20
+        margins: parseInt(document.getElementById('readerMargins')?.value) || 20,
+        sceneBreakSpacing: parseInt(document.getElementById('readerSceneBreak')?.value) || 30
       }
     });
     
@@ -569,8 +679,7 @@ function resetToDefaults() {
   builderConfig = {
     theme: 0, iconStyle: 'rounded', orientation: 'portrait', fontSize: 12,
     showStatusBar: true, showBattery: true, showClock: true, showWifi: false,
-    lockStyle: 'clock', lockPhotoSource: 'shuffle', clockStyle: 'digital',
-    showDate: true, showBatteryLock: true, showWeatherLock: false,
+    lockStyle: 'shuffle', showBatteryLock: true,
     sleepStyle: 'off', showBatterySleep: true, sleepMinutes: 15, wakeButton: 'any'
   };
   syncUIToConfig();
@@ -585,6 +694,7 @@ function resetToDefaults() {
 async function loadWifiStatus() {
   const d = await api('/api/status');
   if (d?.wifi) {
+    wifiConnected = d.wifi.connected;
     if (d.wifi.connected) {
       document.getElementById('wifiStatus').innerHTML = `
         <div style="color:var(--success);font-weight:600;margin-bottom:8px;">✓ Connected</div>
@@ -599,6 +709,8 @@ async function loadWifiStatus() {
         <div style="color:var(--text-muted);">Connect to a WiFi network below to access Sumi from your home network</div>
       `;
     }
+    // Update warning after status is known
+    checkWifiWarnings();
   }
 }
 
@@ -842,9 +954,35 @@ function handleDrop(e, type) {
 // =============================================================================
 // SETTINGS
 // =============================================================================
+// Settings keys that need to be nested under specific objects
+const NESTED_SETTINGS = {
+  display: ['bootToLastBook', 'invertColors', 'deepSleep', 'showBatteryHome', 
+            'showBatterySleep', 'showClockHome', 'showDate', 'showWifi', 'landscape',
+            'showBookWidget', 'showWeatherWidget', 'showOrientWidget'],
+  bluetooth: ['btEnabled', 'btAutoConnect'],
+  sync: ['kosyncEnabled']
+};
+
 function toggleOpt(el, key) {
   el.classList.toggle('on');
-  api('/api/settings', 'POST', {[key]: el.classList.contains('on')});
+  const value = el.classList.contains('on');
+  
+  // Find which object this setting belongs to
+  for (const [obj, keys] of Object.entries(NESTED_SETTINGS)) {
+    if (keys.includes(key)) {
+      // Map portal key names to actual setting names if different
+      let settingKey = key;
+      if (key === 'btEnabled') settingKey = 'enabled';
+      if (key === 'btAutoConnect') settingKey = 'autoConnect';
+      if (key === 'kosyncEnabled') settingKey = 'kosyncEnabled';
+      
+      api('/api/settings', 'POST', {[obj]: {[settingKey]: value}});
+      return;
+    }
+  }
+  
+  // Not in any nested object, send as top-level
+  api('/api/settings', 'POST', {[key]: value});
 }
 
 function updateSlider(el, labelId, suffix) {
@@ -861,6 +999,29 @@ function saveReaderSetting(key, value) {
 function toggleReaderOpt(el, key) {
   el.classList.toggle('on');
   api('/api/reader/settings', 'POST', {[key]: el.classList.contains('on')});
+}
+
+function updateReaderPreview() {
+  const fontSize = document.getElementById('readerFontSize').value;
+  const lineHeight = document.getElementById('readerLineHeight').value;
+  const margins = document.getElementById('readerMargins').value;
+  const justify = document.getElementById('togJustify').classList.contains('on');
+  
+  // Update value labels
+  document.getElementById('readerFontVal').textContent = fontSize + 'px';
+  document.getElementById('readerLineVal').textContent = lineHeight + '%';
+  document.getElementById('readerMarginVal').textContent = margins + 'px';
+  
+  // Update preview - scale down for the mini preview
+  const preview = document.getElementById('readerPreview');
+  if (preview) {
+    const scaledFont = Math.max(8, Math.round(fontSize * 0.5));
+    const scaledMargin = Math.max(4, Math.round(margins * 0.4));
+    preview.style.fontSize = scaledFont + 'px';
+    preview.style.lineHeight = (lineHeight / 100);
+    preview.style.padding = scaledMargin + 'px';
+    preview.style.textAlign = justify ? 'justify' : 'left';
+  }
 }
 
 // =============================================================================
@@ -1045,11 +1206,7 @@ function syncUIToConfig() {
   setToggle('togBattery', builderConfig.showBattery);
   setToggle('togClock', builderConfig.showClock);
   setToggle('togWifi', builderConfig.showWifi);
-  setToggle('togLockDate', builderConfig.showDate);
-  setToggle('togLockBattery', builderConfig.showBatteryLock);
-  setToggle('togLockWeather', builderConfig.showWeatherLock);
   setToggle('togSleepBattery', builderConfig.showBatterySleep);
-  setToggle('togSleepRefresh', builderConfig.sleepRefresh);
   
   // Sliders
   setSlider('fontSizeSlider', builderConfig.fontSize, 'fontSizeVal', 'px');
@@ -1061,11 +1218,8 @@ function syncUIToConfig() {
   selectTheme(builderConfig.theme);
   selectIconStyle(builderConfig.iconStyle);
   selectOrientation(builderConfig.orientation);
-  // Grid is auto-calculated from app count
   selectLockStyle(builderConfig.lockStyle);
   selectSleepStyle(builderConfig.sleepStyle);
-  selectClockStyle(builderConfig.clockStyle);
-  selectPhotoSource(builderConfig.lockPhotoSource);
 }
 
 async function loadSettings() {
@@ -1121,6 +1275,23 @@ async function loadSettings() {
     builderConfig.showBatterySleep = d.showBatterySleep ?? true;
     builderConfig.sleepMinutes = d.sleepMinutes || 15;
     builderConfig.wakeButton = ['any', 'select', 'power'][d.wakeButton] || 'any';
+    
+    // Restore display toggles
+    const togBootToBook = document.getElementById('togBootToBook');
+    const togInvert = document.getElementById('togInvert');
+    const togDeepSleep = document.getElementById('togDeepSleep');
+    
+    if (togBootToBook) togBootToBook.classList.toggle('on', d.bootToLastBook === true);
+    if (togInvert) togInvert.classList.toggle('on', d.invertColors === true);
+    if (togDeepSleep) togDeepSleep.classList.toggle('on', d.deepSleep !== false);
+    
+    // Widget visibility toggles (default to on)
+    const togBook = document.getElementById('togBookWidget');
+    const togWeather = document.getElementById('togWeatherWidget');
+    const togOrient = document.getElementById('togOrientWidget');
+    if (togBook) togBook.classList.toggle('on', d.showBookWidget !== false);
+    if (togWeather) togWeather.classList.toggle('on', d.showWeatherWidget !== false);
+    if (togOrient) togOrient.classList.toggle('on', d.showOrientWidget !== false);
   }
   
   // Save original state for change detection
@@ -1132,9 +1303,11 @@ async function loadSettings() {
     const fsEl = document.getElementById('readerFontSize');
     const lhEl = document.getElementById('readerLineHeight');
     const mgEl = document.getElementById('readerMargins');
+    const sbEl = document.getElementById('readerSceneBreak');
     if (fsEl) { fsEl.value = r.fontSize || 18; updateSlider(fsEl, 'readerFontVal', 'px'); }
     if (lhEl) { lhEl.value = r.lineHeight || 150; updateSlider(lhEl, 'readerLineVal', '%'); }
     if (mgEl) { mgEl.value = r.margins || 20; updateSlider(mgEl, 'readerMarginVal', 'px'); }
+    if (sbEl) { sbEl.value = r.sceneBreakSpacing || 30; updateSlider(sbEl, 'readerSceneVal', 'px'); }
   }
   
   // Update all UI elements to match loaded state
@@ -1166,6 +1339,51 @@ async function loadSettings() {
   }
   
   console.log('[PORTAL] Settings restored from device');
+  
+  // Load reading statistics
+  loadReadingStats();
+  
+  // Load KOReader sync settings
+  loadKOSyncSettings();
+}
+
+// =============================================================================
+// READING STATISTICS
+// =============================================================================
+async function loadReadingStats() {
+  const data = await api('/api/stats');
+  if (!data) return;
+  
+  const pagesEl = document.getElementById('statPages');
+  const hoursEl = document.getElementById('statHours');
+  const booksEl = document.getElementById('statBooks');
+  const avgEl = document.getElementById('statAvg');
+  
+  if (pagesEl) pagesEl.textContent = (data.totalPagesRead || 0).toLocaleString();
+  if (hoursEl) {
+    const hours = data.totalHoursRead || 0;
+    const mins = (data.totalMinutesRead || 0) % 60;
+    hoursEl.textContent = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+  }
+  if (booksEl) booksEl.textContent = data.booksFinished || 0;
+  
+  // Calculate average (assume 30 days for now)
+  const avgPages = Math.round((data.totalPagesRead || 0) / 30);
+  if (avgEl) avgEl.textContent = avgPages;
+}
+
+async function resetStats() {
+  if (!confirm('Are you sure you want to reset all reading statistics? This cannot be undone.')) {
+    return;
+  }
+  
+  const result = await api('/api/stats', 'DELETE');
+  if (result?.success) {
+    toast('Statistics reset', 'success');
+    loadReadingStats();
+  } else {
+    toast('Failed to reset statistics', 'error');
+  }
 }
 
 // =============================================================================
@@ -1319,11 +1537,85 @@ async function applyFeatureFlags() {
   console.log('[PORTAL] Feature flags applied:', f);
 }
 
+// =============================================================================
+// BACKUP & RESTORE
+// =============================================================================
+async function downloadBackup() {
+  toast('Preparing backup...', 'info');
+  
+  try {
+    const response = await fetch('/api/backup');
+    if (!response.ok) {
+      throw new Error('Backup failed');
+    }
+    
+    const data = await response.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sumi-backup-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    toast('Backup downloaded successfully!', 'success');
+  } catch (e) {
+    console.error('Backup error:', e);
+    toast('Backup failed', 'error');
+  }
+}
+
+async function uploadRestore(input) {
+  const file = input.files[0];
+  if (!file) return;
+  
+  if (!confirm('This will replace all current settings. Are you sure?')) {
+    input.value = '';
+    return;
+  }
+  
+  toast('Restoring settings...', 'info');
+  
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    
+    // Validate it's a backup file
+    if (!data.backupVersion) {
+      throw new Error('Not a valid backup file');
+    }
+    
+    const response = await fetch('/api/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      toast('Settings restored! Reloading...', 'success');
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      throw new Error(result.error || 'Restore failed');
+    }
+  } catch (e) {
+    console.error('Restore error:', e);
+    toast('Restore failed: ' + e.message, 'error');
+  }
+  
+  input.value = '';
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   await loadStatus();
   await applyFeatureFlags();
   await loadSettings();
   renderPlugins();
+  updateReaderPreview();
   setInterval(loadStatus, 30000);
 });
 
@@ -1331,3 +1623,137 @@ document.addEventListener('DOMContentLoaded', async () => {
 document.getElementById('wifiPassword')?.addEventListener('keypress', e => {
   if (e.key === 'Enter') connectWifi();
 });
+
+// =============================================================================
+// KOREADER SYNC
+// =============================================================================
+async function updateKOSyncSettings() {
+  const url = document.getElementById('kosyncUrl')?.value || '';
+  const user = document.getElementById('kosyncUser')?.value || '';
+  const pass = document.getElementById('kosyncPass')?.value || '';
+  
+  try {
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, username: user, password: pass })
+    });
+  } catch (e) {
+    console.error('KOSync settings update failed:', e);
+  }
+}
+
+async function testKOSync() {
+  const statusEl = document.getElementById('kosyncStatus');
+  if (statusEl) statusEl.textContent = 'Testing connection...';
+  
+  try {
+    const response = await fetch('/api/sync/test');
+    const result = await response.json();
+    
+    if (result.success) {
+      if (statusEl) statusEl.innerHTML = '<span style="color: green;">✓ Connected successfully</span>';
+    } else {
+      if (statusEl) statusEl.innerHTML = `<span style="color: red;">✗ ${result.error || 'Connection failed'}</span>`;
+    }
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = '<span style="color: red;">✗ Network error</span>';
+  }
+}
+
+async function loadKOSyncSettings() {
+  try {
+    const response = await fetch('/api/sync/settings');
+    const data = await response.json();
+    
+    if (document.getElementById('kosyncUrl')) {
+      document.getElementById('kosyncUrl').value = data.url || '';
+    }
+    if (document.getElementById('kosyncUser')) {
+      document.getElementById('kosyncUser').value = data.username || '';
+    }
+    // Don't load password for security
+    
+    if (document.getElementById('togKOSync')) {
+      document.getElementById('togKOSync').classList.toggle('on', data.enabled);
+    }
+  } catch (e) {
+    console.error('Failed to load KOSync settings:', e);
+  }
+}
+
+// =============================================================================
+// BLUETOOTH PAGE TURNER
+// =============================================================================
+async function scanBTDevices() {
+  toast('Scanning for Bluetooth devices...', 'info');
+  
+  try {
+    const response = await fetch('/api/bluetooth/scan', { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      toast('Scanning... Check back in 10 seconds', 'info');
+      setTimeout(loadBTDevices, 10000);
+    } else {
+      toast('Scan failed: ' + (result.error || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    toast('Failed to start scan', 'error');
+  }
+}
+
+async function loadBTDevices() {
+  try {
+    const response = await fetch('/api/bluetooth/devices');
+    const data = await response.json();
+    
+    const container = document.getElementById('btPairedDevices');
+    if (!container) return;
+    
+    if (data.paired && data.paired.length > 0) {
+      container.innerHTML = data.paired.map(device => `
+        <div style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 5px;">
+          <strong>${device.name || 'Unknown Device'}</strong>
+          <span style="color: ${device.connected ? 'green' : '#999'}; font-size: 12px;">
+            ${device.connected ? '● Connected' : '○ Disconnected'}
+          </span>
+          <button class="btn btn-sm" onclick="connectBTDevice('${device.address}')" style="float: right;">
+            ${device.connected ? 'Disconnect' : 'Connect'}
+          </button>
+        </div>
+      `).join('');
+    } else {
+      container.innerHTML = '<div style="color: #666; font-size: 12px;">No paired devices</div>';
+    }
+    
+    // Update toggle states
+    if (document.getElementById('togBluetooth')) {
+      document.getElementById('togBluetooth').classList.toggle('on', data.enabled);
+    }
+    if (document.getElementById('togBTAuto')) {
+      document.getElementById('togBTAuto').classList.toggle('on', data.autoConnect);
+    }
+  } catch (e) {
+    console.error('Failed to load BT devices:', e);
+  }
+}
+
+async function connectBTDevice(address) {
+  toast('Connecting...', 'info');
+  
+  try {
+    const response = await fetch(`/api/bluetooth/connect/${address}`, { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      toast('Connected!', 'success');
+      loadBTDevices();
+    } else {
+      toast('Connection failed', 'error');
+    }
+  } catch (e) {
+    toast('Connection failed', 'error');
+  }
+}
+

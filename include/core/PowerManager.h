@@ -22,7 +22,8 @@ const unsigned long AUTO_SLEEP_TIMEOUT_MS = 300000;  // 5 minutes default
 // =============================================================================
 class PowerManager {
 public:
-    PowerManager() : _lastActivityTime(0), _autoSleepEnabled(true) {}
+    PowerManager() : _lastActivityTime(0), _autoSleepEnabled(true), 
+                     _needsTimeSync(false), _timeSyncInProgress(false) {}
     
     // Activity tracking
     void resetActivityTimer() { _lastActivityTime = millis(); }
@@ -39,14 +40,22 @@ public:
     void enterDeepSleep();
     void enterLightSleep();
     
-    // Time sync
+    // Time sync - background/non-blocking
     void syncTimeInBackground();
+    void requestTimeSync() { _needsTimeSync = true; }
+    bool needsTimeSync() const { return _needsTimeSync && !_timeSyncInProgress; }
+    void startBackgroundTimeSync();  // Non-blocking, starts task
+    void checkBackgroundTimeSync();  // Call periodically to clean up
     
     // Wake verification (for boot loop prevention)
     bool verifyWakeupLongPress();
     
     // Portal cleanup
     void cleanupPortalResources();
+    
+    // Reading mode - suspend/resume services to free RAM
+    void suspendForReading();
+    void resumeAfterReading();
     
     // Diagnostics
     void printMemoryReport();
@@ -55,6 +64,8 @@ public:
 private:
     unsigned long _lastActivityTime;
     bool _autoSleepEnabled;
+    bool _needsTimeSync;
+    bool _timeSyncInProgress;
 };
 
 // Global instance
@@ -64,6 +75,8 @@ extern PowerManager powerManager;
 inline void resetActivityTimer() { powerManager.resetActivityTimer(); }
 inline void enterDeepSleep() { powerManager.enterDeepSleep(); }
 inline void cleanupPortalResources() { powerManager.cleanupPortalResources(); }
+inline void suspendForReading() { powerManager.suspendForReading(); }
+inline void resumeAfterReading() { powerManager.resumeAfterReading(); }
 inline void printMemoryReport() { powerManager.printMemoryReport(); }
 inline void printFeatureFlags() { powerManager.printFeatureFlags(); }
 

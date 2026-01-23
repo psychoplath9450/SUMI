@@ -21,6 +21,7 @@
 #include <GxEPD2_BW.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include <climits>
 
 #include "config.h"
 
@@ -39,6 +40,7 @@
 #include "core/SettingsScreen.h"
 #include "core/AppLauncher.h"
 #include "core/SettingsState.h"
+#include "core/ZipReader.h"
 
 // Global RefreshManager instance
 RefreshManager refreshManager;
@@ -188,6 +190,15 @@ void setup() {
     Serial.printf("[SUMI]   Version: %s\n", SUMI_VERSION);
     Serial.println("[SUMI] ========================================");
     
+    // Memory baseline at startup
+    Serial.printf("[MEM:BOOT] Heap Total: %d, Free: %d, Min Ever: %d\n",
+                  ESP.getHeapSize(), ESP.getFreeHeap(), ESP.getMinFreeHeap());
+    
+    // Report stack size at startup
+    UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
+    Serial.printf("[SUMI] Loop task stack high water: %d words (%d bytes free)\n", 
+                  (int)stackHighWater, (int)(stackHighWater * 4));
+    
     // Initialize button pins FIRST
     pinMode(BTN_GPIO1, INPUT);
     pinMode(BTN_GPIO2, INPUT);
@@ -198,26 +209,39 @@ void setup() {
     
     // Initialize battery monitoring
     batteryMonitor.begin();
+    Serial.printf("[MEM:BATT] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());;
     
     // Initialize SD card before display (required for proper SPI bus sharing)
     initSDCard();
-    
-    // Initialize display (after SD)
-    initDisplay();
+    Serial.printf("[MEM:SD] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());;
     
     // Load settings from SD card
     if (sd_card_present) {
         settingsManager.begin();
         Serial.println("[SUMI] Settings loaded from SD");
+        Serial.printf("[MEM:SETTINGS] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
     }
+    
+    // Check if setup is needed BEFORE allocating large buffers
+    setup_mode = !settingsManager.isSetupComplete();
+    
+    // Pre-allocate ZIP decompression buffer ONLY if not in setup mode
+    // This 43KB buffer is needed for EPUB reading but not for portal setup
+    if (!setup_mode) {
+        ZipReader_preallocateBuffer();
+        Serial.printf("[MEM:ZIP] Free: %d, Min: %d (after 43KB ZIP buffer)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+    } else {
+        Serial.println("[MEM:ZIP] Skipping ZIP buffer - in setup mode");
+    }
+    
+    // Initialize display (after SD)
+    initDisplay();
+    Serial.printf("[MEM:DISP] Free: %d, Min: %d (after display buffer)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
     
     // Set orientation from settings
     bool isHorizontal = (settingsManager.display.orientation == 0);
     display.setRotation(isHorizontal ? 0 : 3);
     setButtonOrientation(isHorizontal);
-    
-    // Check if setup is needed
-    setup_mode = !settingsManager.isSetupComplete();
     
     // Initialize WiFi manager (loads saved credentials from NVS)
     wifiManager.begin();
@@ -242,18 +266,56 @@ void setup() {
         buildHomeScreenItems();
         updateGridLayout();
         
-        // Show home screen
-        showHomeScreen();
-        
-        // Sync time in background if we have WiFi credentials
-        // This runs after home screen is shown so user sees UI quickly
-        if (wifiManager.hasCredentials()) {
-            Serial.println("[SUMI] Syncing time from network...");
-            if (wifiManager.syncTime()) {
-                Serial.println("[SUMI] Time sync successful");
-            } else {
-                Serial.println("[SUMI] Time sync failed (will use last known time)");
+        // Check if we should boot directly to last book
+        bool bootedToBook = false;
+        if (settingsManager.display.bootToLastBook) {
+            // Check if we have a last book saved
+            if (SD.exists("/.sumi/lastbook.bin")) {
+                Serial.println("[SUMI] Boot to last book enabled - launching reader");
+                #if FEATURE_READER
+                extern LibraryApp libraryApp;
+                libraryApp.init(display.width(), display.height());
+                libraryApp.resumeLastBook();  // This will load and display the last book
+                
+                // Enter reader loop
+                bool reading = true;
+                while (reading) {
+                    Button btn = readButton();
+                    if (btn != BTN_NONE) {
+                        powerManager.resetActivityTimer();
+                        if (btn == BTN_POWER) {
+                            powerManager.enterDeepSleep();
+                        }
+                        reading = libraryApp.handleInput(btn);
+                        if (reading) {
+                            libraryApp.draw();
+                        }
+                    }
+                    
+                    // Check auto-sleep
+                    uint8_t sleepMins = settingsManager.display.sleepMinutes;
+                    if (sleepMins > 0 && powerManager.getIdleTime() >= sleepMins * 60000UL) {
+                        powerManager.enterDeepSleep();
+                    }
+                    delay(20);
+                }
+                bootedToBook = true;
+                #endif
             }
+        }
+        
+        // Show home screen (if we didn't boot to book, or after exiting reader)
+        if (!bootedToBook) {
+            showHomeScreen();
+        } else {
+            // Returned from reader - show home screen
+            showHomeScreen();
+        }
+        
+        // Start background time sync if needed (non-blocking)
+        // User sees home screen immediately while WiFi connects in background
+        if (powerManager.needsTimeSync()) {
+            powerManager.startBackgroundTimeSync();
         }
     }
     
@@ -274,12 +336,31 @@ void setup() {
 // =============================================================================
 void loop() {
     static unsigned long lastMemReport = 0;
+    static int minFreeEver = INT_MAX;
     
-    // Memory report every 30 seconds (debug only)
+    // Track lowest memory we've ever seen
+    int currentFree = ESP.getFreeHeap();
+    if (currentFree < minFreeEver) {
+        minFreeEver = currentFree;
+        Serial.printf("[MEM:NEW_LOW] Free dropped to: %d bytes!\n", currentFree);
+    }
+    
+    // Memory report every 10 seconds for debugging
+    #if SUMI_MEM_DEBUG
+    if (millis() - lastMemReport > 10000) {
+        lastMemReport = millis();
+        UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
+        Serial.printf("[MEM:LOOP] Free: %d | Min: %d | Stack Free: %d words | Uptime: %lu sec\n", 
+                      ESP.getFreeHeap(), ESP.getMinFreeHeap(), 
+                      (int)stackHighWater, millis() / 1000);
+    }
+    #else
+    // Less frequent in production
     if (millis() - lastMemReport > 30000) {
         lastMemReport = millis();
         Serial.printf("[MEM] Free: %d  Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
     }
+    #endif
     
     // Handle button input
     if (!setup_mode) {
@@ -303,6 +384,9 @@ void loop() {
     if (portal_active) {
         wifiManager.update();
     }
+    
+    // Check background time sync progress (non-blocking)
+    powerManager.checkBackgroundTimeSync();
     
     #if FEATURE_BLUETOOTH
     // Update Bluetooth manager (scan completion, etc.)
@@ -334,6 +418,10 @@ void loop() {
             WiFi.disconnect();
         }
         WiFi.mode(WIFI_OFF);
+        
+        // NOW allocate ZIP buffer - we skipped it during setup mode
+        Serial.println("[SUMI] Allocating ZIP buffer for reader");
+        ZipReader_preallocateBuffer();
         
         // Reload settings and switch to normal mode
         settingsManager.load();
@@ -454,56 +542,199 @@ void handleButtons() {
                 // Home screen
                 int itemsOnPage = getItemsOnCurrentPage();
                 int totalPages = getTotalPages();
+                int numWidgets = getWidgetCount();
                 
-                switch (btn) {
-                    case BTN_UP:
-                        if (homeSelection >= homeCols) {
-                            int oldSel = homeSelection;
-                            homeSelection -= homeCols;
-                            refreshChangedCells(oldSel, homeSelection);
-                        }
-                        break;
-                    case BTN_DOWN:
-                        if (homeSelection + homeCols < itemsOnPage) {
-                            int oldSel = homeSelection;
-                            homeSelection += homeCols;
-                            refreshChangedCells(oldSel, homeSelection);
-                        }
-                        break;
-                    case BTN_LEFT:
-                        if (homeSelection > 0) {
-                            int oldSel = homeSelection;
-                            homeSelection--;
-                            refreshChangedCells(oldSel, homeSelection);
-                        } else if (homePageIndex > 0) {
-                            homePageIndex--;
-                            homeSelection = getItemsOnCurrentPage() - 1;
-                            showHomeScreenPartial(true);
-                        }
-                        break;
-                    case BTN_RIGHT:
-                        if (homeSelection < itemsOnPage - 1) {
-                            int oldSel = homeSelection;
-                            homeSelection++;
-                            refreshChangedCells(oldSel, homeSelection);
-                        } else if (homePageIndex < totalPages - 1) {
-                            homePageIndex++;
-                            homeSelection = 0;
-                            showHomeScreenPartial(true);
-                        }
-                        break;
-                    case BTN_CONFIRM:
-                        openApp(homeSelection);
-                        break;
-                    case BTN_BACK:
-                        if (homePageIndex > 0) {
-                            homePageIndex = 0;
-                            homeSelection = 0;
-                            showHomeScreenPartial(true);
-                        }
-                        break;
-                    default:
-                        break;
+                // Check if we're in widget selection mode
+                if (widgetSelection >= 0) {
+                    bool isLandscape = (settingsManager.display.orientation == 0);
+                    Serial.printf("[HOME] Widget nav: selection=%d, numWidgets=%d, btn=%d, landscape=%d\n", 
+                                  widgetSelection, numWidgets, btn, isLandscape);
+                    
+                    // Widget navigation - direction depends on orientation AND widget layout
+                    // 
+                    // PORTRAIT LAYOUT (widgets 0=Book, 1=Weather, 2=Orient):
+                    //   [Book Cover]  [Weather ]
+                    //                 [Orient  ]
+                    // - From Book: RIGHT→Orient, DOWN→grid(left col)
+                    // - From Orient: LEFT→Book, UP→Weather, DOWN→grid(right col)  
+                    // - From Weather: DOWN→Orient
+                    //
+                    // LANDSCAPE LAYOUT (widgets stacked vertically on left):
+                    //   [Book   ] | [Grid]
+                    //   [Weather] | [Grid]
+                    //   [Orient ] | [Grid]
+                    // - UP/DOWN navigates between widgets
+                    // - DOWN from last widget exits to grid
+                    
+                    switch (btn) {
+                        case BTN_UP:
+                            if (isLandscape) {
+                                // Landscape: UP moves to previous widget
+                                if (widgetSelection > 0) {
+                                    int oldWidget = widgetSelection;
+                                    widgetSelection--;
+                                    Serial.printf("[HOME] Widget UP: %d -> %d\n", oldWidget, widgetSelection);
+                                    refreshWidgetSelection(oldWidget, widgetSelection);
+                                }
+                            } else {
+                                // Portrait: UP from Orient(2) → Weather(1)
+                                // Weather and Book can't go UP
+                                if (widgetSelection == numWidgets - 1 && numWidgets >= 2) {
+                                    // From Orient → Weather (middle widget)
+                                    int oldWidget = widgetSelection;
+                                    widgetSelection = 1;  // Weather is index 1
+                                    Serial.printf("[HOME] Portrait Orient UP → Weather: %d -> %d\n", oldWidget, widgetSelection);
+                                    refreshWidgetSelection(oldWidget, widgetSelection);
+                                }
+                            }
+                            break;
+                        case BTN_DOWN:
+                            if (isLandscape) {
+                                // Landscape: DOWN exits to grid
+                                Serial.println("[HOME] Widget DOWN: exit to grid");
+                                widgetSelection = -1;
+                                showHomeScreenPartialFast();
+                            } else {
+                                // Portrait: DOWN exits to grid
+                                // From Book → exit to grid left column
+                                // From Orient → exit to grid right column  
+                                // From Weather → go to Orient
+                                if (widgetSelection == 1 && numWidgets >= 3) {
+                                    // Weather → Orient
+                                    int oldWidget = widgetSelection;
+                                    widgetSelection = numWidgets - 1;
+                                    Serial.printf("[HOME] Portrait Weather DOWN → Orient: %d -> %d\n", oldWidget, widgetSelection);
+                                    refreshWidgetSelection(oldWidget, widgetSelection);
+                                } else {
+                                    // Book or Orient → exit to grid
+                                    int exitCol = (widgetSelection == 0) ? 0 : 1;
+                                    Serial.printf("[HOME] Portrait widget %d DOWN: exit to grid col %d\n", widgetSelection, exitCol);
+                                    widgetSelection = -1;
+                                    homeSelection = exitCol;  // Set to appropriate column
+                                    showHomeScreenPartialFast();
+                                }
+                            }
+                            break;
+                        case BTN_LEFT:
+                            if (isLandscape && widgetSelection > 0) {
+                                // Landscape: LEFT moves between side-by-side widgets
+                                int oldWidget = widgetSelection;
+                                widgetSelection--;
+                                Serial.printf("[HOME] Widget LEFT: %d -> %d\n", oldWidget, widgetSelection);
+                                refreshWidgetSelection(oldWidget, widgetSelection);
+                            } else if (!isLandscape) {
+                                // Portrait: LEFT from Orient/Weather → Book
+                                if (widgetSelection > 0 && numWidgets >= 2) {
+                                    int oldWidget = widgetSelection;
+                                    widgetSelection = 0;  // Go to Book
+                                    Serial.printf("[HOME] Portrait LEFT → Book: %d -> %d\n", oldWidget, widgetSelection);
+                                    refreshWidgetSelection(oldWidget, widgetSelection);
+                                }
+                            }
+                            break;
+                        case BTN_RIGHT:
+                            if (isLandscape && widgetSelection < numWidgets - 1) {
+                                // Landscape: RIGHT moves between side-by-side widgets  
+                                int oldWidget = widgetSelection;
+                                widgetSelection++;
+                                Serial.printf("[HOME] Widget RIGHT: %d -> %d\n", oldWidget, widgetSelection);
+                                refreshWidgetSelection(oldWidget, widgetSelection);
+                            } else if (!isLandscape) {
+                                // Portrait: RIGHT from Book → Orient (skip Weather)
+                                if (widgetSelection == 0 && numWidgets >= 2) {
+                                    int oldWidget = widgetSelection;
+                                    widgetSelection = numWidgets - 1;  // Go to Orient (last)
+                                    Serial.printf("[HOME] Portrait Book RIGHT → Orient: %d -> %d\n", oldWidget, widgetSelection);
+                                    refreshWidgetSelection(oldWidget, widgetSelection);
+                                }
+                            }
+                            break;
+                        case BTN_CONFIRM:
+                            activateWidget(widgetSelection);
+                            break;
+                        case BTN_BACK:
+                            widgetSelection = -1;
+                            showHomeScreenPartialFast();
+                            break;
+                        default:
+                            break;
+                    }
+                } else {
+                    // Grid navigation
+                    switch (btn) {
+                        case BTN_UP:
+                            if (homeSelection >= homeCols) {
+                                int oldSel = homeSelection;
+                                homeSelection -= homeCols;
+                                refreshChangedCells(oldSel, homeSelection);
+                            } else if (numWidgets > 0 && homePageIndex == 0) {
+                                // At top row of grid, go to widgets
+                                bool isLandscape = (settingsManager.display.orientation == 0);
+                                
+                                if (isLandscape) {
+                                    // Landscape: widgets stacked, enter at bottom (orientation)
+                                    widgetSelection = numWidgets - 1;
+                                } else {
+                                    // Portrait: widgets side by side
+                                    // Left column (col 0) → Book widget (index 0)
+                                    // Right column (col 1) → Orientation widget (last index)
+                                    int col = homeSelection % homeCols;
+                                    if (col == 0) {
+                                        // Coming from left column - go to Book (if shown) or first widget
+                                        widgetSelection = 0;
+                                    } else {
+                                        // Coming from right column - go to Orientation (last widget)
+                                        widgetSelection = numWidgets - 1;
+                                    }
+                                    Serial.printf("[HOME] Portrait UP from col %d -> widget %d\n", col, widgetSelection);
+                                }
+                                showHomeScreenPartialFast();
+                            }
+                            break;
+                        case BTN_DOWN:
+                            if (homeSelection + homeCols < itemsOnPage) {
+                                int oldSel = homeSelection;
+                                homeSelection += homeCols;
+                                refreshChangedCells(oldSel, homeSelection);
+                            }
+                            break;
+                        case BTN_LEFT:
+                            if (homeSelection > 0) {
+                                int oldSel = homeSelection;
+                                homeSelection--;
+                                refreshChangedCells(oldSel, homeSelection);
+                            } else if (homePageIndex > 0) {
+                                homePageIndex--;
+                                homeSelection = getItemsOnCurrentPage() - 1;
+                                widgetSelection = -1;  // Reset when leaving page 0
+                                showHomeScreenPartial(true);
+                            }
+                            break;
+                        case BTN_RIGHT:
+                            if (homeSelection < itemsOnPage - 1) {
+                                int oldSel = homeSelection;
+                                homeSelection++;
+                                refreshChangedCells(oldSel, homeSelection);
+                            } else if (homePageIndex < totalPages - 1) {
+                                homePageIndex++;
+                                homeSelection = 0;
+                                widgetSelection = -1;  // Reset when leaving page 0
+                                showHomeScreenPartial(true);
+                            }
+                            break;
+                        case BTN_CONFIRM:
+                            openApp(homeSelection);
+                            break;
+                        case BTN_BACK:
+                            if (homePageIndex > 0) {
+                                homePageIndex = 0;
+                                homeSelection = 0;
+                                showHomeScreenPartial(true);
+                            }
+                            break;
+                        default:
+                            break;
+                    }
                 }
             }
         }

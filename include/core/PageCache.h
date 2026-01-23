@@ -47,7 +47,7 @@
 #define CACHE_MAGIC             0x53554D49  // "SUMI"
 
 // Cache version (increment when format changes)
-#define CACHE_VERSION           3
+#define CACHE_VERSION           4
 
 // =============================================================================
 // Cache Key - Determines when cache is valid
@@ -60,8 +60,8 @@ struct CacheKey {
     uint16_t screenWidth;   // Display width
     uint16_t screenHeight;  // Display height
     
-    CacheKey() : fontSize(2), margins(20), lineSpacing(14), 
-                 flags(0), screenWidth(800), screenHeight(480) {}
+    CacheKey() : fontSize(2), margins(1), lineSpacing(14), 
+                 flags(0x01), screenWidth(800), screenHeight(480) {}  // flags=1 means justify=true
     
     // Generate hash for comparison
     uint32_t hash() const {
@@ -131,18 +131,50 @@ struct CachedWord {
 };
 
 // =============================================================================
-// Cached Line - Single line with words
+// Cached Line - Single line with words OR image placeholder
 // =============================================================================
 struct CachedLine {
     uint16_t yPos;              // Y position on page (pixels)
-    uint8_t wordCount;          // Number of words
-    uint8_t flags;              // Bit 0: isLastInPara
+    uint8_t wordCount;          // Number of words (0 if this is an image)
+    uint8_t flags;              // Bit 0: isLastInPara, Bit 1: isImage
     CachedWord words[CACHE_MAX_WORDS_LINE];
+    
+    // Image data (used when isImage() is true)
+    struct ImageInfo {
+        char path[64];          // Path to extracted image file
+        uint16_t width;         // Display width
+        uint16_t height;        // Display height
+        
+        ImageInfo() : width(0), height(0) {
+            memset(path, 0, sizeof(path));
+        }
+    };
     
     CachedLine() : yPos(0), wordCount(0), flags(0) {}
     
     bool isLastInPara() const { return flags & 0x01; }
     void setLastInPara(bool v) { if (v) flags |= 0x01; else flags &= ~0x01; }
+    
+    bool isImage() const { return flags & 0x02; }
+    void setIsImage(bool v) { if (v) flags |= 0x02; else flags &= ~0x02; }
+    
+    // Get image info (stored in words array space)
+    ImageInfo* getImageInfo() {
+        return reinterpret_cast<ImageInfo*>(&words[0]);
+    }
+    const ImageInfo* getImageInfo() const {
+        return reinterpret_cast<const ImageInfo*>(&words[0]);
+    }
+    
+    void setImage(const char* path, uint16_t w, uint16_t h, uint16_t y) {
+        setIsImage(true);
+        wordCount = 0;
+        yPos = y;
+        ImageInfo* info = getImageInfo();
+        strncpy(info->path, path, sizeof(info->path) - 1);
+        info->width = w;
+        info->height = h;
+    }
     
     void addWord(const CachedWord& w) {
         if (wordCount < CACHE_MAX_WORDS_LINE) {
@@ -154,8 +186,17 @@ struct CachedLine {
         f.write((uint8_t*)&yPos, sizeof(yPos));
         f.write(&wordCount, 1);
         f.write(&flags, 1);
-        for (int i = 0; i < wordCount; i++) {
-            words[i].serialize(f);
+        if (isImage()) {
+            // Serialize image info
+            const ImageInfo* info = getImageInfo();
+            f.write((uint8_t*)info->path, sizeof(info->path));
+            f.write((uint8_t*)&info->width, sizeof(info->width));
+            f.write((uint8_t*)&info->height, sizeof(info->height));
+        } else {
+            // Serialize words
+            for (int i = 0; i < wordCount; i++) {
+                words[i].serialize(f);
+            }
         }
     }
     
@@ -163,9 +204,19 @@ struct CachedLine {
         if (f.read((uint8_t*)&yPos, sizeof(yPos)) != sizeof(yPos)) return false;
         if (f.read(&wordCount, 1) != 1) return false;
         if (f.read(&flags, 1) != 1) return false;
-        if (wordCount > CACHE_MAX_WORDS_LINE) wordCount = CACHE_MAX_WORDS_LINE;
-        for (int i = 0; i < wordCount; i++) {
-            if (!words[i].deserialize(f)) return false;
+        
+        if (isImage()) {
+            // Deserialize image info
+            ImageInfo* info = getImageInfo();
+            if (f.read((uint8_t*)info->path, sizeof(info->path)) != sizeof(info->path)) return false;
+            if (f.read((uint8_t*)&info->width, sizeof(info->width)) != sizeof(info->width)) return false;
+            if (f.read((uint8_t*)&info->height, sizeof(info->height)) != sizeof(info->height)) return false;
+        } else {
+            // Deserialize words
+            if (wordCount > CACHE_MAX_WORDS_LINE) wordCount = CACHE_MAX_WORDS_LINE;
+            for (int i = 0; i < wordCount; i++) {
+                if (!words[i].deserialize(f)) return false;
+            }
         }
         return true;
     }

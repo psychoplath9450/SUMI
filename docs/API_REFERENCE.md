@@ -123,6 +123,103 @@ Wipes all settings and reboots.
 
 Forces a display refresh.
 
+## Reading Statistics
+
+### GET /api/stats
+
+Returns reading statistics.
+
+```json
+{
+  "totalPagesRead": 1523,
+  "totalMinutesRead": 845,
+  "totalHoursRead": 14,
+  "booksFinished": 3
+}
+```
+
+### DELETE /api/stats
+
+Resets all reading statistics to zero.
+
+## Backup & Restore
+
+### GET /api/backup
+
+Downloads a JSON backup file containing all settings.
+
+Response headers include `Content-Disposition: attachment; filename="sumi-backup.json"`
+
+### POST /api/restore
+
+Restores settings from a backup file.
+
+```json
+{
+  "backupVersion": 1,
+  "display": { ... },
+  "reader": { ... },
+  "weather": { ... }
+}
+```
+
+## KOReader Sync
+
+### GET /api/sync/settings
+
+```json
+{
+  "url": "https://sync.koreader.rocks",
+  "username": "myuser",
+  "enabled": true
+}
+```
+
+### POST /api/sync/settings
+
+```json
+{
+  "url": "https://sync.koreader.rocks",
+  "username": "myuser",
+  "password": "secret",
+  "enabled": true
+}
+```
+
+### GET /api/sync/test
+
+Tests connection to sync server.
+
+```json
+{
+  "success": true,
+  "message": "Connected to sync server"
+}
+```
+
+## Reader Settings
+
+### GET /api/reader/settings
+
+```json
+{
+  "fontSize": 18,
+  "lineHeight": 150,
+  "margins": 20,
+  "paraSpacing": 10,
+  "sceneBreakSpacing": 30,
+  "textAlign": 1,
+  "hyphenation": false,
+  "showProgress": true,
+  "showChapter": true,
+  "showPages": true
+}
+```
+
+### POST /api/reader/settings
+
+Updates reader settings. All fields optional.
+
 ## Errors
 
 All endpoints return errors like:

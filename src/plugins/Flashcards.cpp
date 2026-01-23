@@ -14,6 +14,7 @@
 #include <SD.h>
 #include <new>
 #include "plugins/Flashcards.h"
+#include "core/ZipReader.h"  // For freeing ZIP buffers
 
 #if FEATURE_FLASHCARDS
 
@@ -53,8 +54,12 @@ void FlashcardsApp::init(int screenW, int screenH) {
     _lastMode = MODE_DECKS;
     _cursor = 0;
     _scroll = 0;
+    _settingsCursor = 0;
     _needsFullRedraw = true;
     closeDeck();
+    
+    // Load settings
+    _settings.load();
     
     scanDecks();
 }
@@ -82,13 +87,65 @@ bool FlashcardsApp::handleInput(Button btn) {
                 if (_deckCount > 0) {
                     loadDeck();
                     if (_cardCount > 0) {
+                        if (_settings.shuffleOnLoad) {
+                            shuffleCards();
+                        }
                         _mode = MODE_QUESTION;
                         _needsFullRedraw = true;
                     }
                 }
                 return true;
+            case BTN_LEFT:
+                // Open settings
+                _settingsCursor = 0;
+                _mode = MODE_SETTINGS;
+                _needsFullRedraw = true;
+                return true;
             case BTN_BACK:
                 return false;  // Exit app
+            default:
+                return true;
+        }
+    }
+    else if (_mode == MODE_SETTINGS) {
+        switch (btn) {
+            case BTN_UP:
+                if (_settingsCursor > 0) {
+                    _settingsCursor--;
+                    _needsFullRedraw = true;
+                }
+                return true;
+            case BTN_DOWN:
+                if (_settingsCursor < 3) {  // 4 settings items (0-3)
+                    _settingsCursor++;
+                    _needsFullRedraw = true;
+                }
+                return true;
+            case BTN_CONFIRM:
+            case BTN_LEFT:
+            case BTN_RIGHT:
+                // Toggle/cycle setting
+                switch (_settingsCursor) {
+                    case 0:  // Font size
+                        _settings.fontSize = (FontSizeSetting)(((int)_settings.fontSize + 1) % 3);
+                        break;
+                    case 1:  // Shuffle on load
+                        _settings.shuffleOnLoad = !_settings.shuffleOnLoad;
+                        break;
+                    case 2:  // Show progress bar
+                        _settings.showProgressBar = !_settings.showProgressBar;
+                        break;
+                    case 3:  // Show stats
+                        _settings.showStats = !_settings.showStats;
+                        break;
+                }
+                _settings.save();
+                _needsFullRedraw = true;
+                return true;
+            case BTN_BACK:
+                _mode = MODE_DECKS;
+                _needsFullRedraw = true;
+                return true;
             default:
                 return true;
         }
@@ -165,6 +222,9 @@ void FlashcardsApp::draw() {
     if (_mode == MODE_DECKS) {
         drawDeckList();
     }
+    else if (_mode == MODE_SETTINGS) {
+        drawSettings();
+    }
     else if (_mode == MODE_QUESTION || _mode == MODE_ANSWER) {
         bool showAnswer = (_mode == MODE_ANSWER);
         drawCard(showAnswer);
@@ -236,6 +296,12 @@ void FlashcardsApp::loadDeck() {
     
     closeDeck();
     
+    // Free ZIP buffers to reclaim ~43KB for flashcards
+    ZipReader_freeBuffers();
+    
+    // Log heap before allocation
+    Serial.printf("[FLASH] Free heap: %d\n", ESP.getFreeHeap());
+    
     _cards = new (std::nothrow) Card[MAX_CARDS];
     if (!_cards) {
         Serial.println("[FLASH] Out of memory");
@@ -263,7 +329,7 @@ void FlashcardsApp::loadDeck() {
         Serial.println("[FLASH] Failed to load deck");
         closeDeck();
     } else {
-        Serial.printf("[FLASH] Loaded %d cards\n", _cardCount);
+        Serial.printf("[FLASH] Loaded %d cards, free heap: %d\n", _cardCount, ESP.getFreeHeap());
     }
 }
 
@@ -460,14 +526,15 @@ bool FlashcardsApp::loadJsonDeck(const char* path) {
     if (!f) return false;
     
     size_t fileSize = f.size();
-    if (fileSize > 32000) {
-        Serial.println("[FLASH] JSON too large");
+    if (fileSize > 16000) {  // Reduced from 32KB to 16KB
+        Serial.println("[FLASH] JSON too large (max 16KB)");
         f.close();
         return false;
     }
     
     char* json = (char*)malloc(fileSize + 1);
     if (!json) {
+        Serial.println("[FLASH] Failed to allocate JSON buffer");
         f.close();
         return false;
     }
@@ -715,8 +782,8 @@ void FlashcardsApp::drawDeckList() {
     display.setCursor(CARD_MARGIN, _screenH - 15);
     display.print(status);
     
-    display.setCursor(_screenW - 100, _screenH - 15);
-    display.print("OK: Study");
+    display.setCursor(_screenW / 2 - 60, _screenH - 15);
+    display.print("<Settings  OK:Study>");
 }
 
 // =============================================================================
@@ -728,9 +795,11 @@ void FlashcardsApp::drawCard(bool showAnswer) {
     
     Card& card = _cards[_cardIdx];
     
-    // Progress bar at top
-    drawProgressBar(CARD_MARGIN, 12, _screenW - 2*CARD_MARGIN, PROGRESS_H, 
-                    _cardIdx + 1, _cardCount);
+    // Progress bar at top (if enabled)
+    if (_settings.showProgressBar) {
+        drawProgressBar(CARD_MARGIN, 12, _screenW - 2*CARD_MARGIN, PROGRESS_H, 
+                        _cardIdx + 1, _cardCount);
+    }
     
     // Card number
     display.setFont(&FreeSans9pt7b);
@@ -738,19 +807,20 @@ void FlashcardsApp::drawCard(bool showAnswer) {
     
     char progress[32];
     snprintf(progress, sizeof(progress), "Card %d of %d", _cardIdx + 1, _cardCount);
-    display.setCursor(CARD_MARGIN, 42);
+    display.setCursor(CARD_MARGIN, _settings.showProgressBar ? 42 : 25);
     display.print(progress);
     
     // Divider
-    display.drawLine(0, 50, _screenW, 50, GxEPD_BLACK);
+    int dividerY = _settings.showProgressBar ? 50 : 33;
+    display.drawLine(0, dividerY, _screenW, dividerY, GxEPD_BLACK);
     
     // Question section
-    int qY = CARD_TOP + 10;
+    int qY = dividerY + 20;
     display.setFont(&FreeSans9pt7b);
     display.setCursor(CARD_MARGIN, qY);
     display.print("Question:");
     
-    display.setFont(&FreeSansBold12pt7b);
+    display.setFont(getCardFont());
     drawWrappedText(card.front, CARD_MARGIN, qY + 30, _screenW - 2*CARD_MARGIN, 4);
     
     if (showAnswer) {
@@ -764,18 +834,20 @@ void FlashcardsApp::drawCard(bool showAnswer) {
         display.setCursor(CARD_MARGIN, aY);
         display.print("Answer:");
         
-        display.setFont(&FreeSansBold12pt7b);
+        display.setFont(getCardFont());
         drawWrappedText(card.back, CARD_MARGIN, aY + 30, _screenW - 2*CARD_MARGIN, 4);
         
         // Bottom controls
         display.setFont(&FreeSans9pt7b);
         display.drawLine(0, _screenH - 45, _screenW, _screenH - 45, GxEPD_BLACK);
         
-        // Stats
-        char stats[32];
-        snprintf(stats, sizeof(stats), "%d/%d", _correct, _incorrect);
-        display.setCursor(CARD_MARGIN, _screenH - 25);
-        display.print(stats);
+        // Stats (if enabled)
+        if (_settings.showStats) {
+            char stats[32];
+            snprintf(stats, sizeof(stats), "%d/%d", _correct, _incorrect);
+            display.setCursor(CARD_MARGIN, _screenH - 25);
+            display.print(stats);
+        }
         
         // Control hints
         display.setCursor(_screenW / 2 - 80, _screenH - 25);
@@ -919,6 +991,123 @@ void FlashcardsApp::drawDone() {
     display.drawLine(0, _screenH - 45, _screenW, _screenH - 45, GxEPD_BLACK);
     display.setCursor(_screenW / 2 - 50, _screenH - 20);
     display.print("OK: Continue");
+}
+
+// =============================================================================
+// Settings Load/Save
+// =============================================================================
+
+#define FLASHCARD_SETTINGS_PATH "/.sumi/flashcard_settings.bin"
+
+void FlashcardsApp::FlashcardSettings::load() {
+    File f = SD.open(FLASHCARD_SETTINGS_PATH, FILE_READ);
+    if (f) {
+        f.read((uint8_t*)this, sizeof(FlashcardSettings));
+        f.close();
+        if (magic != 0x464C5348) {
+            *this = FlashcardSettings();  // Reset to defaults
+        }
+    }
+}
+
+void FlashcardsApp::FlashcardSettings::save() {
+    SD.mkdir("/.sumi");
+    File f = SD.open(FLASHCARD_SETTINGS_PATH, FILE_WRITE);
+    if (f) {
+        f.write((uint8_t*)this, sizeof(FlashcardSettings));
+        f.close();
+    }
+}
+
+// =============================================================================
+// Font Helper
+// =============================================================================
+
+const GFXfont* FlashcardsApp::getCardFont() {
+    switch (_settings.fontSize) {
+        case FONT_SMALL:  return &FreeSans9pt7b;
+        case FONT_MEDIUM: return &FreeSansBold12pt7b;
+        case FONT_LARGE:  return &FreeSansBold12pt7b;  // Could add 18pt if available
+        default:          return &FreeSansBold12pt7b;
+    }
+}
+
+// =============================================================================
+// Drawing - Settings Screen
+// =============================================================================
+
+void FlashcardsApp::drawSettings() {
+    // Header
+    display.setFont(&FreeSansBold12pt7b);
+    display.setTextColor(GxEPD_BLACK);
+    
+    const char* title = "Flashcard Settings";
+    int16_t tx, ty;
+    uint16_t tw, th;
+    display.getTextBounds(title, 0, 0, &tx, &ty, &tw, &th);
+    display.setCursor((_screenW - tw) / 2, 35);
+    display.print(title);
+    
+    display.drawLine(0, 50, _screenW, 50, GxEPD_BLACK);
+    
+    // Settings items
+    int startY = 80;
+    int itemH = 50;
+    int margin = 25;
+    int valueBoxW = 100;
+    
+    struct SettingItem {
+        const char* label;
+        const char* value;
+    };
+    
+    // Get current values
+    const char* fontSizeNames[] = {"Small", "Medium", "Large"};
+    
+    SettingItem items[] = {
+        {"Font Size", fontSizeNames[(int)_settings.fontSize]},
+        {"Shuffle on Load", _settings.shuffleOnLoad ? "Yes" : "No"},
+        {"Show Progress Bar", _settings.showProgressBar ? "Yes" : "No"},
+        {"Show Stats", _settings.showStats ? "Yes" : "No"}
+    };
+    int numItems = 4;
+    
+    display.setFont(&FreeSans9pt7b);
+    
+    for (int i = 0; i < numItems; i++) {
+        int y = startY + i * itemH;
+        bool selected = (_settingsCursor == i);
+        
+        if (selected) {
+            display.fillRect(margin - 5, y - 5, _screenW - 2*margin + 10, itemH - 6, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+        } else {
+            display.setTextColor(GxEPD_BLACK);
+        }
+        
+        // Label
+        display.setCursor(margin, y + 20);
+        display.print(items[i].label);
+        
+        // Value box
+        int valueX = _screenW - margin - valueBoxW;
+        if (!selected) {
+            display.drawRoundRect(valueX, y, valueBoxW, itemH - 10, 4, GxEPD_BLACK);
+        }
+        
+        // Center value text
+        display.getTextBounds(items[i].value, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor(valueX + (valueBoxW - tw) / 2, y + 20);
+        display.print(items[i].value);
+        
+        display.setTextColor(GxEPD_BLACK);
+    }
+    
+    // Footer
+    display.setFont(&FreeSans9pt7b);
+    display.drawLine(0, _screenH - 45, _screenW, _screenH - 45, GxEPD_BLACK);
+    display.setCursor(margin, _screenH - 20);
+    display.print("OK: Change | BACK: Done");
 }
 
 #endif // FEATURE_FLASHCARDS

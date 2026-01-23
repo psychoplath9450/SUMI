@@ -35,10 +35,13 @@
 #include "core/TextLayout.h"
 #include "core/ExpatHtmlParser.h"
 #include "core/EpubParser.h"
+#include "core/ZipReader.h"
 #include "core/ReaderSettings.h"
 #include "core/PluginHelpers.h"
 #include "core/BatteryMonitor.h"
 #include "core/SettingsManager.h"
+#include "core/KOSync.h"
+#include "core/PowerManager.h"
 #include <TJpg_Decoder.h>
 
 // External display instance
@@ -48,9 +51,23 @@ extern SettingsManager settingsManager;
 // JPEG cover rendering globals
 static int _coverOffsetX = 0;
 static int _coverOffsetY = 0;
+static int _coverMaxX = 9999;  // Right edge for clipping
+static int _coverMaxY = 9999;  // Bottom edge for clipping
 
 // TJpg_Decoder callback - draws pixels to e-ink display with dithering
+static int _jpgCallbackCount = 0;
 static bool _jpgDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+    _jpgCallbackCount++;
+    // Only log first block for debugging (reduced verbosity)
+    // if (_jpgCallbackCount == 1) {
+    //     Serial.printf("[JPG] Decoding: x=%d y=%d w=%d h=%d\n", x, y, w, h);
+    // }
+    
+    // Yield occasionally to prevent watchdog and allow stack to unwind
+    if (_jpgCallbackCount % 500 == 0) {
+        yield();
+    }
+    
     // Apply offset
     int drawX = x + _coverOffsetX;
     int drawY = y + _coverOffsetY;
@@ -60,6 +77,10 @@ static bool _jpgDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint1
         for (int i = 0; i < w; i++) {
             int px = drawX + i;
             int py = drawY + j;
+            
+            // Clip to bounds
+            if (px < _coverOffsetX || px >= _coverMaxX) continue;
+            if (py < _coverOffsetY || py >= _coverMaxY) continue;
             
             uint16_t color = bitmap[j * w + i];
             // Extract RGB from RGB565
@@ -81,23 +102,114 @@ static bool _jpgDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint1
 }
 
 // Memory limits
-#if SUMI_LOW_MEMORY
-    #define LIBRARY_MAX_BOOKS 50
-    #define TEXT_BUFFER_SIZE 4096
-#else
-    #define LIBRARY_MAX_BOOKS 200
-    #define TEXT_BUFFER_SIZE 16384
-#endif
+#define LIBRARY_MAX_BOOKS 200
+#define TEXT_BUFFER_SIZE 16384
 
 // =============================================================================
 // Reading Statistics
 // =============================================================================
+// Bookmark Structure
+// =============================================================================
+#define MAX_BOOKMARKS_PER_BOOK 20
+#define BOOKMARKS_PATH "/.sumi/books"
+
+struct Bookmark {
+    int chapter;
+    int page;
+    uint32_t timestamp;        // When created (millis at save time, later RTC)
+    char label[32];            // User label or auto "Page X"
+    
+    Bookmark() : chapter(0), page(0), timestamp(0) {
+        memset(label, 0, sizeof(label));
+    }
+    
+    void serialize(File& f) const {
+        f.write((uint8_t*)&chapter, sizeof(chapter));
+        f.write((uint8_t*)&page, sizeof(page));
+        f.write((uint8_t*)&timestamp, sizeof(timestamp));
+        f.write((uint8_t*)label, sizeof(label));
+    }
+    
+    bool deserialize(File& f) {
+        if (f.read((uint8_t*)&chapter, sizeof(chapter)) != sizeof(chapter)) return false;
+        if (f.read((uint8_t*)&page, sizeof(page)) != sizeof(page)) return false;
+        if (f.read((uint8_t*)&timestamp, sizeof(timestamp)) != sizeof(timestamp)) return false;
+        if (f.read((uint8_t*)label, sizeof(label)) != sizeof(label)) return false;
+        return true;
+    }
+};
+
+struct BookmarkList {
+    uint32_t magic = 0x424D4152;  // "BMAR"
+    uint8_t count = 0;
+    Bookmark bookmarks[MAX_BOOKMARKS_PER_BOOK];
+    
+    bool add(int chapter, int page, const char* label = nullptr) {
+        if (count >= MAX_BOOKMARKS_PER_BOOK) return false;
+        
+        // Check for duplicate
+        for (int i = 0; i < count; i++) {
+            if (bookmarks[i].chapter == chapter && bookmarks[i].page == page) {
+                return false;  // Already bookmarked
+            }
+        }
+        
+        Bookmark& bm = bookmarks[count];
+        bm.chapter = chapter;
+        bm.page = page;
+        bm.timestamp = millis();
+        
+        if (label && strlen(label) > 0) {
+            strncpy(bm.label, label, sizeof(bm.label) - 1);
+        } else {
+            snprintf(bm.label, sizeof(bm.label), "Ch%d Pg%d", chapter + 1, page + 1);
+        }
+        
+        count++;
+        return true;
+    }
+    
+    bool remove(int index) {
+        if (index < 0 || index >= count) return false;
+        
+        // Shift remaining bookmarks
+        for (int i = index; i < count - 1; i++) {
+            bookmarks[i] = bookmarks[i + 1];
+        }
+        count--;
+        return true;
+    }
+    
+    int find(int chapter, int page) const {
+        for (int i = 0; i < count; i++) {
+            if (bookmarks[i].chapter == chapter && bookmarks[i].page == page) {
+                return i;
+            }
+        }
+        return -1;
+    }
+};
+
+// =============================================================================
+// Enhanced Reading Statistics (persistent)
+// =============================================================================
+#define STATS_PATH "/.sumi/reading_stats.bin"
+
 struct ReadingStats {
     uint32_t magic = 0x53544154;  // "STAT"
     uint32_t totalPagesRead = 0;
     uint32_t totalMinutesRead = 0;
+    uint32_t totalBooksFinished = 0;
+    uint32_t longestStreak = 0;        // Consecutive days
+    uint32_t currentStreak = 0;
+    uint32_t lastReadDate = 0;         // Days since epoch (for streak tracking)
     uint32_t sessionPagesRead = 0;
     uint32_t sessionStartTime = 0;
+    
+    // Per-book stats (stored in book's cache folder)
+    uint32_t bookPagesRead = 0;
+    uint32_t bookMinutesRead = 0;
+    uint32_t bookStartDate = 0;
     
     void startSession() {
         sessionPagesRead = 0;
@@ -107,11 +219,52 @@ struct ReadingStats {
     void recordPageTurn() {
         totalPagesRead++;
         sessionPagesRead++;
+        bookPagesRead++;
+    }
+    
+    void endSession() {
+        uint32_t sessionMins = getSessionMinutes();
+        totalMinutesRead += sessionMins;
+        bookMinutesRead += sessionMins;
     }
     
     uint32_t getSessionMinutes() const {
         return (millis() - sessionStartTime) / 60000;
     }
+    
+    void save() {
+        File f = SD.open(STATS_PATH, FILE_WRITE);
+        if (f) {
+            endSession();  // Update totals before saving
+            f.write((uint8_t*)this, sizeof(ReadingStats));
+            f.close();
+            startSession();  // Restart session timer
+        }
+    }
+    
+    void load() {
+        File f = SD.open(STATS_PATH, FILE_READ);
+        if (f) {
+            f.read((uint8_t*)this, sizeof(ReadingStats));
+            f.close();
+            if (magic != 0x53544154) {
+                // Invalid file, reset
+                *this = ReadingStats();
+            }
+        }
+        startSession();
+    }
+};
+
+// =============================================================================
+// KOReader Sync Structure
+// =============================================================================
+struct KOSyncProgress {
+    char document[128];        // Book identifier (usually filename hash)
+    float progress;            // 0.0 - 1.0
+    int page;
+    uint32_t timestamp;        // Unix timestamp
+    char device[32];           // Device name
 };
 
 // =============================================================================
@@ -148,12 +301,13 @@ inline BookType detectBookType(const char* path) {
 #define LAST_BOOK_PATH "/.sumi/lastbook.bin"
 #define COVER_CACHE_DIR "/.sumi/covers"
 
-// Last book info for sleep screen
+// Last book info for sleep screen and boot-to-last-book
 struct LastBookInfo {
     uint32_t magic = 0x4C415354;  // "LAST"
     char title[64];
     char author[48];
     char coverPath[96];
+    char bookPath[128];    // NEW: Full path to the book file for resume
     int chapter;
     int page;
     int totalPages;
@@ -181,7 +335,9 @@ public:
         BROWSER,         // Flippable cover view
         BROWSER_LIST,    // Traditional list view
         READING, 
-        CHAPTER_SELECT, 
+        CHAPTER_SELECT,
+        BOOKMARK_SELECT, // NEW: View/manage bookmarks
+        READING_STATS,   // NEW: View reading statistics
         SETTINGS_MENU,
         INFO, 
         INDEXING 
@@ -195,6 +351,9 @@ public:
         SET_LINE_SPACING,
         SET_JUSTIFY,
         SET_CHAPTERS,       // Jump to chapter select
+        SET_BOOKMARKS,      // NEW: View bookmarks
+        SET_ADD_BOOKMARK,   // NEW: Add bookmark at current position
+        SET_STATS,          // NEW: View reading stats
         SET_CLEAR_CACHE,
         SET_BACK,
         SET_COUNT
@@ -210,6 +369,45 @@ public:
         return screenW;
     }
     
+    // Get the appropriate font for reading based on settings
+    const GFXfont* getReaderFont() {
+        LibReaderSettings& settings = readerSettings.get();
+        switch (settings.fontSize) {
+            case FontSize::SMALL:  return &FreeSans9pt7b;
+            case FontSize::MEDIUM: return &FreeSans12pt7b;
+            case FontSize::LARGE:  return &FreeSans12pt7b;  // Use 12pt for large too
+            default:               return &FreeSans12pt7b;
+        }
+    }
+    
+    // Apply font settings to text layout
+    void applyFontSettings() {
+        const GFXfont* font = getReaderFont();
+        textLayout.setFont(font);
+        display.setFont(font);
+        
+        LibReaderSettings& settings = readerSettings.get();
+        int lineHeight = settings.getLineHeight();
+        int margins = settings.getMarginPx();
+        int paraSpacing = settings.getParaSpacing();
+        
+        // Status bar takes 30px at bottom, add small padding
+        const int statusBarHeight = 35;
+        // Top margin = side margin + small offset for aesthetics
+        int topMargin = margins + 5;
+        // Bottom margin = status bar + side margin
+        int bottomMargin = statusBarHeight + margins;
+        
+        textLayout.setLineHeight(lineHeight);
+        textLayout.setMargins(margins, margins, topMargin, bottomMargin);
+        textLayout.setParaSpacing(paraSpacing);
+        textLayout.setJustify(settings.justifyText);
+        
+        Serial.printf("[LIBRARY] Font: %s, LineHeight: %d, Margins: L/R=%d T=%d B=%d\n",
+                      LibReaderSettings::getFontSizeName(settings.fontSize), lineHeight, 
+                      margins, topMargin, bottomMargin);
+    }
+    
     LibraryApp() : state(BROWSER), cursor(0), scrollOffset(0),
                    screenW(800), screenH(480), landscape(true), itemsPerPage(8),
                    currentPage(0), totalPages(0), currentChapter(0), totalChapters(1),
@@ -221,7 +419,8 @@ public:
                    cacheValid(false), indexingProgress(0),
                    isEpub(false), preloadedPage(-1),
                    useFlipBrowser(true), bookIsOpen(false),
-                   firstRenderAfterOpen(false) {
+                   firstRenderAfterOpen(false), pendingChapterLoad(false),
+                   pendingChapterToLoad(-1) {
         strcpy(currentPath, "/books");
         memset(chapterTitle, 0, sizeof(chapterTitle));
         memset(currentBook, 0, sizeof(currentBook));
@@ -229,7 +428,7 @@ public:
         books.reserve(LIBRARY_MAX_BOOKS);
     }
     
-    void init(int w, int h) {
+    void init(int w, int h, bool autoResume = true) {
         // Use the dimensions passed by the system (GxEPD2 handles rotation)
         screenW = w;
         screenH = h;
@@ -249,11 +448,21 @@ public:
         
         // Initialize text layout engine - GxEPD2 handles coordinate rotation
         textLayout.setPageSize(getLayoutWidth(), screenH);
-        readerSettings.applyToLayout(textLayout);
-        textLayout.setFont(&FreeSans9pt7b);
+        applyFontSettings();  // Apply font, line height, margins from settings
         
         // Ensure cover cache directory exists
         SD.mkdir(COVER_CACHE_DIR);
+        
+        // Check if we should auto-resume last book (quick-open feature)
+        if (autoResume && SD.exists(LAST_BOOK_PATH)) {
+            LastBookInfo info;
+            if (getLastBookInfo(info) && strlen(info.bookPath) > 0 && SD.exists(info.bookPath)) {
+                Serial.printf("[LIBRARY] Quick-open: Resuming last book: %s\n", info.title);
+                if (resumeLastBook()) {
+                    return;  // Successfully resumed, don't scan directory
+                }
+            }
+        }
         
         scanDirectory();
     }
@@ -325,8 +534,9 @@ public:
                 }
                 
                 // Check memory before processing
+                // Lowered threshold to allow book registration with tight memory
                 int freeHeap = ESP.getFreeHeap();
-                if (freeHeap < 30000) {
+                if (freeHeap < 8000) {
                     Serial.printf("[LIBRARY] Memory critical (%d bytes), stopping scan\n", freeHeap);
                     entry.close();
                     break;
@@ -374,11 +584,218 @@ public:
         }
         scrollOffset = 0;
         Serial.printf("[LIBRARY] Scan complete: %d items total, cursor at %d\n", (int)books.size(), cursor);
+        
+        // Extract covers using lightweight method (no full EPUB parsing)
+        extractAllCoversLightweight();
+    }
+    
+    // =========================================================================
+    // Lightweight Cover Extraction (minimal memory usage)
+    // =========================================================================
+    
+    // Find cover image path by scanning ZIP file names
+    String findCoverInZip(ZipReader& zip) {
+        int fileCount = zip.getFileCount();
+        String coverPath = "";
+        
+        // First pass: look for files with "cover" in the name
+        for (int i = 0; i < fileCount; i++) {
+            String name = zip.getFileName(i);
+            String nameLower = name;
+            nameLower.toLowerCase();
+            
+            // Common cover patterns
+            if (nameLower.endsWith(".jpg") || nameLower.endsWith(".jpeg") || nameLower.endsWith(".png")) {
+                if (nameLower.indexOf("cover") >= 0) {
+                    coverPath = name;
+                    Serial.printf("[COVER] Found by name: %s\n", name.c_str());
+                    break;
+                }
+            }
+        }
+        
+        // If not found, try reading container.xml -> content.opf to find cover
+        if (coverPath.length() == 0) {
+            // Read container.xml to find OPF path
+            String container = zip.readFile("META-INF/container.xml");
+            if (container.length() > 0) {
+                // Simple parse: find rootfile full-path
+                int rfPos = container.indexOf("rootfile");
+                if (rfPos > 0) {
+                    int fpPos = container.indexOf("full-path=\"", rfPos);
+                    if (fpPos > 0) {
+                        fpPos += 11;
+                        int fpEnd = container.indexOf("\"", fpPos);
+                        if (fpEnd > fpPos) {
+                            String opfPath = container.substring(fpPos, fpEnd);
+                            
+                            // Read OPF to find cover
+                            String opf = zip.readFile(opfPath);
+                            if (opf.length() > 0) {
+                                // Get base path for OPF
+                                String basePath = "";
+                                int lastSlash = opfPath.lastIndexOf('/');
+                                if (lastSlash > 0) {
+                                    basePath = opfPath.substring(0, lastSlash + 1);
+                                }
+                                
+                                // Look for cover in meta (name="cover" content="id")
+                                int metaPos = opf.indexOf("name=\"cover\"");
+                                if (metaPos > 0) {
+                                    int contentPos = opf.indexOf("content=\"", metaPos);
+                                    if (contentPos > 0) {
+                                        contentPos += 9;
+                                        int contentEnd = opf.indexOf("\"", contentPos);
+                                        if (contentEnd > contentPos) {
+                                            String coverId = opf.substring(contentPos, contentEnd);
+                                            
+                                            // Find item with this id
+                                            String idSearch = "id=\"" + coverId + "\"";
+                                            int itemPos = opf.indexOf(idSearch);
+                                            if (itemPos > 0) {
+                                                int hrefPos = opf.indexOf("href=\"", itemPos);
+                                                if (hrefPos > 0) {
+                                                    hrefPos += 6;
+                                                    int hrefEnd = opf.indexOf("\"", hrefPos);
+                                                    if (hrefEnd > hrefPos) {
+                                                        coverPath = basePath + opf.substring(hrefPos, hrefEnd);
+                                                        Serial.printf("[COVER] Found in OPF meta: %s\n", coverPath.c_str());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Also check for properties="cover-image"
+                                if (coverPath.length() == 0) {
+                                    int propPos = opf.indexOf("properties=\"cover-image\"");
+                                    if (propPos > 0) {
+                                        // Search backwards for href
+                                        int hrefPos = opf.lastIndexOf("href=\"", propPos);
+                                        if (hrefPos > 0 && propPos - hrefPos < 200) {
+                                            hrefPos += 6;
+                                            int hrefEnd = opf.indexOf("\"", hrefPos);
+                                            if (hrefEnd > hrefPos) {
+                                                coverPath = basePath + opf.substring(hrefPos, hrefEnd);
+                                                Serial.printf("[COVER] Found by properties: %s\n", coverPath.c_str());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return coverPath;
+    }
+    
+    void extractAllCoversLightweight() {
+        Serial.println("[LIBRARY] ===== Extracting covers (lightweight) =====");
+        
+        int extracted = 0;
+        int skipped = 0;
+        
+        for (int i = 0; i < (int)books.size(); i++) {
+            BookEntry& book = books[i];
+            
+            // Skip non-EPUBs
+            if (book.bookType != BookType::EPUB_FILE) {
+                continue;
+            }
+            
+            // Build paths
+            char fullPath[128];
+            snprintf(fullPath, sizeof(fullPath), "%s/%s", currentPath, book.filename);
+            
+            uint32_t hash = 0;
+            for (const char* p = fullPath; *p; p++) {
+                hash = hash * 31 + *p;
+            }
+            char coverCachePath[96];
+            snprintf(coverCachePath, sizeof(coverCachePath), "%s/%08x.jpg", COVER_CACHE_DIR, hash);
+            
+            // Check if already cached
+            if (isValidCoverFile(coverCachePath)) {
+                strncpy(book.coverPath, coverCachePath, sizeof(book.coverPath) - 1);
+                book.hasCover = true;
+                skipped++;
+                continue;
+            }
+            
+            Serial.printf("[LIBRARY] Cover %d/%d: %s (heap=%d)\n", 
+                         i+1, (int)books.size(), book.filename, ESP.getFreeHeap());
+            
+            // Open ZIP directly (not EpubParser)
+            ZipReader zip;
+            if (!zip.open(fullPath)) {
+                Serial.printf("[LIBRARY] Failed to open ZIP: %s\n", zip.getError().c_str());
+                continue;
+            }
+            
+            // Find cover image path
+            String coverInZip = findCoverInZip(zip);
+            
+            if (coverInZip.length() == 0) {
+                Serial.println("[LIBRARY] No cover found in EPUB");
+                zip.close();
+                continue;
+            }
+            
+            // Ensure output directory exists
+            SD.mkdir(COVER_CACHE_DIR);
+            
+            // Extract cover to file
+            File outFile = SD.open(coverCachePath, FILE_WRITE);
+            if (!outFile) {
+                Serial.printf("[LIBRARY] Failed to create cover file: %s\n", coverCachePath);
+                zip.close();
+                continue;
+            }
+            
+            bool success = zip.streamFileTo(coverInZip, outFile, 1024);
+            outFile.close();
+            zip.close();
+            
+            if (success) {
+                strncpy(book.coverPath, coverCachePath, sizeof(book.coverPath) - 1);
+                book.hasCover = true;
+                extracted++;
+                Serial.printf("[LIBRARY] Cover extracted: %s\n", coverCachePath);
+            } else {
+                SD.remove(coverCachePath);
+                Serial.printf("[LIBRARY] Cover extraction failed\n");
+            }
+            
+            // Small delay to let memory settle
+            yield();
+        }
+        
+        Serial.printf("[LIBRARY] Covers: %d extracted, %d cached\n", extracted, skipped);
     }
     
     // =========================================================================
     // Book Metadata Loading (for covers and progress)
     // =========================================================================
+    
+    // Helper to check if cover file is valid (exists and has content)
+    bool isValidCoverFile(const char* path) {
+        if (!SD.exists(path)) return false;
+        File f = SD.open(path, FILE_READ);
+        if (!f) return false;
+        size_t sz = f.size();
+        f.close();
+        if (sz < 100) {  // Cover should be at least 100 bytes
+            // Delete empty/corrupt cover file
+            SD.remove(path);
+            Serial.printf("[LIBRARY] Deleted invalid cover file: %s (size=%d)\n", path, (int)sz);
+            return false;
+        }
+        return true;
+    }
     
     void loadBookMetadata(BookEntry& book, const char* fullPath) {
         // Generate cover cache path from book filename hash
@@ -388,16 +805,17 @@ public:
         }
         
         // Check for cached cover (try .jpg first, then .raw)
+        // Also verify file has actual content (not empty)
         char jpgPath[96];
         char rawPath[96];
         snprintf(jpgPath, sizeof(jpgPath), "%s/%08x.jpg", COVER_CACHE_DIR, hash);
         snprintf(rawPath, sizeof(rawPath), "%s/%08x.raw", COVER_CACHE_DIR, hash);
         
-        if (SD.exists(jpgPath)) {
+        if (isValidCoverFile(jpgPath)) {
             strncpy(book.coverPath, jpgPath, sizeof(book.coverPath) - 1);
             book.hasCover = true;
             Serial.printf("[LIBRARY] Cached cover found: %s\n", jpgPath);
-        } else if (SD.exists(rawPath)) {
+        } else if (isValidCoverFile(rawPath)) {
             strncpy(book.coverPath, rawPath, sizeof(book.coverPath) - 1);
             book.hasCover = true;
             Serial.printf("[LIBRARY] Cached cover found: %s\n", rawPath);
@@ -428,22 +846,82 @@ public:
             hash = hash * 31 + *p;
         }
         char path[96];
-        snprintf(path, sizeof(path), "%s/%08x.raw", COVER_CACHE_DIR, hash);
+        snprintf(path, sizeof(path), "%s/%08x.jpg", COVER_CACHE_DIR, hash);
         return String(path);
     }
+    
+    // =========================================================================
+    // Bluetooth Page Turner Support
+    // =========================================================================
+    
+    /**
+     * Handle keyboard key for page turning
+     * Common page turner keys:
+     * - Left Arrow (0x50), Page Up (0x4B), Space (0x2C) = Previous page
+     * - Right Arrow (0x4F), Page Down (0x4E), Enter (0x28) = Next page
+     * - Up Arrow (0x52) = Chapter menu
+     * - Escape (0x29) = Back/Exit
+     * 
+     * Returns true if key was handled
+     */
+    bool handleKeyboardKey(uint8_t keyCode, bool pressed) {
+        if (!pressed) return false;  // Only handle key press, not release
+        if (state != READING) return false;  // Only handle when reading
+        
+        Button btn = BTN_NONE;
+        
+        switch (keyCode) {
+            // Previous page keys
+            case 0x50:  // Left arrow
+            case 0x4B:  // Page Up
+            case 0x2C:  // Space (configurable)
+                btn = BTN_LEFT;
+                break;
+                
+            // Next page keys
+            case 0x4F:  // Right arrow
+            case 0x4E:  // Page Down
+            case 0x28:  // Enter
+                btn = BTN_RIGHT;
+                break;
+                
+            // Menu/Chapter select
+            case 0x52:  // Up arrow
+                btn = BTN_UP;
+                break;
+                
+            // Settings
+            case 0x51:  // Down arrow
+                btn = BTN_DOWN;
+                break;
+                
+            // Back/Exit
+            case 0x29:  // Escape
+                btn = BTN_BACK;
+                break;
+                
+            default:
+                return false;
+        }
+        
+        if (btn != BTN_NONE) {
+            Serial.printf("[LIBRARY] BT Page turner: keyCode=0x%02X -> btn=%d\n", keyCode, btn);
+            return handleInput(btn);
+        }
+        
+        return false;
+    }
+    
+    // Check if currently reading (for BT page turner context)
+    bool isReading() const { return state == READING && bookIsOpen; }
     
     // =========================================================================
     // Input Handling
     // =========================================================================
     
     bool handleInput(Button btn) {
-        Serial.printf("[LIBRARY] handleInput: raw_btn=%d, landscape=%d\n", btn, landscape);
-        
         // DON'T remap buttons - use raw physical buttons
         // This matches the help text: "< > Flip | OK: Read | UP: List | DOWN: Settings"
-        // Button labels remain consistent regardless of screen orientation
-        
-        Serial.printf("[LIBRARY] handleInput: using raw btn=%d\n", btn);
         
         // Ignore BTN_NONE
         if (btn == BTN_NONE) {
@@ -455,8 +933,6 @@ public:
     }
     
     bool handleButtonPress(Button btn) {
-        Serial.printf("[LIBRARY] handleButtonPress: btn=%d, state=%d\n", btn, state);
-        
         switch (state) {
             case BROWSER:
                 return handleBrowserInput(btn);
@@ -464,6 +940,10 @@ public:
                 return handleReadingInput(btn);
             case CHAPTER_SELECT:
                 return handleChapterSelectInput(btn);
+            case BOOKMARK_SELECT:
+                return handleBookmarkSelectInput(btn);
+            case READING_STATS:
+                return handleReadingStatsInput(btn);
             case SETTINGS_MENU:
                 return handleSettingsInput(btn);
             case INFO:
@@ -479,9 +959,6 @@ public:
     }
     
     bool handleBrowserInput(Button btn) {
-        Serial.printf("[LIBRARY] handleBrowserInput: btn=%d, cursor=%d, books=%d, flipMode=%d\n", 
-                      btn, cursor, (int)books.size(), useFlipBrowser);
-        
         if (useFlipBrowser) {
             // Flippable cover browser mode
             return handleFlipBrowserInput(btn);
@@ -642,13 +1119,9 @@ public:
                     }
                     scanDirectory();
                     return true;
-                } else {
-                    // At root, switch to flip view
-                    useFlipBrowser = true;
-                    Serial.println("[LIBRARY] At root, switching to flip view");
-                    return true;
                 }
-                break;
+                // At root - return false to exit library
+                return false;
                 
             default:
                 break;
@@ -687,42 +1160,13 @@ public:
                     needsUpdate = true;
                     result = true;
                 } else if (currentChapter > 0) {
-                    // Load previous chapter on MAIN THREAD
-                    if (renderMutex) xSemaphoreGive(renderMutex);
-                    
+                    // Defer chapter loading to main loop (fresh stack)
                     showLoadingScreen("Loading...");
-                    
-                    // Save current position in case all previous chapters are empty
-                    int originalChapter = currentChapter;
-                    int originalPage = currentPage;
-                    
                     currentChapter--;
-                    
-                    // Skip empty chapters (cover pages, etc.)
-                    int attempts = 0;
-                    bool foundValid = false;
-                    while (attempts < 5 && currentChapter >= 0) {
-                        if (loadChapterSync(currentChapter)) {
-                            currentPage = totalPages > 0 ? totalPages - 1 : 0;  // Go to last page
-                            saveProgress();
-                            cacheValid = true;
-                            foundValid = true;
-                            break;
-                        }
-                        currentChapter--;
-                        attempts++;
-                    }
-                    
-                    // If no valid previous chapter found, stay on current
-                    if (!foundValid) {
-                        Serial.println("[LIBRARY] No valid previous chapter, staying put");
-                        currentChapter = originalChapter;
-                        currentPage = originalPage;
-                        loadChapterSync(currentChapter);  // Reload current
-                        cacheValid = true;
-                    }
-                    
-                    if (renderMutex) xSemaphoreTake(renderMutex, portMAX_DELAY);
+                    currentPage = 999;  // Will go to last page
+                    pendingChapterToLoad = currentChapter;
+                    pendingChapterLoad = true;
+                    cacheValid = false;
                     needsUpdate = true;
                     result = true;
                 }
@@ -738,42 +1182,13 @@ public:
                     needsUpdate = true;
                     result = true;
                 } else if (currentChapter < totalChapters - 1) {
-                    // Load next chapter on MAIN THREAD
-                    if (renderMutex) xSemaphoreGive(renderMutex);
-                    
+                    // Defer chapter loading to main loop (fresh stack)
                     showLoadingScreen("Loading...");
-                    
-                    // Save current position in case all next chapters are empty
-                    int originalChapter = currentChapter;
-                    int originalPage = currentPage;
-                    
                     currentChapter++;
-                    
-                    // Skip empty chapters (cover pages, etc.)
-                    int attempts = 0;
-                    bool foundValid = false;
-                    while (attempts < 5 && currentChapter < totalChapters) {
-                        if (loadChapterSync(currentChapter)) {
-                            currentPage = 0;
-                            saveProgress();
-                            cacheValid = true;
-                            foundValid = true;
-                            break;
-                        }
-                        currentChapter++;
-                        attempts++;
-                    }
-                    
-                    // If no valid next chapter found, stay on current
-                    if (!foundValid) {
-                        Serial.println("[LIBRARY] No valid next chapter, staying put");
-                        currentChapter = originalChapter;
-                        currentPage = originalPage;
-                        loadChapterSync(currentChapter);  // Reload current
-                        cacheValid = true;
-                    }
-                    
-                    if (renderMutex) xSemaphoreTake(renderMutex, portMAX_DELAY);
+                    currentPage = 0;
+                    pendingChapterToLoad = currentChapter;
+                    pendingChapterLoad = true;
+                    cacheValid = false;
                     needsUpdate = true;
                     result = true;
                 }
@@ -798,7 +1213,7 @@ public:
                 break;
                 
             case BTN_BACK:
-                saveProgress();
+                // closeBook() handles saving progress internally
                 if (renderMutex) {
                     xSemaphoreGive(renderMutex);
                 }
@@ -848,38 +1263,13 @@ public:
                 
             case BTN_CONFIRM:
                 if (chapterCursor != currentChapter) {
-                    // Load selected chapter on main thread
+                    // Defer chapter loading to main loop (fresh stack)
                     showLoadingScreen("Loading...");
-                    
-                    // Save original position
-                    int originalChapter = currentChapter;
-                    int originalPage = currentPage;
-                    
                     currentChapter = chapterCursor;
-                    
-                    // Skip empty chapters if needed
-                    int attempts = 0;
-                    bool found = false;
-                    while (attempts < 5 && currentChapter < totalChapters) {
-                        if (loadChapterSync(currentChapter)) {
-                            currentPage = 0;
-                            cacheValid = true;
-                            saveProgress();
-                            found = true;
-                            break;
-                        }
-                        currentChapter++;
-                        attempts++;
-                    }
-                    
-                    if (!found) {
-                        // Couldn't find readable chapter, go back to original
-                        Serial.println("[LIBRARY] Selected chapter empty, returning to original");
-                        currentChapter = originalChapter;
-                        currentPage = originalPage;
-                        loadChapterSync(currentChapter);
-                        cacheValid = true;
-                    }
+                    currentPage = 0;
+                    pendingChapterToLoad = currentChapter;
+                    pendingChapterLoad = true;
+                    cacheValid = false;
                     updateRequired = true;
                 }
                 state = READING;
@@ -900,25 +1290,31 @@ public:
         LibReaderSettings& settings = readerSettings.get();
         LibReaderSettings oldSettings = settings;
         
+        // Calculate menu structure to match drawSettingsMenu
+        int numReadingItems = 4;  // Font family, font size, line spacing, alignment
+        int numDisplayItems = 4;  // Sleep screen, status bar, anti-aliasing, refresh
+        int baseItems = numReadingItems + numDisplayItems;
+        
+        // Dynamic action buttons
+        bool showChapters = bookIsOpen && totalChapters > 1;
+        int chaptersIdx = showChapters ? baseItems : -1;
+        int bookmarksIdx = bookIsOpen ? (showChapters ? baseItems + 1 : baseItems) : -1;
+        int addBookmarkIdx = bookIsOpen ? (bookmarksIdx + 1) : -1;
+        int statsIdx = bookIsOpen ? (addBookmarkIdx + 1) : baseItems;
+        int backIdx = statsIdx + 1;
+        int maxItems = backIdx + 1;
+        
         switch (btn) {
             case BTN_UP:
                 if (settingsCursor > 0) {
                     settingsCursor--;
-                    // Skip chapters if not applicable
-                    if (settingsCursor == SET_CHAPTERS && (!bookIsOpen || totalChapters <= 1)) {
-                        settingsCursor--;
-                    }
                     return true;
                 }
                 break;
                 
             case BTN_DOWN:
-                if (settingsCursor < SET_COUNT - 1) {
+                if (settingsCursor < maxItems - 1) {
                     settingsCursor++;
-                    // Skip chapters if not applicable
-                    if (settingsCursor == SET_CHAPTERS && (!bookIsOpen || totalChapters <= 1)) {
-                        settingsCursor++;
-                    }
                     return true;
                 }
                 break;
@@ -926,92 +1322,102 @@ public:
             case BTN_LEFT:
             case BTN_RIGHT:
             case BTN_CONFIRM:
-                switch (settingsCursor) {
-                    case SET_ORIENTATION: {
-                        // Toggle orientation
-                        bool isLandscape = (settingsManager.display.orientation == 0);
-                        settingsManager.display.orientation = isLandscape ? 1 : 0;
-                        settingsManager.save();
-                        
-                        // Apply new rotation
-                        display.setRotation(settingsManager.display.orientation == 0 ? 0 : 3);
-                        
-                        // Update screen dimensions
-                        if (settingsManager.display.orientation == 0) {
-                            screenW = PHYSICAL_WIDTH;
-                            screenH = PHYSICAL_HEIGHT;
-                            landscape = true;
-                        } else {
-                            screenW = PHYSICAL_HEIGHT;
-                            screenH = PHYSICAL_WIDTH;
-                            landscape = false;
-                        }
-                        
-                        // Recalculate items per page
-                        itemsPerPage = (screenH - 100) / 50;
-                        
-                        // If reading, need to reformat
-                        if (bookIsOpen) {
-                            textLayout.setPageSize(getLayoutWidth(), screenH);
-                            readerSettings.applyToLayout(textLayout);
-                            showLoadingScreen("Reformatting...");
-                            if (loadChapterSync(currentChapter)) {
-                                cacheValid = true;
-                            }
-                            updateRequired = true;
-                        }
-                        return true;
+                // Reading items (0-3)
+                if (settingsCursor < numReadingItems) {
+                    switch (settingsCursor) {
+                        case 0: // Font family - no action for now
+                            break;
+                        case 1: // Font size
+                            settings.fontSize = (FontSize)(((int)settings.fontSize + 1) % 3);
+                            break;
+                        case 2: // Line spacing
+                            settings.lineSpacing = (LineSpacing)(((int)settings.lineSpacing + 1) % 3);
+                            break;
+                        case 3: // Alignment
+                            settings.justifyText = !settings.justifyText;
+                            break;
                     }
-                    case SET_FONT_SIZE:
-                        settings.fontSize = (FontSize)(((int)settings.fontSize + 1) % 3);
-                        break;
-                    case SET_MARGINS:
-                        settings.margins = (MarginSize)(((int)settings.margins + 1) % 3);
-                        break;
-                    case SET_LINE_SPACING:
-                        settings.lineSpacing = (LineSpacing)(((int)settings.lineSpacing + 1) % 3);
-                        break;
-                    case SET_JUSTIFY:
-                        settings.justifyText = !settings.justifyText;
-                        break;
-                    case SET_CHAPTERS:
-                        // Go to chapter select
-                        if (bookIsOpen && totalChapters > 1) {
-                            chapterCursor = currentChapter;
-                            chapterScrollOffset = (currentChapter > 3) ? currentChapter - 3 : 0;
-                            state = CHAPTER_SELECT;
-                        }
-                        return true;
-                    case SET_CLEAR_CACHE:
-                        clearAllCache();
-                        return true;
-                    case SET_BACK:
-                        // Check if settings changed requiring cache rebuild
-                        if (bookIsOpen && readerSettings.requiresCacheRebuild(oldSettings)) {
-                            readerSettings.save();
-                            textLayout.setPageSize(getLayoutWidth(), screenH);
-                            readerSettings.applyToLayout(textLayout);
-                            showLoadingScreen("Reformatting...");
-                            if (loadChapterSync(currentChapter)) {
-                                cacheValid = true;
-                            }
-                            updateRequired = true;
-                        }
-                        state = bookIsOpen ? READING : BROWSER;
-                        return true;
+                    readerSettings.save();
+                    return true;
                 }
-                readerSettings.save();
-                return true;
+                
+                // Display items (4-7)
+                if (settingsCursor < baseItems) {
+                    // Display settings - most are placeholder for now
+                    return true;
+                }
+                
+                // Action buttons
+                if (settingsCursor == chaptersIdx) {
+                    chapterCursor = currentChapter;
+                    chapterScrollOffset = (currentChapter > 3) ? currentChapter - 3 : 0;
+                    state = CHAPTER_SELECT;
+                    return true;
+                }
+                
+                if (settingsCursor == bookmarksIdx) {
+                    loadBookmarks();
+                    bookmarkCursor = 0;
+                    bookmarkScrollOffset = 0;
+                    state = BOOKMARK_SELECT;
+                    return true;
+                }
+                
+                if (settingsCursor == addBookmarkIdx) {
+                    loadBookmarks();  // Make sure we have latest
+                    int existingIdx = bookmarks.find(currentChapter, currentPage);
+                    if (existingIdx >= 0) {
+                        // Remove existing bookmark
+                        bookmarks.remove(existingIdx);
+                        saveBookmarks();
+                        Serial.printf("[LIBRARY] Bookmark removed: ch%d pg%d\n", currentChapter, currentPage);
+                    } else {
+                        // Add new bookmark
+                        if (bookmarks.add(currentChapter, currentPage, nullptr)) {
+                            saveBookmarks();
+                            Serial.printf("[LIBRARY] Bookmark added: ch%d pg%d\n", currentChapter, currentPage);
+                        }
+                    }
+                    return true;
+                }
+                
+                if (settingsCursor == statsIdx) {
+                    state = READING_STATS;
+                    return true;
+                }
+                
+                if (settingsCursor == backIdx) {
+                    // Check if settings changed requiring cache rebuild
+                    if (bookIsOpen && readerSettings.requiresCacheRebuild(oldSettings)) {
+                        readerSettings.save();
+                        // IMPORTANT: Invalidate old cache before rebuilding with new settings
+                        pageCache.invalidateBook();
+                        textLayout.setPageSize(getLayoutWidth(), screenH);
+                        readerSettings.applyToLayout(textLayout);
+                        showLoadingScreen("Reformatting...");
+                        // Defer to main loop (fresh stack)
+                        pendingChapterToLoad = currentChapter;
+                        pendingChapterLoad = true;
+                        cacheValid = false;
+                        updateRequired = true;
+                    }
+                    state = bookIsOpen ? READING : BROWSER;
+                    return true;
+                }
+                break;
                 
             case BTN_BACK:
                 if (bookIsOpen && readerSettings.requiresCacheRebuild(oldSettings)) {
                     readerSettings.save();
+                    // IMPORTANT: Invalidate old cache before rebuilding with new settings
+                    pageCache.invalidateBook();
                     textLayout.setPageSize(getLayoutWidth(), screenH);
                     readerSettings.applyToLayout(textLayout);
                     showLoadingScreen("Reformatting...");
-                    if (loadChapterSync(currentChapter)) {
-                        cacheValid = true;
-                    }
+                    // Defer to main loop (fresh stack)
+                    pendingChapterToLoad = currentChapter;
+                    pendingChapterLoad = true;
+                    cacheValid = false;
                     updateRequired = true;
                 }
                 state = bookIsOpen ? READING : BROWSER;
@@ -1021,6 +1427,217 @@ public:
                 break;
         }
         return false;
+    }
+    
+    // =========================================================================
+    // Bookmark Handlers
+    // =========================================================================
+    
+    bool handleBookmarkSelectInput(Button btn) {
+        int maxVisible = 8;
+        
+        switch (btn) {
+            case BTN_UP:
+            case BTN_LEFT:
+                if (bookmarkCursor > 0) {
+                    bookmarkCursor--;
+                    if (bookmarkCursor < bookmarkScrollOffset) {
+                        bookmarkScrollOffset = bookmarkCursor;
+                    }
+                    return true;
+                }
+                break;
+                
+            case BTN_DOWN:
+            case BTN_RIGHT:
+                if (bookmarkCursor < bookmarks.count - 1) {
+                    bookmarkCursor++;
+                    if (bookmarkCursor >= bookmarkScrollOffset + maxVisible) {
+                        bookmarkScrollOffset = bookmarkCursor - maxVisible + 1;
+                    }
+                    return true;
+                }
+                break;
+                
+            case BTN_CONFIRM:
+                if (bookmarks.count > 0 && bookmarkCursor < bookmarks.count) {
+                    // Jump to bookmarked position
+                    Bookmark& bm = bookmarks.bookmarks[bookmarkCursor];
+                    
+                    if (bm.chapter != currentChapter) {
+                        showLoadingScreen("Loading...");
+                        currentChapter = bm.chapter;
+                        currentPage = bm.page;
+                        // Defer to main loop (fresh stack)
+                        pendingChapterToLoad = currentChapter;
+                        pendingChapterLoad = true;
+                        cacheValid = false;
+                    } else {
+                        currentPage = bm.page;
+                        // Validate page
+                        if (currentPage >= totalPages && totalPages > 0) {
+                            currentPage = totalPages - 1;
+                        }
+                    }
+                    
+                    saveProgress();
+                    updateRequired = true;
+                    state = READING;
+                    return true;
+                }
+                break;
+                
+            case BTN_BACK:
+                state = SETTINGS_MENU;
+                return true;
+                
+            default:
+                break;
+        }
+        return false;
+    }
+    
+    bool handleReadingStatsInput(Button btn) {
+        switch (btn) {
+            case BTN_BACK:
+            case BTN_CONFIRM:
+                state = SETTINGS_MENU;
+                return true;
+            default:
+                break;
+        }
+        return false;
+    }
+    
+    // =========================================================================
+    // Bookmark Persistence
+    // =========================================================================
+    
+    String getBookmarkPath() {
+        // Get bookmark file path for current book
+        return pageCache.getCachePath() + "/bookmarks.bin";
+    }
+    
+    void loadBookmarks() {
+        bookmarks = BookmarkList();  // Reset
+        
+        String path = getBookmarkPath();
+        File f = SD.open(path, FILE_READ);
+        if (!f) return;
+        
+        // Read magic
+        uint32_t magic;
+        if (f.read((uint8_t*)&magic, sizeof(magic)) != sizeof(magic) || magic != 0x424D4152) {
+            f.close();
+            return;
+        }
+        
+        // Read count
+        f.read(&bookmarks.count, 1);
+        if (bookmarks.count > MAX_BOOKMARKS_PER_BOOK) {
+            bookmarks.count = MAX_BOOKMARKS_PER_BOOK;
+        }
+        
+        // Read bookmarks
+        for (int i = 0; i < bookmarks.count; i++) {
+            bookmarks.bookmarks[i].deserialize(f);
+        }
+        
+        f.close();
+        Serial.printf("[LIBRARY] Loaded %d bookmarks\n", bookmarks.count);
+    }
+    
+    void saveBookmarks() {
+        String path = getBookmarkPath();
+        File f = SD.open(path, FILE_WRITE);
+        if (!f) return;
+        
+        f.write((uint8_t*)&bookmarks.magic, sizeof(bookmarks.magic));
+        f.write(&bookmarks.count, 1);
+        
+        for (int i = 0; i < bookmarks.count; i++) {
+            bookmarks.bookmarks[i].serialize(f);
+        }
+        
+        f.close();
+        Serial.printf("[LIBRARY] Saved %d bookmarks\n", bookmarks.count);
+    }
+    
+    // =========================================================================
+    // KOReader Sync Integration
+    // =========================================================================
+    
+    String getDocumentHash() {
+        // Generate a hash of the book for KOReader sync
+        // KOReader uses MD5 of the filename typically
+        String filename = currentBookPath;
+        int lastSlash = filename.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            filename = filename.substring(lastSlash + 1);
+        }
+        
+        // Simple hash for compatibility
+        uint32_t hash = 5381;
+        for (int i = 0; i < (int)filename.length(); i++) {
+            hash = ((hash << 5) + hash) + filename.charAt(i);
+        }
+        
+        char hexHash[17];
+        snprintf(hexHash, sizeof(hexHash), "%08lx%08lx", hash, hash ^ 0xDEADBEEF);
+        return String(hexHash);
+    }
+    
+    float getReadingProgress() {
+        // Calculate overall progress through book
+        if (!bookIsOpen || totalChapters == 0) return 0.0f;
+        
+        float chapterProgress = totalPages > 0 ? (float)currentPage / totalPages : 0.0f;
+        float overallProgress = ((float)currentChapter + chapterProgress) / totalChapters;
+        return overallProgress;
+    }
+    
+    void syncProgressToKOSync() {
+        if (!settingsManager.sync.kosyncEnabled) return;
+        if (strlen(settingsManager.sync.kosyncUrl) == 0) return;
+        if (!bookIsOpen) return;
+        
+        Serial.println("[KOSYNC] Syncing progress to server...");
+        
+        // Build JSON payload
+        JsonDocument doc;
+        doc["document"] = getDocumentHash();
+        doc["progress"] = String(getReadingProgress(), 4);
+        doc["percentage"] = getReadingProgress() * 100;
+        doc["device"] = "SUMI";
+        doc["device_id"] = String((uint32_t)ESP.getEfuseMac(), HEX);
+        
+        String payload;
+        serializeJson(doc, payload);
+        
+        // Send to KOSync server
+        String url = String(settingsManager.sync.kosyncUrl) + "/syncs/progress";
+        
+        Serial.printf("[KOSYNC] PUT %s\n", url.c_str());
+        Serial.printf("[KOSYNC] Payload: %s\n", payload.c_str());
+        
+        // Note: Actual HTTP request would go here
+        // For now, just log that we would sync
+        // This requires WiFiClient which should be done asynchronously
+    }
+    
+    void syncProgressFromKOSync() {
+        if (!settingsManager.sync.kosyncEnabled) return;
+        if (strlen(settingsManager.sync.kosyncUrl) == 0) return;
+        if (!bookIsOpen) return;
+        
+        Serial.println("[KOSYNC] Fetching progress from server...");
+        
+        String url = String(settingsManager.sync.kosyncUrl) + "/syncs/progress/" + getDocumentHash();
+        
+        Serial.printf("[KOSYNC] GET %s\n", url.c_str());
+        
+        // Note: Actual HTTP request would go here
+        // Parse response and update position if server progress is newer
     }
     
     // =========================================================================
@@ -1070,12 +1687,12 @@ public:
         
         Serial.println("[LIBRARY] Cache cleared");
         
-        // Reload current chapter on main thread only if a book is open
+        // Reload current chapter if a book is open (defer to main loop)
         if (bookIsOpen && (state == SETTINGS_MENU || state == READING)) {
             showLoadingScreen("Rebuilding...");
-            if (loadChapterSync(currentChapter)) {
-                cacheValid = true;
-            }
+            pendingChapterToLoad = currentChapter;
+            pendingChapterLoad = true;
+            cacheValid = false;
             state = READING;
         }
     }
@@ -1123,6 +1740,11 @@ public:
         Serial.printf("[LIBRARY] ===== openBook(%d) =====\n", index);
         Serial.printf("[LIBRARY] Free heap: %d\n", ESP.getFreeHeap());
         
+        // Check stack space at entry
+        UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
+        Serial.printf("[LIBRARY] Stack high water: %d words (%d bytes)\n", 
+                      (int)stackHighWater, (int)(stackHighWater * 4));
+        
         if (index >= (int)books.size()) {
             Serial.printf("[LIBRARY] ERROR: index %d >= books.size() %d\n", index, (int)books.size());
             return;
@@ -1131,14 +1753,24 @@ public:
         // Show loading screen IMMEDIATELY
         showLoadingScreen("Loading...");
         
+        // === CRITICAL: Free up RAM by suspending WiFi/WebServer ===
+        suspendForReading();
+        Serial.printf("[LIBRARY] After suspend, heap: %d\n", ESP.getFreeHeap());
+        
+        // Ensure ZIP buffers are allocated (may have been freed for portal mode)
+        // This also resets in-use flags to ensure clean state
+        ZipReader_preallocateBuffer();
+        
+        // Load global reading stats
+        stats.load();
+        
         BookEntry& book = books[index];
-        char fullPath[128];
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", currentPath, book.filename);
-        strncpy(currentBookPath, fullPath, sizeof(currentBookPath) - 1);
+        // Build path directly into member variable to save stack space
+        snprintf(currentBookPath, sizeof(currentBookPath), "%s/%s", currentPath, book.filename);
         strncpy(currentBook, book.title, sizeof(currentBook) - 1);
         
         Serial.printf("[LIBRARY] Book: '%s'\n", currentBook);
-        Serial.printf("[LIBRARY] Path: '%s'\n", fullPath);
+        Serial.printf("[LIBRARY] Path: '%s'\n", currentBookPath);
         Serial.printf("[LIBRARY] Type: %d\n", (int)book.bookType);
         
         // Detect book type
@@ -1150,13 +1782,13 @@ public:
         // =====================================================
         if (isEpub) {
             Serial.println("[LIBRARY] Opening EPUB metadata...");
-            if (!openEpubMetadata(fullPath)) {
+            if (!openEpubMetadata(currentBookPath)) {
                 showErrorScreen("Failed to open EPUB");
                 state = BROWSER;
                 return;
             }
         } else {
-            openTxtMetadata(fullPath);
+            openTxtMetadata(currentBookPath);
         }
         
         Serial.printf("[LIBRARY] Metadata loaded: %d chapters\n", totalChapters);
@@ -1186,12 +1818,15 @@ public:
         if (!pageCache.hasValidCache(checkKey)) {
             Serial.println("[LIBRARY] Cache invalid for current settings - will rebuild");
             pageCache.invalidateBook();
+            Serial.println("[LIBRARY] Cache invalidated, configuring layout...");
         }
         
         // Configure text layout PROPERLY - page size first, then settings
+        Serial.printf("[LIBRARY] Setting page size: %dx%d\n", getLayoutWidth(), screenH);
         textLayout.setPageSize(getLayoutWidth(), screenH);
-        readerSettings.applyToLayout(textLayout);
-        textLayout.setFont(&FreeSans9pt7b);
+        Serial.println("[LIBRARY] Applying font settings...");
+        applyFontSettings();
+        Serial.println("[LIBRARY] Layout configured.");
         
         // Restore progress
         int savedChapter = 0, savedPage = 0;
@@ -1207,72 +1842,29 @@ public:
         }
         
         // =====================================================
-        // Load first chapter
-        // Some EPUBs have empty chapters (cover pages, etc.) - skip them
+        // DON'T load chapter here - stack is too deep
+        // Create render task with its own 16KB stack to handle loading
         // =====================================================
-        Serial.printf("[LIBRARY] Free heap before indexing: %d\n", ESP.getFreeHeap());
+        pendingChapterLoad = true;
+        pendingChapterToLoad = currentChapter;
+        cacheValid = false;
         
-        // Try to load current chapter, auto-advance if empty (cover pages, etc.)
-        int maxAttempts = 5;  // Don't loop forever
-        int attempt = 0;
-        while (attempt < maxAttempts && currentChapter < totalChapters) {
-            if (loadChapterSync(currentChapter)) {
-                break;  // Found a chapter with content
-            }
-            
-            // Chapter was empty (like a cover page) - try next
-            Serial.printf("[LIBRARY] Chapter %d empty, trying next...\n", currentChapter);
-            currentChapter++;
-            attempt++;
-        }
-        
-        if (totalPages == 0 || currentChapter >= totalChapters) {
-            showErrorScreen("No readable content");
-            if (isEpub) epub.close();
-            state = BROWSER;
-            return;
-        }
-        
-        Serial.printf("[LIBRARY] Chapter loaded: %d pages\n", totalPages);
-        Serial.printf("[LIBRARY] Free heap after indexing: %d\n", ESP.getFreeHeap());
-        
-        // Validate page number
-        if (currentPage >= totalPages) {
-            currentPage = totalPages > 0 ? totalPages - 1 : 0;
+        // Create render task if not already running
+        if (!renderTaskHandle) {
+            renderMutex = xSemaphoreCreateMutex();
+            xTaskCreate(
+                renderTaskTrampoline,   // Task function
+                "ReaderRender",         // Task name
+                24576,                  // Stack size (24KB - enough for deep EPUB parsing)
+                this,                   // Parameter
+                1,                      // Priority
+                &renderTaskHandle       // Task handle
+            );
+            Serial.printf("[LIBRARY] Created render task with 24KB stack\n");
         }
         
         // Start reading stats
         stats.startSession();
-        
-        // =====================================================
-        // Create render task
-        // =====================================================
-        if (!renderMutex) {
-            renderMutex = xSemaphoreCreateMutex();
-        }
-        
-        cacheValid = true;  // Data loaded
-        updateRequired = true;
-        
-        if (!renderTaskHandle) {
-            Serial.println("[LIBRARY] Creating render task (8KB - display only)...");
-            BaseType_t result = xTaskCreate(
-                renderTaskTrampoline,
-                "LibRenderTask",
-                8192,  // Only 8KB needed for display
-                this,
-                1,
-                &renderTaskHandle
-            );
-            
-            if (result != pdPASS) {
-                Serial.printf("[LIBRARY] ERROR: Task creation failed: %d\n", result);
-                showErrorScreen("Memory error");
-                if (isEpub) epub.close();
-                state = BROWSER;
-                return;
-            }
-        }
         
         // NO blank screen clear - go directly to first page render
         bookIsOpen = true;
@@ -1280,6 +1872,10 @@ public:
         state = READING;
         pagesUntilFullRefresh = readerSettings.get().pagesPerFullRefresh;
         pagesUntilHalfRefresh = readerSettings.get().pagesPerHalfRefresh;
+        
+        // Load bookmarks for this book
+        loadBookmarks();
+        
         Serial.printf("[LIBRARY] Ready! page=%d/%d, ch=%d/%d\n", 
                      currentPage+1, totalPages, currentChapter+1, totalChapters);
     }
@@ -1376,10 +1972,8 @@ public:
         }
     }
     
-    // Extract cover on-demand when browsing (doesn't keep EPUB open)
+    // Extract cover on-demand when browsing (lightweight method)
     void extractCoverOnDemand(BookEntry& book, const char* fullPath) {
-        Serial.printf("[LIBRARY] Extracting cover on-demand: %s\n", book.filename);
-        
         // Generate cover cache path
         uint32_t hash = 0;
         for (const char* p = fullPath; *p; p++) {
@@ -1388,38 +1982,54 @@ public:
         char coverPath[96];
         snprintf(coverPath, sizeof(coverPath), "%s/%08x.jpg", COVER_CACHE_DIR, hash);
         
-        // Double-check it's not already cached
-        if (SD.exists(coverPath)) {
+        // Check if already cached
+        if (isValidCoverFile(coverPath)) {
             strncpy(book.coverPath, coverPath, sizeof(book.coverPath) - 1);
             book.hasCover = true;
-            Serial.println("[LIBRARY] Cover was already cached");
+            Serial.println("[LIBRARY] Cover found in cache");
             return;
         }
         
-        // Open EPUB temporarily just to extract cover
-        EpubParser tempEpub;
-        if (!tempEpub.open(fullPath)) {
-            Serial.printf("[LIBRARY] Could not open EPUB for cover: %s\n", tempEpub.getError().c_str());
-            return;
-        }
+        Serial.printf("[LIBRARY] Extracting cover: %s (heap=%d)\n", book.filename, ESP.getFreeHeap());
         
-        // Check if it has a cover
-        if (!tempEpub.hasCover()) {
-            Serial.println("[LIBRARY] EPUB has no cover");
-            tempEpub.close();
-            return;
-        }
-        
-        // Extract the cover
-        if (tempEpub.extractCoverImage(coverPath)) {
+        // Open ZIP directly (lightweight, no EpubParser)
+        ZipReader zip;
+        if (!zip.open(fullPath)) {
+            Serial.printf("[LIBRARY] Failed to open ZIP\n");
             strncpy(book.coverPath, coverPath, sizeof(book.coverPath) - 1);
-            book.hasCover = true;
+            book.hasCover = false;
+            return;
+        }
+        
+        // Find cover image path
+        String coverInZip = findCoverInZip(zip);
+        
+        if (coverInZip.length() == 0) {
+            Serial.println("[LIBRARY] No cover found");
+            zip.close();
+            strncpy(book.coverPath, coverPath, sizeof(book.coverPath) - 1);
+            book.hasCover = false;
+            return;
+        }
+        
+        // Extract to file
+        SD.mkdir(COVER_CACHE_DIR);
+        File outFile = SD.open(coverPath, FILE_WRITE);
+        if (!outFile) {
+            zip.close();
+            return;
+        }
+        
+        bool success = zip.streamFileTo(coverInZip, outFile, 1024);
+        outFile.close();
+        zip.close();
+        
+        strncpy(book.coverPath, coverPath, sizeof(book.coverPath) - 1);
+        book.hasCover = success;
+        
+        if (success) {
             Serial.println("[LIBRARY] Cover extracted successfully");
-        } else {
-            Serial.printf("[LIBRARY] Cover extraction failed: %s\n", tempEpub.getError().c_str());
         }
-        
-        tempEpub.close();
     }
     
     // =========================================================================
@@ -1428,14 +2038,75 @@ public:
     
     void renderTaskLoop() {
         Serial.println("[LIBRARY] Render task started");
+        Serial.printf("[MEM:RENDER_TASK] Initial Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+        
+        static unsigned long lastMemLog = 0;
         
         while (true) {
+            // Periodic memory logging in render task
+            if (millis() - lastMemLog > 15000) {
+                lastMemLog = millis();
+                UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
+                Serial.printf("[MEM:RENDER] Free: %d | Min: %d | Task Stack: %d words\n", 
+                              ESP.getFreeHeap(), ESP.getMinFreeHeap(), (int)stackHighWater);
+            }
+            
+            // Handle deferred chapter loading (runs in render task with 16KB stack)
+            if (pendingChapterLoad) {
+                pendingChapterLoad = false;
+                
+                Serial.printf("[MEM:CH_LOAD_START] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+                
+                // Use specified chapter or currentChapter
+                int chapterToLoad = (pendingChapterToLoad >= 0) ? pendingChapterToLoad : currentChapter;
+                pendingChapterToLoad = -1;
+                
+                Serial.printf("[LIBRARY] Loading chapter %d in render task...\n", chapterToLoad);
+                currentChapter = chapterToLoad;
+                
+                // Try to load chapter, auto-advance if empty
+                int maxAttempts = 5;
+                int attempt = 0;
+                while (attempt < maxAttempts && currentChapter < totalChapters) {
+                    if (loadChapterSync(currentChapter)) {
+                        break;
+                    }
+                    Serial.printf("[LIBRARY] Chapter %d empty, trying next...\n", currentChapter);
+                    currentChapter++;
+                    attempt++;
+                }
+                
+                Serial.printf("[MEM:CH_LOAD_END] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+                
+                if (totalPages == 0 || currentChapter >= totalChapters) {
+                    Serial.println("[LIBRARY] No readable content found");
+                } else {
+                    Serial.printf("[LIBRARY] Chapter loaded: %d pages\n", totalPages);
+                    cacheValid = true;
+                    
+                    // Validate page number
+                    if (currentPage >= totalPages) {
+                        currentPage = totalPages > 0 ? totalPages - 1 : 0;
+                    }
+                    saveProgress();
+                }
+                updateRequired = true;
+            }
+            
             if (updateRequired) {
                 updateRequired = false;
                 
                 // Take mutex to prevent conflicts with input handling
                 if (xSemaphoreTake(renderMutex, portMAX_DELAY) == pdTRUE) {
-                    renderCurrentPage();
+                    // CRITICAL: Must use GxEPD2's firstPage/nextPage pattern
+                    // Without this, only part of the display buffer gets rendered
+                    display.setFullWindow();
+                    display.firstPage();
+                    do {
+                        display.fillScreen(GxEPD_WHITE);
+                        renderCurrentPage();
+                    } while (display.nextPage());
+                    
                     xSemaphoreGive(renderMutex);
                 }
             }
@@ -1471,18 +2142,25 @@ public:
         
         // Save progress before closing
         saveProgress();
+        stats.save();  // Save reading statistics
         
-        // Stop render task
+        // Stop render task with timeout to avoid blocking
         if (renderTaskHandle) {
-            if (renderMutex) {
-                xSemaphoreTake(renderMutex, portMAX_DELAY);
-            }
-            vTaskDelete(renderTaskHandle);
-            renderTaskHandle = nullptr;
-            if (renderMutex) {
+            // Try to get mutex with 100ms timeout
+            if (renderMutex && xSemaphoreTake(renderMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                vTaskDelete(renderTaskHandle);
+                renderTaskHandle = nullptr;
                 xSemaphoreGive(renderMutex);
                 vSemaphoreDelete(renderMutex);
                 renderMutex = nullptr;
+            } else {
+                // Mutex timeout - just delete the task
+                vTaskDelete(renderTaskHandle);
+                renderTaskHandle = nullptr;
+                if (renderMutex) {
+                    vSemaphoreDelete(renderMutex);
+                    renderMutex = nullptr;
+                }
             }
         }
         
@@ -1496,6 +2174,9 @@ public:
         cacheValid = false;
         totalPages = 0;
         currentPage = 0;
+        
+        // Services stay suspended for battery savings
+        Serial.printf("[LIBRARY] Book closed, heap: %d\n", ESP.getFreeHeap());
         
         state = BROWSER;
     }
@@ -1511,14 +2192,11 @@ public:
     
     // Synchronous chapter loading for main thread
     bool loadChapterSync(int chapter) {
-        Serial.printf("[LIBRARY] ===== loadChapterSync(%d) =====\n", chapter);
-        Serial.printf("[LIBRARY] Free heap: %d\n", ESP.getFreeHeap());
-        Serial.printf("[LIBRARY] Screen size: %dx%d (landscape=%d)\n", screenW, screenH, landscape);
+        Serial.printf("[LOAD] Chapter %d (heap=%d)\n", chapter, ESP.getFreeHeap());
         
         // Verify sufficient memory available to parse
-        int freeHeap = ESP.getFreeHeap();
-        if (freeHeap < 50000) {
-            Serial.printf("[LIBRARY] ERROR: Not enough memory to parse! Need 50KB, have %d\n", freeHeap);
+        if (ESP.getFreeHeap() < 10000) {
+            Serial.printf("[LOAD] ERROR: Low heap! %d bytes\n", ESP.getFreeHeap());
             return false;
         }
         
@@ -1541,9 +2219,6 @@ public:
         key.screenWidth = getLayoutWidth();
         key.screenHeight = screenH;
         
-        Serial.printf("[LIBRARY] Cache key: font=%d, margins=%d, lineSpacing=%d, screen=%dx%d\n",
-                      key.fontSize, key.margins, key.lineSpacing, key.screenWidth, key.screenHeight);
-        
         // Check cache first
         if (pageCache.hasValidCache(key)) {
             int cachedCount = pageCache.getPageCount(chapter);
@@ -1551,23 +2226,18 @@ public:
                 totalPages = cachedCount;
                 cacheValid = true;
                 preloadedPage = -1;
-                Serial.printf("[LIBRARY] Cache hit: ch%d has %d pages\n", chapter, totalPages);
                 return true;
             }
         }
         
         // Cache miss or invalid - need to parse
-        Serial.println("[LIBRARY] Cache miss/invalid, re-parsing chapter...");
-        Serial.printf("[LIBRARY] Free heap before layout: %d\n", ESP.getFreeHeap());
+        Serial.println("[LOAD] Cache miss - parsing...");
         
         // IMPORTANT: Always set page size BEFORE applying settings
         // This ensures contentWidth is calculated correctly
         textLayout.setPageSize(getLayoutWidth(), screenH);
-        readerSettings.applyToLayout(textLayout);
-        textLayout.setFont(&FreeSans9pt7b);
+        applyFontSettings();
         textLayout.beginLayout();
-        
-        Serial.printf("[LIBRARY] Layout configured, starting parse...\n");
         
         int pageCount = 0;
         bool success = true;
@@ -1576,20 +2246,17 @@ public:
             SD.mkdir("/.sumi");
             String tempPath = getTempFilePath(chapter);
             
-            Serial.printf("[LIBRARY] Free heap before stream: %d\n", ESP.getFreeHeap());
-            
             // Stream from EPUB to temp file
             bool streamOk = epub.streamChapterToFile(chapter, tempPath);
             if (!streamOk) {
-                Serial.printf("[LIBRARY] Stream failed: %s\n", epub.getError().c_str());
+                Serial.println("[LOAD] Stream failed");
                 textLayout.addParagraph("Chapter unavailable", true);
                 success = false;
             } else {
-                Serial.printf("[LIBRARY] Free heap before parse: %d\n", ESP.getFreeHeap());
-                
                 // Check memory again before parsing
-                if (ESP.getFreeHeap() < 40000) {
-                    Serial.println("[LIBRARY] Low memory, using simple parser");
+                // Use simpler parsing when memory is below 15KB
+                if (ESP.getFreeHeap() < 15000) {
+                    Serial.println("[LOAD] Low mem, simple parse");
                     // Fall back to simple line-by-line parsing
                     File tempFile = SD.open(tempPath, FILE_READ);
                     if (tempFile) {
@@ -1639,8 +2306,6 @@ public:
                     int chapterNum = chapter;
                     int* pCount = &pageCount;
                     
-                    Serial.printf("[LIBRARY] Starting Expat parse, free heap: %d\n", ESP.getFreeHeap());
-                    
                     bool parseOk = expatParser.parseFile(tempPath, [this, chapterNum, pCount](const String& text, bool isHeader) {
                         if (text.length() > 0) {
                             textLayout.addParagraph(text, isHeader);
@@ -1655,10 +2320,8 @@ public:
                         }
                     });
                     
-                    Serial.printf("[LIBRARY] Expat parse done, free heap: %d\n", ESP.getFreeHeap());
-                    
                     if (!parseOk) {
-                        Serial.printf("[LIBRARY] Parse failed: %s\n", expatParser.getError().c_str());
+                        Serial.println("[LOAD] Parse failed");
                     }
                 }
                 SD.remove(tempPath.c_str());
@@ -1771,9 +2434,8 @@ public:
         display.display();
         
         // Apply settings to layout
-        readerSettings.applyToLayout(textLayout);
         textLayout.setPageSize(getLayoutWidth(), screenH);
-        textLayout.setFont(&FreeSans9pt7b);
+        applyFontSettings();
         textLayout.beginLayout();
         
         int pageCount = 0;
@@ -1913,6 +2575,46 @@ public:
     
     void saveProgress() {
         pageCache.saveProgress(currentChapter, currentPage);
+        
+        // Sync to KOReader server (non-blocking, only on WiFi)
+        if (koSync.isEnabled() && WiFi.status() == WL_CONNECTED) {
+            syncToKOReader();
+        }
+    }
+    
+    void syncToKOReader() {
+        if (!bookIsOpen || !koSync.isEnabled()) return;
+        
+        String docHash = KOSync::hashDocument(currentBookPath);
+        String progress = KOSync::formatProgress(currentChapter, currentPage, totalChapters);
+        float percentage = totalPages > 0 ? (float)currentPage / totalPages : 0.0f;
+        
+        // Do sync in background - don't block UI
+        koSync.updateProgress(docHash.c_str(), progress.c_str(), percentage);
+    }
+    
+    void syncFromKOReader() {
+        if (!bookIsOpen || !koSync.isEnabled()) return;
+        
+        String docHash = KOSync::hashDocument(currentBookPath);
+        KOSync::Progress serverProgress;
+        
+        if (koSync.getProgress(docHash.c_str(), serverProgress)) {
+            int serverChapter, serverPage;
+            if (KOSync::parseProgress(serverProgress.progress, serverChapter, serverPage)) {
+                // Check if server has newer progress
+                float serverPct = serverProgress.percentage.toFloat();
+                float localPct = totalPages > 0 ? (float)currentPage / totalPages : 0.0f;
+                
+                if (serverPct > localPct + 0.01f) {  // Server is ahead by more than 1%
+                    Serial.printf("[KOSYNC] Server progress ahead: %s (%.1f%% vs %.1f%%)\n",
+                                  serverProgress.progress.c_str(), serverPct * 100, localPct * 100);
+                    
+                    // Optionally jump to server position
+                    // For now, just log it - user can manually sync
+                }
+            }
+        }
     }
     
     // =========================================================================
@@ -1920,21 +2622,79 @@ public:
     // =========================================================================
     
     void draw() {
-        // FreeRTOS task handles rendering for READING state
-        // Other states are drawn directly here
+        // =====================================================
+        // Handle deferred chapter loading
+        // If render task exists, let IT handle loading (has 16KB stack)
+        // Only do it here if no render task (fallback for compatibility)
+        // =====================================================
+        if (pendingChapterLoad && state == READING && !renderTaskHandle) {
+            pendingChapterLoad = false;
+            
+            int chapterToLoad = (pendingChapterToLoad >= 0) ? pendingChapterToLoad : currentChapter;
+            pendingChapterToLoad = -1;
+            
+            Serial.printf("[LIBRARY] Deferred load (no render task): chapter %d\n", chapterToLoad);
+            currentChapter = chapterToLoad;
+            
+            // Try to load chapter, auto-advance if empty
+            int maxAttempts = 5;
+            int attempt = 0;
+            while (attempt < maxAttempts && currentChapter < totalChapters) {
+                if (loadChapterSync(currentChapter)) {
+                    break;
+                }
+                Serial.printf("[LIBRARY] Chapter %d empty, trying next...\n", currentChapter);
+                currentChapter++;
+                attempt++;
+            }
+            
+            if (totalPages == 0 || currentChapter >= totalChapters) {
+                Serial.println("[LIBRARY] No readable content found");
+                showErrorScreen("No readable content");
+                state = BROWSER;
+                return;
+            }
+            
+            Serial.printf("[LIBRARY] Chapter loaded: %d pages\n", totalPages);
+            cacheValid = true;
+            
+            // Validate page number
+            if (currentPage >= totalPages) {
+                currentPage = totalPages > 0 ? totalPages - 1 : 0;
+            }
+            saveProgress();
+            
+            // Don't draw yet - let the display update happen on next cycle
+            // This keeps stack usage minimal
+            return;
+        }
+        
+        // If render task exists and chapter loading is pending, just wait
+        if (pendingChapterLoad && state == READING && renderTaskHandle) {
+            // Show loading indicator while waiting for render task
+            return;
+        }
+        
+        // Normal drawing
         switch (state) {
             case BROWSER:
                 drawBrowser();
                 break;
             case READING:
-                // DO NOT set updateRequired here - it causes infinite refresh loop
-                // The render task handles page display, triggered by:
-                // - Initial openBook() setting updateRequired=true
-                // - Page turns in handleInput setting updateRequired=true  
-                // - Chapter changes setting updateRequired=true
+                // Draw reading page directly when state is READING
+                if (updateRequired || cacheValid) {
+                    drawReadingPage();
+                    updateRequired = false;
+                }
                 break;
             case CHAPTER_SELECT:
                 drawChapterSelect();
+                break;
+            case BOOKMARK_SELECT:
+                drawBookmarkSelect();
+                break;
+            case READING_STATS:
+                drawReadingStatsScreen();
                 break;
             case SETTINGS_MENU:
                 drawSettingsMenu();
@@ -1949,6 +2709,7 @@ public:
     }
     
     bool needsFullRefresh() {
+        // Only do full refresh when reading - menus should always use partial
         if (state == READING) {
             pagesUntilFullRefresh--;
             if (pagesUntilFullRefresh <= 0) {
@@ -1956,7 +2717,13 @@ public:
                 return true;
             }
         }
+        // Settings menu, chapter select, bookmarks, stats - always partial
         return false;
+    }
+    
+    // Force next refresh to be full (e.g., when entering/leaving reading mode)
+    void requestFullRefresh() {
+        pagesUntilFullRefresh = 0;  // Next check will trigger full refresh
     }
     
     void drawBrowser() {
@@ -1972,7 +2739,8 @@ public:
     // =========================================================================
     
     void drawFlipBrowser() {
-        Serial.printf("[LIBRARY] drawFlipBrowser: cursor=%d, books=%d\n", cursor, (int)books.size());
+        // Verbose logging disabled - uncomment for debugging
+        // Serial.printf("[LIBRARY] drawFlipBrowser: cursor=%d, books=%d\n", cursor, (int)books.size());
         
         display.fillScreen(GxEPD_WHITE);
         display.setTextColor(GxEPD_BLACK);
@@ -1989,28 +2757,32 @@ public:
         
         BookEntry& book = books[cursor];
         
+        // Reserve space for bottom bars
+        int bottomBarHeight = 70;  // Book X of Y + help bar
+        int usableHeight = screenH - bottomBarHeight;
+        
         // Calculate layout - cover on left, info on right (landscape)
-        // or cover on top, info below (portrait)
+        // or cover fills most of screen, info at bottom (portrait)
         int coverX, coverY, coverW, coverH;
         int infoX, infoY, infoW;
         
         if (landscape) {
             // Landscape: cover on left half
             coverW = screenW / 3;
-            coverH = screenH - 100;
+            coverH = usableHeight - 40;
             coverX = 40;
             coverY = 30;
             infoX = coverX + coverW + 40;
             infoY = 50;
             infoW = screenW - infoX - 40;
         } else {
-            // Portrait: cover on top ~40% of screen, info below
-            coverW = screenW - 100;  // Leave room for nav arrows
-            coverH = screenH * 2 / 5 - 20;  // 40% of height minus margin
-            coverX = 50;
+            // Portrait: cover fills top portion, info at bottom above bars
+            coverW = screenW - 80;  // Leave room for nav arrows
+            coverH = usableHeight - 120;  // Leave room for title + info below
+            coverX = 40;
             coverY = 20;
             infoX = 30;
-            infoY = coverY + coverH + 30;  // More space below cover
+            infoY = coverY + coverH + 15;  // Position just below cover
             infoW = screenW - 60;
         }
         
@@ -2025,7 +2797,9 @@ public:
         }
         
         // Try to load and display cover image
-        if (book.hasCover && SD.exists(book.coverPath)) {
+        bool coverExists = book.hasCover && SD.exists(book.coverPath);
+        
+        if (coverExists) {
             drawCoverImage(book.coverPath, coverX, coverY, coverW, coverH);
         } else {
             // Draw nice placeholder with book icon and title
@@ -2116,15 +2890,18 @@ public:
         }
         display.print(displayTitle);
         
-        // Author
+        // File type and size on same line (portrait) or next line (landscape)
         display.setFont(&FreeSans9pt7b);
-        if (strlen(book.author) > 0) {
-            display.setCursor(infoX, infoY + 30);
-            display.print(book.author);
+        if (landscape) {
+            if (strlen(book.author) > 0) {
+                display.setCursor(infoX, infoY + 30);
+                display.print(book.author);
+            }
+            display.setCursor(infoX, infoY + 60);
+        } else {
+            display.setCursor(infoX, infoY + 25);
         }
         
-        // File info
-        display.setCursor(infoX, infoY + 60);
         if (book.bookType == BookType::EPUB_FILE || book.bookType == BookType::EPUB_FOLDER) {
             display.print("EPUB");
         } else if (book.bookType == BookType::TXT) {
@@ -2144,23 +2921,7 @@ public:
         }
         display.print(sizeStr);
         
-        // Reading progress
-        if (book.lastChapter > 0 || book.lastPage > 0) {
-            display.setCursor(infoX, infoY + 90);
-            display.printf("Progress: Ch %d, Pg %d", book.lastChapter + 1, book.lastPage + 1);
-            
-            // Progress bar
-            int barW = infoW - 20;
-            int barH = 8;
-            int barY = infoY + 105;
-            display.drawRect(infoX, barY, barW, barH, GxEPD_BLACK);
-            int fillW = barW * book.progress;
-            if (fillW > 0) {
-                display.fillRect(infoX + 1, barY + 1, fillW - 2, barH - 2, GxEPD_BLACK);
-            }
-        }
-        
-        // Book counter
+        // Book counter - positioned above help bar
         display.setCursor(infoX, screenH - 60);
         display.printf("Book %d of %d", cursor + 1, (int)books.size());
         
@@ -2172,10 +2933,23 @@ public:
     }
     
     void drawCoverImage(const char* path, int x, int y, int maxW, int maxH) {
+        Serial.printf("[COVER] drawCoverImage: %s\n", path);
+        
         // Check file format by reading magic bytes
         File coverFile = SD.open(path, FILE_READ);
-        if (!coverFile || coverFile.size() < 4) {
-            if (coverFile) coverFile.close();
+        if (!coverFile) {
+            Serial.printf("[COVER] File open failed\n");
+            drawCoverPlaceholder(x, y, maxW, maxH, "No Cover");
+            return;
+        }
+        
+        size_t fileSize = coverFile.size();
+        Serial.printf("[COVER] File size: %d bytes\n", (int)fileSize);
+        
+        if (fileSize < 100) {
+            Serial.printf("[COVER] File too small, deleting invalid cache\n");
+            coverFile.close();
+            SD.remove(path);  // Delete invalid cache file
             drawCoverPlaceholder(x, y, maxW, maxH, "No Cover");
             return;
         }
@@ -2187,6 +2961,9 @@ public:
         // Check for JPEG (FFD8FF) or PNG (89504E47)
         bool isJpeg = (magic[0] == 0xFF && magic[1] == 0xD8 && magic[2] == 0xFF);
         bool isPng = (magic[0] == 0x89 && magic[1] == 0x50 && magic[2] == 0x4E && magic[3] == 0x47);
+        
+        Serial.printf("[COVER] Magic: %02X %02X %02X %02X (jpg=%d png=%d)\n",
+                      magic[0], magic[1], magic[2], magic[3], isJpeg, isPng);
         
         if (!isJpeg && !isPng) {
             Serial.printf("[LIBRARY] Unknown cover format: %02X %02X %02X %02X\n", 
@@ -2214,32 +2991,39 @@ public:
             return;
         }
         
-        Serial.printf("[LIBRARY] Cover JPEG: %dx%d -> %dx%d\n", jpgW, jpgH, maxW, maxH);
-        
-        // Calculate scale (TJpgDec supports 1, 2, 4, 8)
+        // Calculate scale to fit within bounds (TJpgDec supports 1, 2, 4, 8)
         int scale = 1;
-        if (jpgW > (uint16_t)maxW * 2 || jpgH > (uint16_t)maxH * 2) scale = 2;
-        if (jpgW > (uint16_t)maxW * 4 || jpgH > (uint16_t)maxH * 4) scale = 4;
-        if (jpgW > (uint16_t)maxW * 8 || jpgH > (uint16_t)maxH * 8) scale = 8;
+        while ((jpgW / scale > (uint16_t)maxW || jpgH / scale > (uint16_t)maxH) && scale < 8) {
+            scale *= 2;
+        }
         
         TJpgDec.setJpgScale(scale);
         
         int scaledW = jpgW / scale;
         int scaledH = jpgH / scale;
         
-        // Center the image
+        // If still too big after max scale, we'll clip
+        if (scaledW > maxW) scaledW = maxW;
+        if (scaledH > maxH) scaledH = maxH;
+        
+        // Center the image within bounds
         _coverOffsetX = x + (maxW - scaledW) / 2;
         _coverOffsetY = y + (maxH - scaledH) / 2;
         if (_coverOffsetX < x) _coverOffsetX = x;
         if (_coverOffsetY < y) _coverOffsetY = y;
         
+        // Set clipping bounds
+        _coverMaxX = x + maxW;
+        _coverMaxY = y + maxH;
+        
         // Clear area and decode
         display.fillRect(x, y, maxW, maxH, GxEPD_WHITE);
         
+        _jpgCallbackCount = 0;  // Reset debug counter
         JRESULT result = TJpgDec.drawFsJpg(0, 0, path, SD);
         
         if (result != JDR_OK) {
-            Serial.printf("[LIBRARY] JPEG decode failed: %d\n", result);
+            Serial.printf("[LIBRARY] Cover decode failed: %d\n", result);
             drawCoverPlaceholder(x, y, maxW, maxH, "Error");
         }
     }
@@ -2371,147 +3155,101 @@ public:
     }
     
     void drawReadingPage() {
-        Serial.printf("[READER] drawReadingPage: page=%d/%d, ch=%d, cacheValid=%d\n",
-                      currentPage, totalPages, currentChapter, cacheValid);
-        
-        // Clear first render flag (no blank screen needed - just render directly)
+        // Clear first render flag
         if (firstRenderAfterOpen) {
-            Serial.println("[READER] First render after open");
             firstRenderAfterOpen = false;
         }
         
         if (!cacheValid) {
-            // Simple minimal loading - just dots
-            display.setFullWindow();
-            display.firstPage();
-            do {
-                display.fillScreen(GxEPD_WHITE);
-                display.setFont(&FreeSansBold12pt7b);
-                display.setTextColor(GxEPD_BLACK);
-                display.setCursor(screenW/2 - 15, screenH/2);
-                display.print("...");
-            } while (display.nextPage());
+            // Simple minimal loading indicator
+            display.setFont(&FreeSansBold12pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(screenW/2 - 15, screenH/2);
+            display.print("...");
             return;
         }
         
         // Validate page number after chapter load
         if (currentPage >= totalPages || currentPage < 0) {
             currentPage = totalPages > 0 ? 0 : 0;
-            Serial.printf("[READER] Corrected page to %d\n", currentPage);
         }
         
         // Use heap allocation to avoid stack overflow (CachedPage is ~14KB)
         CachedPage* page = new CachedPage();
         if (!page) {
             Serial.println("[READER] ERROR: Failed to allocate CachedPage");
-            display.setFullWindow();
-            display.firstPage();
-            do {
-                display.fillScreen(GxEPD_WHITE);
-                display.setFont(&FreeSans9pt7b);
-                display.setTextColor(GxEPD_BLACK);
-                display.setCursor(20, 100);
-                display.print("Memory error");
-            } while (display.nextPage());
+            display.setFont(&FreeSans9pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(20, 100);
+            display.print("Memory error");
             return;
         }
         
         if (!pageCache.loadPage(currentChapter, currentPage, *page)) {
             delete page;
             Serial.println("[READER] ERROR: Failed to load page from cache");
-            display.setFullWindow();
-            display.firstPage();
-            do {
-                display.fillScreen(GxEPD_WHITE);
-                display.setFont(&FreeSans9pt7b);
-                display.setTextColor(GxEPD_BLACK);
-                display.setCursor(20, 100);
-                display.print("Error loading page");
-            } while (display.nextPage());
+            display.setFont(&FreeSans9pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(20, 100);
+            display.print("Error loading page");
             return;
         }
         
         // Validate page data
         if (page->lineCount > CACHE_MAX_LINES_PAGE) {
-            Serial.printf("[READER] WARNING: lineCount=%d exceeds max, clamping\n", page->lineCount);
             page->lineCount = CACHE_MAX_LINES_PAGE;
         }
         
-        Serial.printf("[READER] Page loaded: %d lines\n", page->lineCount);
+        // Draw all text - GxEPD2 handles clipping automatically
+        // Use the correct font based on settings
+        display.setFont(getReaderFont());
+        display.setTextColor(GxEPD_BLACK);
         
-        // Log first line position for debugging
-        if (page->lineCount > 0 && page->lines[0].wordCount > 0) {
-            Serial.printf("[READER] First word: xPos=%d, yPos=%d, text='%.15s'\n",
-                          page->lines[0].words[0].xPos, page->lines[0].yPos,
-                          page->lines[0].words[0].text);
+        for (int i = 0; i < page->lineCount; i++) {
+            const CachedLine& line = page->lines[i];
+            
+            // Check if this is an image line
+            if (line.isImage()) {
+                const CachedLine::ImageInfo* imgInfo = line.getImageInfo();
+                if (strlen(imgInfo->path) > 0 && SD.exists(imgInfo->path)) {
+                    // Draw the image using TJpgDec
+                    int imgX = (screenW - imgInfo->width) / 2;  // Center image
+                    int imgY = line.yPos;
+                    
+                    // Set up JPEG decoder
+                    TJpgDec.setJpgScale(1);
+                    TJpgDec.setCallback(_jpgDrawCallback);
+                    
+                    _coverOffsetX = imgX;
+                    _coverOffsetY = imgY;
+                    _coverMaxX = screenW;  // Clip to screen bounds
+                    _coverMaxY = screenH - 30;  // Leave room for status bar
+                    
+                    JRESULT result = TJpgDec.drawFsJpg(0, 0, imgInfo->path, SD);
+                    if (result != JDR_OK) {
+                        // Draw placeholder on error
+                        display.drawRect(imgX, imgY, imgInfo->width, imgInfo->height, GxEPD_BLACK);
+                        display.setCursor(imgX + 5, imgY + imgInfo->height / 2);
+                        display.print("[Image]");
+                    }
+                }
+                continue;  // Don't try to draw words on image line
+            }
+            
+            // Draw all words on this line
+            for (int j = 0; j < line.wordCount; j++) {
+                const CachedWord& word = line.words[j];
+                display.setCursor(word.xPos, line.yPos);
+                display.print(word.text);
+            }
         }
         
-        // Determine refresh mode
-        RefreshMode mode = readerSettings.getRefreshMode(pagesUntilHalfRefresh, pagesUntilFullRefresh);
-        
-        Serial.printf("[READER] Drawing page with screenW=%d, screenH=%d, landscape=%d\n", 
-                      screenW, screenH, landscape);
-        
-        // Calculate page band info for paged rendering
-        // With rotation 3 and 480 buffer: page 0 = Y 0-479, page 1 = Y 480-799
-        const int pageHeight = DISPLAY_BUFFER_HEIGHT;  // 480
-        const int totalLogicalHeight = screenH;  // 800 in portrait
-        const int numPages = (totalLogicalHeight + pageHeight - 1) / pageHeight;  // ceil division
-        
-        Serial.printf("[READER] Paged rendering: %d pages (buffer=%d, screen=%d)\n", 
-                      numPages, pageHeight, totalLogicalHeight);
-        
-        // Always use full window for reading to prevent ghosting
-        display.setFullWindow();
-        int pageNum = 0;
-        display.firstPage();
-        do {
-            // Calculate Y range for current page band
-            int bandYStart = pageNum * pageHeight;
-            int bandYEnd = bandYStart + pageHeight;
-            
-            // Always fill screen white (GxEPD2 clips to current band)
-            display.fillScreen(GxEPD_WHITE);
-            display.setFont(&FreeSans9pt7b);
-            display.setTextColor(GxEPD_BLACK);
-            
-            // Draw only text lines within this page band
-            for (int i = 0; i < page->lineCount; i++) {
-                const CachedLine& line = page->lines[i];
-                
-                // Check if line is within current page band (with some margin for glyph height)
-                int lineY = line.yPos;
-                int lineTop = lineY - 25;  // Approximate glyph ascent
-                int lineBottom = lineY + 5;  // Approximate glyph descent
-                
-                // Skip lines completely outside this band
-                if (lineBottom < bandYStart || lineTop >= bandYEnd) {
-                    continue;
-                }
-                
-                // Draw words on this line
-                for (int j = 0; j < line.wordCount; j++) {
-                    const CachedWord& word = line.words[j];
-                    display.setCursor(word.xPos, lineY);
-                    display.print(word.text);
-                }
-            }
-            
-            // Draw status bar (only on the band that contains it)
-            int statusBarY = screenH - 28;
-            if (statusBarY >= bandYStart && statusBarY < bandYEnd) {
-                drawStatusBarInPage();
-            }
-            
-            pageNum++;
-        } while (display.nextPage());
+        // Draw status bar
+        drawStatusBarInPage();
         
         delete page;  // Free after rendering complete
         
-        // Note: With full buffer mode, we don't need double refresh tricks
-        // The display handles refresh properly
-        
-        Serial.printf("[READER] Page %d/%d rendered (mode=%d)\n", currentPage + 1, totalPages, (int)mode);
+        Serial.printf("[READER] Page %d/%d rendered\n", currentPage + 1, totalPages);
         
         // Save last book info for sleep screen
         saveLastBookInfo();
@@ -2519,23 +3257,36 @@ public:
     
     // Draw status bar during page render loop
     void drawStatusBarInPage() {
-        LibReaderSettings& settings = readerSettings.get();
-        int barY = screenH - 28;
+        int barY = screenH - 25;
         
-        display.drawLine(0, barY - 7, screenW, barY - 7, GxEPD_BLACK);
+        display.drawLine(0, barY - 5, screenW, barY - 5, GxEPD_BLACK);
         display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
         
-        // Page info (centered)
-        if (settings.showProgress) {
-            char pageStr[32];
-            snprintf(pageStr, sizeof(pageStr), "%d/%d", currentPage + 1, totalPages);
-            
-            int16_t x1, y1;
-            uint16_t tw, th;
-            display.getTextBounds(pageStr, 0, 0, &x1, &y1, &tw, &th);
-            display.setCursor((screenW - tw) / 2, barY + 9);
-            display.print(pageStr);
+        // Chapter name on left (truncated if needed)
+        String chapterName;
+        if (isEpub && currentChapter < totalChapters) {
+            chapterName = epub.getChapter(currentChapter).title;
         }
+        if (chapterName.length() == 0) {
+            chapterName = String("Chapter ") + String(currentChapter + 1);
+        }
+        int maxChapterLen = landscape ? 40 : 20;
+        if ((int)chapterName.length() > maxChapterLen) {
+            chapterName = chapterName.substring(0, maxChapterLen - 3) + "...";
+        }
+        display.setCursor(15, barY + 10);
+        display.print(chapterName);
+        
+        // Page number on right
+        char pageStr[24];
+        snprintf(pageStr, sizeof(pageStr), "%d / %d", currentPage + 1, totalPages);
+        
+        int16_t x1, y1;
+        uint16_t tw, th;
+        display.getTextBounds(pageStr, 0, 0, &x1, &y1, &tw, &th);
+        display.setCursor(screenW - tw - 15, barY + 10);
+        display.print(pageStr);
     }
     
     // =========================================================================
@@ -2546,6 +3297,7 @@ public:
         LastBookInfo info;
         info.magic = 0x4C415354;  // "LAST"
         strncpy(info.title, currentBook, sizeof(info.title) - 1);
+        strncpy(info.bookPath, currentBookPath, sizeof(info.bookPath) - 1);  // Save book path for resume
         info.chapter = currentChapter;
         info.page = currentPage;
         info.totalPages = totalPages;
@@ -2572,7 +3324,7 @@ public:
         if (file) {
             file.write((uint8_t*)&info, sizeof(LastBookInfo));
             file.close();
-            Serial.printf("[LIBRARY] Saved last book info: %s\n", info.title);
+            Serial.printf("[LIBRARY] Saved last book info: %s at %s\n", info.title, info.bookPath);
         }
     }
     
@@ -2594,6 +3346,105 @@ public:
             return false;
         }
         
+        return true;
+    }
+    
+    // Resume last book (for boot-to-last-book feature)
+    bool resumeLastBook() {
+        LastBookInfo info;
+        if (!getLastBookInfo(info)) {
+            Serial.println("[LIBRARY] No last book to resume");
+            return false;
+        }
+        
+        if (strlen(info.bookPath) == 0 || !SD.exists(info.bookPath)) {
+            Serial.printf("[LIBRARY] Last book path invalid: %s\n", info.bookPath);
+            return false;
+        }
+        
+        Serial.printf("[LIBRARY] Resuming: %s at chapter %d, page %d\n", 
+                      info.title, info.chapter, info.page);
+        
+        // Set current book info
+        strncpy(currentBookPath, info.bookPath, sizeof(currentBookPath) - 1);
+        strncpy(currentBook, info.title, sizeof(currentBook) - 1);
+        
+        // Extract directory path from book path
+        String pathStr = String(info.bookPath);
+        int lastSlash = pathStr.lastIndexOf('/');
+        if (lastSlash > 0) {
+            strncpy(currentPath, pathStr.substring(0, lastSlash).c_str(), sizeof(currentPath) - 1);
+        }
+        
+        // Detect book type from extension
+        String ext = pathStr.substring(pathStr.lastIndexOf('.'));
+        ext.toLowerCase();
+        isEpub = (ext == ".epub");
+        
+        // Show loading screen
+        showLoadingScreen("Resuming...");
+        
+        // Open book metadata
+        if (isEpub) {
+            if (!openEpubMetadata(currentBookPath)) {
+                showErrorScreen("Failed to open book");
+                state = BROWSER;
+                return false;
+            }
+        } else {
+            openTxtMetadata(currentBookPath);
+        }
+        
+        // Initialize cache and restore position
+        pageCache.init(currentBookPath);
+        
+        // Configure text layout
+        textLayout.setPageSize(getLayoutWidth(), screenH);
+        applyFontSettings();
+        
+        // Restore position from saved info
+        currentChapter = info.chapter;
+        currentPage = info.page;
+        
+        // Load chapter
+        if (!loadChapterSync(currentChapter)) {
+            // Try chapter 0 if saved chapter fails
+            currentChapter = 0;
+            currentPage = 0;
+            if (!loadChapterSync(0)) {
+                showErrorScreen("Failed to load chapter");
+                state = BROWSER;
+                return false;
+            }
+        }
+        
+        // Validate page
+        if (currentPage >= totalPages) {
+            currentPage = totalPages > 0 ? totalPages - 1 : 0;
+        }
+        
+        // Start reading stats
+        stats.startSession();
+        
+        // Create render task
+        if (!renderMutex) {
+            renderMutex = xSemaphoreCreateMutex();
+        }
+        
+        state = READING;
+        bookIsOpen = true;
+        firstRenderAfterOpen = true;
+        updateRequired = true;
+        pagesUntilFullRefresh = 30;
+        
+        // Load bookmarks for the resumed book
+        loadBookmarks();
+        
+        // Load reading stats
+        stats.load();
+        stats.startSession();
+        
+        Serial.printf("[LIBRARY] Resumed book successfully\n");
         return true;
     }
     
@@ -2788,101 +3639,431 @@ public:
         LibReaderSettings& settings = readerSettings.get();
         bool isLandscape = (settingsManager.display.orientation == 0);
         
-        // Header
+        // Clean header
         display.setFont(&FreeSansBold12pt7b);
-        display.setCursor(20, 35);
-        display.print("Reader Settings");
+        display.setTextColor(GxEPD_BLACK);
         
-        display.drawLine(0, 48, screenW, 48, GxEPD_BLACK);
+        // Center the title
+        const char* title = "Settings";
+        int16_t tx, ty;
+        uint16_t tw, th;
+        display.getTextBounds(title, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, 35);
+        display.print(title);
         
+        display.drawLine(0, 50, screenW, 50, GxEPD_BLACK);
+        
+        // Section header - Reading
         display.setFont(&FreeSans9pt7b);
+        display.setCursor(20, 75);
+        display.setTextColor(GxEPD_BLACK);
+        display.print("Reading");
         
-        // Show current book info if reading
-        int startY = 75;
-        if (bookIsOpen && strlen(currentBook) > 0) {
-            display.setCursor(20, 68);
-            char truncTitle[30];
-            strncpy(truncTitle, currentBook, 29);
-            truncTitle[29] = '\0';
-            display.printf("Reading: %s", truncTitle);
-            display.setCursor(20, 88);
-            display.printf("Page %d/%d | Ch %d/%d", 
-                           currentPage + 1, totalPages, currentChapter + 1, totalChapters);
-            display.drawLine(0, 100, screenW, 100, GxEPD_BLACK);
-            startY = 110;
-        }
+        display.drawLine(20, 82, screenW - 20, 82, GxEPD_BLACK);
         
-        // Menu items
-        const char* items[] = {
-            "Orientation",
-            "Font Size",
-            "Margins", 
-            "Line Spacing",
-            "Justify Text",
-            "Go to Chapter...",
-            "Clear Cache",
-            "< Back"
+        // Settings items with cleaner layout
+        int startY = 95;
+        int itemHeight = landscape ? 38 : 44;
+        int leftMargin = 25;
+        int rightMargin = 25;
+        int valueBoxWidth = 100;
+        
+        // Define menu structure: label, value getter
+        struct MenuItem {
+            const char* label;
+            const char* value;
+            bool hasToggle;  // Simple on/off vs value selector
         };
         
-        // Values for each item
-        const char* orientVal = isLandscape ? "Landscape" : "Portrait";
-        const char* fontVal = LibReaderSettings::getFontSizeName(settings.fontSize);
-        const char* marginVal = LibReaderSettings::getMarginName(settings.margins);
-        const char* spacingVal = LibReaderSettings::getSpacingName(settings.lineSpacing);
-        const char* justifyVal = settings.justifyText ? "On" : "Off";
+        // Get current values
+        const char* fontFamilyVal = "Bookerly";  // Default font family
+        const char* fontSizeVal = LibReaderSettings::getFontSizeName(settings.fontSize);
+        const char* lineSpacingVal = LibReaderSettings::getSpacingName(settings.lineSpacing);
+        const char* alignVal = settings.justifyText ? "Justify" : "Normal";
         
-        const char* values[SET_COUNT];
-        values[SET_ORIENTATION] = orientVal;
-        values[SET_FONT_SIZE] = fontVal;
-        values[SET_MARGINS] = marginVal;
-        values[SET_LINE_SPACING] = spacingVal;
-        values[SET_JUSTIFY] = justifyVal;
-        values[SET_CHAPTERS] = "";
-        values[SET_CLEAR_CACHE] = "";
-        values[SET_BACK] = "";
+        MenuItem readingItems[] = {
+            {"Font Family", fontFamilyVal, false},
+            {"Font Size", fontSizeVal, false},
+            {"Line Spacing", lineSpacingVal, false},
+            {"Paragraph Alignment", alignVal, false},
+        };
+        int numReadingItems = 4;
         
+        // Draw Reading section items
         int y = startY;
-        int itemHeight = landscape ? 42 : 48;
-        
-        // Hide "Go to Chapter" if not reading a book with chapters
-        bool showChapters = bookIsOpen && totalChapters > 1;
-        
-        for (int i = 0; i < SET_COUNT; i++) {
-            // Skip chapters option if not applicable
-            if (i == SET_CHAPTERS && !showChapters) continue;
+        for (int i = 0; i < numReadingItems; i++) {
+            bool selected = (settingsCursor == i);
             
-            bool selected = (i == settingsCursor);
-            
+            // Draw item row
             if (selected) {
-                display.fillRoundRect(12, y - 2, screenW - 24, itemHeight - 6, 6, GxEPD_BLACK);
+                display.fillRect(15, y - 5, screenW - 30, itemHeight - 4, GxEPD_BLACK);
                 display.setTextColor(GxEPD_WHITE);
             } else {
-                display.drawRoundRect(12, y - 2, screenW - 24, itemHeight - 6, 6, GxEPD_BLACK);
                 display.setTextColor(GxEPD_BLACK);
             }
             
-            display.setCursor(25, y + 20);
-            display.print(items[i]);
+            // Label on left
+            display.setCursor(leftMargin, y + 18);
+            display.print(readingItems[i].label);
             
-            if (strlen(values[i]) > 0) {
-                // Right-align the value with arrows
-                char valStr[24];
-                snprintf(valStr, sizeof(valStr), "< %s >", values[i]);
-                int16_t x1, y1;
-                uint16_t w, h;
-                display.getTextBounds(valStr, 0, 0, &x1, &y1, &w, &h);
-                display.setCursor(screenW - 30 - w, y + 20);
-                display.print(valStr);
+            // Value on right with box
+            int valueX = screenW - rightMargin - valueBoxWidth;
+            
+            if (!selected) {
+                display.drawRoundRect(valueX, y - 2, valueBoxWidth, itemHeight - 8, 4, GxEPD_BLACK);
+            }
+            
+            // Center value text in box
+            display.getTextBounds(readingItems[i].value, 0, 0, &tx, &ty, &tw, &th);
+            display.setCursor(valueX + (valueBoxWidth - tw) / 2, y + 18);
+            display.print(readingItems[i].value);
+            
+            // Draw right arrow indicator
+            if (!selected) {
+                display.setCursor(screenW - rightMargin - 15, y + 18);
+                display.print(">");
             }
             
             display.setTextColor(GxEPD_BLACK);
             y += itemHeight;
         }
         
+        // Section header - Display
+        y += 10;
+        display.setCursor(20, y + 10);
+        display.print("Display");
+        display.drawLine(20, y + 17, screenW - 20, y + 17, GxEPD_BLACK);
+        y += 30;
+        
+        MenuItem displayItems[] = {
+            {"Sleep Screen", "Custom", false},
+            {"Status Bar", settings.showProgress ? "Full" : "Off", false},
+            {"Anti Aliasing", "On", true},
+            {"Refresh Frequency", "15 pages", false},
+        };
+        int numDisplayItems = 4;
+        
+        for (int i = 0; i < numDisplayItems; i++) {
+            int menuIdx = numReadingItems + i;
+            bool selected = (settingsCursor == menuIdx);
+            
+            if (selected) {
+                display.fillRect(15, y - 5, screenW - 30, itemHeight - 4, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.setTextColor(GxEPD_BLACK);
+            }
+            
+            display.setCursor(leftMargin, y + 18);
+            display.print(displayItems[i].label);
+            
+            int valueX = screenW - rightMargin - valueBoxWidth;
+            
+            if (displayItems[i].hasToggle) {
+                // Draw toggle switch style
+                int toggleW = 50;
+                int toggleH = 24;
+                int toggleX = screenW - rightMargin - toggleW;
+                int toggleY = y + 2;
+                
+                if (!selected) {
+                    display.drawRoundRect(toggleX, toggleY, toggleW, toggleH, toggleH/2, GxEPD_BLACK);
+                    // Draw filled circle on right (ON position)
+                    display.fillCircle(toggleX + toggleW - toggleH/2 - 2, toggleY + toggleH/2, toggleH/2 - 4, GxEPD_BLACK);
+                } else {
+                    display.drawRoundRect(toggleX, toggleY, toggleW, toggleH, toggleH/2, GxEPD_WHITE);
+                    display.fillCircle(toggleX + toggleW - toggleH/2 - 2, toggleY + toggleH/2, toggleH/2 - 4, GxEPD_WHITE);
+                }
+            } else {
+                if (!selected) {
+                    display.drawRoundRect(valueX, y - 2, valueBoxWidth, itemHeight - 8, 4, GxEPD_BLACK);
+                }
+                
+                display.getTextBounds(displayItems[i].value, 0, 0, &tx, &ty, &tw, &th);
+                display.setCursor(valueX + (valueBoxWidth - tw) / 2, y + 18);
+                display.print(displayItems[i].value);
+                
+                if (!selected) {
+                    display.setCursor(screenW - rightMargin - 15, y + 18);
+                    display.print(">");
+                }
+            }
+            
+            display.setTextColor(GxEPD_BLACK);
+            y += itemHeight;
+        }
+        
+        // Action buttons at bottom
+        y += 15;
+        
+        // Chapters button (if reading a book)
+        bool showChapters = bookIsOpen && totalChapters > 1;
+        int actionIdx = numReadingItems + numDisplayItems;
+        
+        if (showChapters) {
+            bool selected = (settingsCursor == actionIdx);
+            if (selected) {
+                display.fillRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            display.setCursor(leftMargin, y + 18);
+            display.print("Go to Chapter...");
+            display.setTextColor(GxEPD_BLACK);
+            y += itemHeight + 5;
+            actionIdx++;
+        }
+        
+        // Bookmarks button (if reading a book)
+        if (bookIsOpen) {
+            bool selected = (settingsCursor == actionIdx);
+            if (selected) {
+                display.fillRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            display.setCursor(leftMargin, y + 18);
+            display.print("View Bookmarks");
+            
+            // Show bookmark count
+            char countStr[16];
+            snprintf(countStr, sizeof(countStr), "(%d)", bookmarks.count);
+            display.setCursor(screenW - rightMargin - 60, y + 18);
+            display.print(countStr);
+            
+            display.setTextColor(GxEPD_BLACK);
+            y += itemHeight + 5;
+            actionIdx++;
+            
+            // Add bookmark button
+            selected = (settingsCursor == actionIdx);
+            if (selected) {
+                display.fillRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            display.setCursor(leftMargin, y + 18);
+            
+            // Check if current page is bookmarked
+            bool isBookmarked = (bookmarks.find(currentChapter, currentPage) >= 0);
+            display.print(isBookmarked ? "Remove Bookmark" : "Add Bookmark Here");
+            
+            display.setTextColor(GxEPD_BLACK);
+            y += itemHeight + 5;
+            actionIdx++;
+        }
+        
+        // Reading Stats button
+        {
+            bool selected = (settingsCursor == actionIdx);
+            if (selected) {
+                display.fillRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            display.setCursor(leftMargin, y + 18);
+            display.print("Reading Statistics");
+            display.setTextColor(GxEPD_BLACK);
+            y += itemHeight + 5;
+            actionIdx++;
+        }
+        
+        // Back button
+        bool backSelected = (settingsCursor == actionIdx);
+        if (backSelected) {
+            display.fillRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+        } else {
+            display.drawRoundRect(15, y - 3, screenW - 30, itemHeight - 2, 6, GxEPD_BLACK);
+            display.setTextColor(GxEPD_BLACK);
+        }
+        
+        const char* backText = "Back";
+        display.getTextBounds(backText, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, y + 18);
+        display.print(backText);
+        
+        // Footer hints
+        display.setTextColor(GxEPD_BLACK);
+        display.drawLine(0, screenH - 38, screenW, screenH - 38, GxEPD_BLACK);
+        
+        display.setFont(&FreeSans9pt7b);
+        
+        // Bottom navigation hints - minimal
+        display.setCursor(leftMargin, screenH - 14);
+        display.print("Save");
+        
+        display.setCursor(screenW/2 - 30, screenH - 14);
+        display.print("Toggle");
+        
+        display.setCursor(screenW - 80, screenH - 14);
+        display.print("Up");
+        
+        display.setCursor(screenW - 45, screenH - 14);
+        display.print("Down");
+    }
+    
+    void drawBookmarkSelect() {
+        display.setFont(&FreeSansBold12pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        
+        // Title
+        const char* title = "Bookmarks";
+        int16_t tx, ty;
+        uint16_t tw, th;
+        display.getTextBounds(title, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, 35);
+        display.print(title);
+        
+        display.drawLine(0, 50, screenW, 50, GxEPD_BLACK);
+        
+        display.setFont(&FreeSans9pt7b);
+        
+        if (bookmarks.count == 0) {
+            display.setCursor(screenW/2 - 80, screenH/2);
+            display.print("No bookmarks yet");
+            display.setCursor(screenW/2 - 100, screenH/2 + 25);
+            display.print("Use Settings > Add Bookmark");
+            return;
+        }
+        
+        // Draw bookmark list
+        int maxVisible = 8;
+        int itemHeight = 45;
+        int startY = 70;
+        
+        for (int i = 0; i < maxVisible && (bookmarkScrollOffset + i) < bookmarks.count; i++) {
+            int idx = bookmarkScrollOffset + i;
+            Bookmark& bm = bookmarks.bookmarks[idx];
+            
+            int y = startY + i * itemHeight;
+            bool selected = (idx == bookmarkCursor);
+            
+            if (selected) {
+                display.fillRoundRect(15, y - 5, screenW - 30, itemHeight - 5, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(15, y - 5, screenW - 30, itemHeight - 5, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            
+            // Bookmark label
+            display.setCursor(25, y + 15);
+            display.print(bm.label);
+            
+            // Chapter/page info
+            char info[32];
+            snprintf(info, sizeof(info), "Ch%d, Pg%d", bm.chapter + 1, bm.page + 1);
+            display.setCursor(screenW - 120, y + 15);
+            display.print(info);
+            
+            display.setTextColor(GxEPD_BLACK);
+        }
+        
+        // Scroll indicator
+        if (bookmarks.count > maxVisible) {
+            int scrollH = (screenH - 120) * maxVisible / bookmarks.count;
+            int scrollY = 70 + ((screenH - 120 - scrollH) * bookmarkScrollOffset / (bookmarks.count - maxVisible));
+            display.fillRoundRect(screenW - 8, scrollY, 4, scrollH, 2, GxEPD_BLACK);
+        }
+        
         // Footer
         display.drawLine(0, screenH - 38, screenW, screenH - 38, GxEPD_BLACK);
         display.setCursor(20, screenH - 14);
-        display.print("OK: Change | BACK: Return");
+        display.print("OK: Jump to | BACK: Cancel");
+    }
+    
+    void drawReadingStatsScreen() {
+        display.setFont(&FreeSansBold12pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        
+        // Title
+        const char* title = "Reading Statistics";
+        int16_t tx, ty;
+        uint16_t tw, th;
+        display.getTextBounds(title, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, 35);
+        display.print(title);
+        
+        display.drawLine(0, 50, screenW, 50, GxEPD_BLACK);
+        
+        display.setFont(&FreeSans9pt7b);
+        
+        int y = 80;
+        int labelX = 30;
+        int valueX = screenW - 150;
+        int lineH = 35;
+        
+        // All-time stats
+        display.setCursor(labelX, y);
+        display.print("Lifetime Stats");
+        display.drawLine(labelX, y + 5, screenW - 30, y + 5, GxEPD_BLACK);
+        y += 25;
+        
+        // Total pages
+        display.setCursor(labelX + 10, y);
+        display.print("Pages Read:");
+        display.setCursor(valueX, y);
+        display.print(stats.totalPagesRead);
+        y += lineH;
+        
+        // Total time
+        display.setCursor(labelX + 10, y);
+        display.print("Time Reading:");
+        char timeStr[32];
+        int hours = stats.totalMinutesRead / 60;
+        int mins = stats.totalMinutesRead % 60;
+        if (hours > 0) {
+            snprintf(timeStr, sizeof(timeStr), "%dh %dm", hours, mins);
+        } else {
+            snprintf(timeStr, sizeof(timeStr), "%d min", mins);
+        }
+        display.setCursor(valueX, y);
+        display.print(timeStr);
+        y += lineH;
+        
+        // Books finished
+        display.setCursor(labelX + 10, y);
+        display.print("Books Finished:");
+        display.setCursor(valueX, y);
+        display.print(stats.totalBooksFinished);
+        y += lineH + 15;
+        
+        // Current session
+        display.setCursor(labelX, y);
+        display.print("This Session");
+        display.drawLine(labelX, y + 5, screenW - 30, y + 5, GxEPD_BLACK);
+        y += 25;
+        
+        display.setCursor(labelX + 10, y);
+        display.print("Pages:");
+        display.setCursor(valueX, y);
+        display.print(stats.sessionPagesRead);
+        y += lineH;
+        
+        display.setCursor(labelX + 10, y);
+        display.print("Time:");
+        int sessionMins = stats.getSessionMinutes();
+        if (sessionMins >= 60) {
+            snprintf(timeStr, sizeof(timeStr), "%dh %dm", sessionMins / 60, sessionMins % 60);
+        } else {
+            snprintf(timeStr, sizeof(timeStr), "%d min", sessionMins);
+        }
+        display.setCursor(valueX, y);
+        display.print(timeStr);
+        
+        // Footer
+        display.drawLine(0, screenH - 38, screenW, screenH - 38, GxEPD_BLACK);
+        display.setCursor(20, screenH - 14);
+        display.print("Press OK or BACK to return");
     }
     
     void drawInfo() {
@@ -2981,11 +4162,18 @@ private:
     // Reading stats
     ReadingStats stats;
     
+    // Bookmarks for current book
+    BookmarkList bookmarks;
+    int bookmarkCursor;
+    int bookmarkScrollOffset;
+    
     // Flippable browser mode
     bool useFlipBrowser;
     
     // Track if a book is currently open
     bool bookIsOpen;
+    bool pendingChapterLoad;  // Deferred chapter load for stack safety
+    int pendingChapterToLoad; // Which chapter to load (-1 = use currentChapter)
     
     // Track first render after opening book (needs display reset)
     bool firstRenderAfterOpen;

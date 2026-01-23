@@ -7,20 +7,14 @@
 /**
  * @file HomeItems.h
  * @brief Home screen item definitions and configuration
- * @version 2.1.16
+ * @version 2.2.0
  *
- * Defines the apps available on the home screen (11 apps + ToolSuite + Settings).
- *
- * REMOVED: Snake, Tetris, Pacman, TicTacToe, Connect4, Gomoku, Dots,
- *          Battleship, Nonogram, Sokoban, Yahtzee, Mastermind, Memory,
- *          Blackjack, WordSearch, Calculator, Clock, Countdown, Counter,
- *          Dice, Converter, Random, Ruler, Astronomy, Birthdays,
- *          ReadingStats, Trivia, MathTrainer, Vocabulary, Sketch,
- *          2048, Habits, Quotes, Wordle (memory optimization)
+ * Defines the apps available on the home screen.
+ * Added: Demo plugin for development testing and visual demos.
  */
 
 // =============================================================================
-// Item Indices (0-12)
+// Item Indices (0-14)
 // =============================================================================
 
 // Core Apps (0-2)
@@ -28,30 +22,31 @@
 #define HOME_ITEM_FLASHCARDS    1
 #define HOME_ITEM_NOTES         2
 
-// Games - E-ink friendly only (3-7) - REMOVED: Wordle, 2048
+// Games - E-ink friendly (3-8)
 #define HOME_ITEM_CHESS         3
 #define HOME_ITEM_CHECKERS      4
 #define HOME_ITEM_SUDOKU        5
 #define HOME_ITEM_MINESWEEPER   6
 #define HOME_ITEM_SOLITAIRE     7
+#define HOME_ITEM_CUBE3D        8   // NEW: 3D Animation Demo
 
-// Productivity (8) - REMOVED: Habits
-#define HOME_ITEM_TODO          8
+// Productivity (9)
+#define HOME_ITEM_TODO          9
 
-// Widgets (9) - REMOVED: Quotes
-#define HOME_ITEM_WEATHER       9
+// Widgets (10)
+#define HOME_ITEM_WEATHER       10
 
-// Media (10-11)
-#define HOME_ITEM_IMAGES        10
-#define HOME_ITEM_MAPS          11
+// Media (11-12)
+#define HOME_ITEM_IMAGES        11
+#define HOME_ITEM_MAPS          12
 
-// ToolSuite - Consolidated (12)
-#define HOME_ITEM_TOOLS         12
+// ToolSuite - Consolidated (13)
+#define HOME_ITEM_TOOLS         13
 
-// System (13)
-#define HOME_ITEM_SETTINGS      13
+// System (14)
+#define HOME_ITEM_SETTINGS      14
 
-#define HOME_ITEMS_TOTAL        14
+#define HOME_ITEMS_TOTAL        15
 // HOME_ITEMS_BYTES defined in config.h
 
 // =============================================================================
@@ -77,6 +72,7 @@ static const HomeItemInfo HOME_ITEMS[] = {
     { HOME_ITEM_SUDOKU,      "sudoku",      "Sudoku",      "9", "games" },
     { HOME_ITEM_MINESWEEPER, "minesweeper", "Mines",       "M", "games" },
     { HOME_ITEM_SOLITAIRE,   "solitaire",   "Solitaire",   "S", "games" },
+    { HOME_ITEM_CUBE3D,      "cube3d",      "Demo",     "3", "games" },
     
     // Productivity
     { HOME_ITEM_TODO,        "todo",        "To-Do",       "T", "tools" },
@@ -121,36 +117,33 @@ inline int8_t getHomeItemIndex(const char* id) {
 
 /**
  * @brief Get feature-aware default home items
- * 
- * Default apps: Library, Flashcards, Chess, Sudoku, Weather, Settings
- * Only enables items that are actually available based on feature flags.
- * This prevents showing items unavailable on low-memory devices.
  */
 inline void getDefaultHomeItems(uint8_t* bitmap) {
     memset(bitmap, 0, HOME_ITEMS_BYTES);
     
-    // Always enable Settings (required for device configuration - cannot be removed)
+    // Always enable Settings
     bitmap[HOME_ITEM_SETTINGS / 8] |= (1 << (HOME_ITEM_SETTINGS % 8));
     
-    // Library - only if FEATURE_READER is enabled
+    // Library
     #if FEATURE_READER
     bitmap[HOME_ITEM_LIBRARY / 8] |= (1 << (HOME_ITEM_LIBRARY % 8));
     #endif
     
-    // Flashcards - only if FEATURE_FLASHCARDS is enabled
+    // Flashcards
     #if FEATURE_FLASHCARDS
     bitmap[HOME_ITEM_FLASHCARDS / 8] |= (1 << (HOME_ITEM_FLASHCARDS % 8));
     #endif
     
-    // Weather - only if FEATURE_WEATHER is enabled
+    // Weather
     #if FEATURE_WEATHER
     bitmap[HOME_ITEM_WEATHER / 8] |= (1 << (HOME_ITEM_WEATHER % 8));
     #endif
     
-    // Chess and Sudoku - only if FEATURE_GAMES is enabled
+    // Games including Demo
     #if FEATURE_GAMES
     bitmap[HOME_ITEM_CHESS / 8] |= (1 << (HOME_ITEM_CHESS % 8));
     bitmap[HOME_ITEM_SUDOKU / 8] |= (1 << (HOME_ITEM_SUDOKU % 8));
+    bitmap[HOME_ITEM_CUBE3D / 8] |= (1 << (HOME_ITEM_CUBE3D % 8));
     #endif
 }
 
@@ -167,9 +160,6 @@ inline void setHomeItemEnabled(uint8_t* bitmap, uint8_t idx, bool enabled) {
 
 /**
  * @brief Check if a home item can be launched based on feature flags
- * 
- * Returns true if the required feature flag is enabled for this item.
- * This can be used by the portal to grey out unavailable items.
  */
 inline bool isHomeItemAvailable(uint8_t idx) {
     switch (idx) {
@@ -200,6 +190,7 @@ inline bool isHomeItemAvailable(uint8_t idx) {
         case HOME_ITEM_SUDOKU:
         case HOME_ITEM_MINESWEEPER:
         case HOME_ITEM_SOLITAIRE:
+        case HOME_ITEM_CUBE3D:
         case HOME_ITEM_TODO:
         case HOME_ITEM_IMAGES:
         case HOME_ITEM_MAPS:
@@ -211,7 +202,7 @@ inline bool isHomeItemAvailable(uint8_t idx) {
             #endif
             
         case HOME_ITEM_SETTINGS:
-            return true;  // Always available
+            return true;
             
         default:
             return false;

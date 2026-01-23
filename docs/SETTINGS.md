@@ -1,5 +1,7 @@
 # Settings Reference
 
+*Last updated: January 22, 2026*
+
 Settings are stored in two places:
 
 - **NVS (flash):** WiFi credentials and setup-complete flag - survives factory reset
@@ -14,6 +16,7 @@ Settings are stored in two places:
 | fullRefreshPages | 15 | Pages between full e-ink refresh |
 | showBatteryHome | true | Show battery on home screen |
 | showClockHome | true | Show time on home screen |
+| bootToLastBook | false | Skip home screen, open last-read book |
 
 ## Reader Settings
 
@@ -25,6 +28,7 @@ These sync between the on-device menu and the web portal.
 | margins | Normal | Narrow, Normal, Wide |
 | lineSpacing | Normal | Compact, Normal, Relaxed |
 | justifyText | true | true/false |
+| sceneBreakSpacing | 30px | 0-60px spacing for `<hr>` tags |
 
 The actual pixel values:
 
@@ -36,9 +40,47 @@ The actual pixel values:
 
 | Margins | Pixels |
 |---------|--------|
-| Narrow | 10px |
-| Normal | 20px |
-| Wide | 35px |
+| Narrow | 5px |
+| Normal | 10px |
+| Wide | 20px |
+
+## Bookmarks
+
+Up to 20 bookmarks can be saved per book. Bookmarks are stored in the book's cache directory:
+- Location: `/.sumi/books/{hash}/bookmarks.bin`
+- Access from: Settings menu while reading → View Bookmarks
+- Add: Settings menu → Add Bookmark Here
+
+## Reading Statistics
+
+Track your reading progress across all books:
+- **Lifetime stats:** Total pages read, hours spent reading, books finished
+- **Session stats:** Pages and time for current session
+- **Location:** `/.sumi/reading_stats.bin`
+- **Reset:** Available in web portal under Reader Settings
+
+## KOReader Sync Settings
+
+Sync reading progress with KOReader devices and apps.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| kosyncEnabled | false | Enable progress sync |
+| kosyncUrl | "" | Sync server URL (e.g., https://sync.koreader.rocks) |
+| kosyncUser | "" | Username for sync server |
+| kosyncPass | "" | Password (stored locally only) |
+
+## Bluetooth Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| enabled | false | Enable Bluetooth |
+| autoConnect | true | Auto-connect to paired devices on boot |
+| keyboardLayout | US | Keyboard layout (US, UK, DE, FR, ES, IT) |
+
+Page turner key mapping:
+- Next page: Right Arrow, Space
+- Previous page: Left Arrow, Backspace
 
 ## Weather Settings
 
@@ -57,6 +99,18 @@ The home screen shows a customizable set of apps. In the portal, you can drag to
 Default apps: Library, Flashcards, Chess, Sudoku, Weather, Settings
 
 Settings is always shown and can't be removed.
+
+## Backup & Restore
+
+Export all settings to a JSON file from the portal About page. Includes:
+- Display settings
+- Reader settings
+- Weather location
+- Sync configuration
+- WiFi networks (passwords excluded)
+- Home screen layout
+
+Restore by uploading a backup file. Settings take effect after page reload.
 
 ## Auto-Save
 

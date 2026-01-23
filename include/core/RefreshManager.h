@@ -21,7 +21,7 @@
 #define REFRESH_PARTIAL_MIN_MS   500    // 500ms between partial refreshes  
 #define REFRESH_FAST_MIN_MS      300    // 300ms for games (use sparingly)
 #define REFRESH_TYPING_MIN_MS    100    // 100ms for typing (max ghosting tolerance)
-#define PARTIAL_BEFORE_FULL      20     // Force full refresh every 20 partials
+#define PARTIAL_BEFORE_FULL      50     // Force full refresh every 50 partials (was 20)
 
 class RefreshManager {
 public:

@@ -11,6 +11,7 @@
  */
 
 #include <SD.h>
+#include <vector>
 #include "core/PageCache.h"
 
 // Global instance
@@ -363,6 +364,12 @@ void PageCache::ensureDirectory(const String& path) {
 void PageCache::deleteDirectory(const String& path) {
     if (!SD.exists(path)) return;
     
+    // Use iterative approach instead of recursive to avoid stack overflow
+    // First, collect all files to delete
+    std::vector<String> filesToDelete;
+    std::vector<String> dirsToDelete;
+    
+    // Simple single-level delete (no deep recursion needed for our cache structure)
     File dir = SD.open(path);
     if (!dir || !dir.isDirectory()) {
         dir.close();
@@ -370,19 +377,38 @@ void PageCache::deleteDirectory(const String& path) {
         return;
     }
     
-    // Delete all files in directory
+    // Collect files and subdirs
     while (File entry = dir.openNextFile()) {
         String entryPath = path + "/" + entry.name();
         if (entry.isDirectory()) {
-            entry.close();
-            deleteDirectory(entryPath);  // Recurse
+            // For subdirs, collect their files first
+            File subdir = SD.open(entryPath);
+            if (subdir && subdir.isDirectory()) {
+                while (File subentry = subdir.openNextFile()) {
+                    String subPath = entryPath + "/" + subentry.name();
+                    subentry.close();
+                    filesToDelete.push_back(subPath);
+                }
+                subdir.close();
+            }
+            dirsToDelete.push_back(entryPath);
         } else {
-            entry.close();
-            SD.remove(entryPath);
+            filesToDelete.push_back(entryPath);
         }
+        entry.close();
     }
     dir.close();
     
-    // Remove the directory itself
+    // Delete files first
+    for (const String& f : filesToDelete) {
+        SD.remove(f);
+    }
+    
+    // Then delete subdirs
+    for (const String& d : dirsToDelete) {
+        SD.rmdir(d);
+    }
+    
+    // Finally remove the main directory
     SD.rmdir(path);
 }

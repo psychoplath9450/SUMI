@@ -47,7 +47,7 @@ void SettingsManager::loadDefaults() {
     display.showClockHome = true;
     display.showDate = true;
     display.showWifi = false;
-    display.sleepStyle = 0;  // 0=Default (SUMI), 1=Images, 2=Covers
+    display.sleepStyle = 0;  // 0=Book Cover (current), 1=Shuffle Images, 2=Wake Me Up
     display.clockStyle = 0;  // Digital
     display.homeLayout = 0;  // Grid
     display.invertColors = false;
@@ -85,12 +85,19 @@ void SettingsManager::loadDefaults() {
     display.fontSize = 12;
     display.sleepRefresh = false;
     display.wakeButton = 0;  // Any button
+    display.bootToLastBook = false;  // NEW: Default to showing home screen
+    
+    // Widget visibility defaults - all enabled by default
+    display.showBookWidget = true;
+    display.showWeatherWidget = true;
+    display.showOrientWidget = true;
     
     // Reader defaults
     reader.fontSize = 18;
     reader.lineHeight = 150;
     reader.margins = 20;
     reader.paraSpacing = 10;
+    reader.sceneBreakSpacing = 30;  // NEW: Extra spacing for scene breaks/hr tags
     reader.textAlign = 1;
     reader.hyphenation = true;
     reader.showProgress = true;
@@ -222,6 +229,10 @@ void SettingsManager::save() {
     _prefs.putUChar("d_fsize", display.fontSize);
     _prefs.putBool("d_slpref", display.sleepRefresh);
     _prefs.putUChar("d_wake", display.wakeButton);
+    // Widget visibility
+    _prefs.putBool("d_wbook", display.showBookWidget);
+    _prefs.putBool("d_wwth", display.showWeatherWidget);
+    _prefs.putBool("d_wori", display.showOrientWidget);
     
     // Reader
     _prefs.putUChar("r_fs", reader.fontSize);
@@ -393,6 +404,10 @@ void SettingsManager::load() {
     display.fontSize = _prefs.getUChar("d_fsize", 12);
     display.sleepRefresh = _prefs.getBool("d_slpref", false);
     display.wakeButton = _prefs.getUChar("d_wake", 0);
+    // Widget visibility (default all on)
+    display.showBookWidget = _prefs.getBool("d_wbook", true);
+    display.showWeatherWidget = _prefs.getBool("d_wwth", true);
+    display.showOrientWidget = _prefs.getBool("d_wori", true);
     
     // Reader
     reader.fontSize = _prefs.getUChar("r_fs", 18);
@@ -597,6 +612,9 @@ int SettingsManager::getEnabledHomeItemCount() const {
 void SettingsManager::getEnabledHomeItems(uint8_t* outIndices, int* outCount, int maxCount) const {
     int count = 0;
     for (int i = 0; i < HOME_ITEMS_MAX && count < maxCount; i++) {
+        // Skip Weather - it's widget-only, accessed via weather widget tap
+        if (i == HOME_ITEM_WEATHER) continue;
+        
         if (isHomeItemEnabled(i)) outIndices[count++] = i;
     }
     *outCount = count;
@@ -721,6 +739,11 @@ void SettingsManager::toJSON(JsonObject doc) {
     disp["fontSize"] = display.fontSize;
     disp["sleepRefresh"] = display.sleepRefresh;
     disp["wakeButton"] = display.wakeButton;
+    disp["bootToLastBook"] = display.bootToLastBook;
+    // Widget visibility
+    disp["showBookWidget"] = display.showBookWidget;
+    disp["showWeatherWidget"] = display.showWeatherWidget;
+    disp["showOrientWidget"] = display.showOrientWidget;
     
     // Reader
     JsonObject rd = doc["reader"].to<JsonObject>();
@@ -728,6 +751,7 @@ void SettingsManager::toJSON(JsonObject doc) {
     rd["lineHeight"] = reader.lineHeight;
     rd["margins"] = reader.margins;
     rd["paraSpacing"] = reader.paraSpacing;
+    rd["sceneBreakSpacing"] = reader.sceneBreakSpacing;
     rd["textAlign"] = reader.textAlign;
     rd["hyphenation"] = reader.hyphenation;
     rd["showProgress"] = reader.showProgress;
@@ -851,6 +875,11 @@ bool SettingsManager::fromJSON(JsonObjectConst doc) {
         if (d["fontSize"].is<int>()) display.fontSize = clampValue((int)d["fontSize"], 10, 24);
         if (d["sleepRefresh"].is<bool>()) display.sleepRefresh = d["sleepRefresh"];
         if (d["wakeButton"].is<int>()) display.wakeButton = clampValue((int)d["wakeButton"], 0, 2);
+        if (d["bootToLastBook"].is<bool>()) display.bootToLastBook = d["bootToLastBook"];
+        // Widget visibility
+        if (d["showBookWidget"].is<bool>()) display.showBookWidget = d["showBookWidget"];
+        if (d["showWeatherWidget"].is<bool>()) display.showWeatherWidget = d["showWeatherWidget"];
+        if (d["showOrientWidget"].is<bool>()) display.showOrientWidget = d["showOrientWidget"];
     }
     
     if (doc["reader"].is<JsonObjectConst>()) {
@@ -859,6 +888,7 @@ bool SettingsManager::fromJSON(JsonObjectConst doc) {
         if (r["lineHeight"].is<int>()) reader.lineHeight = clampValue((int)r["lineHeight"], 100, 200);
         if (r["margins"].is<int>()) reader.margins = clampValue((int)r["margins"], 5, 50);
         if (r["paraSpacing"].is<int>()) reader.paraSpacing = clampValue((int)r["paraSpacing"], 0, 30);
+        if (r["sceneBreakSpacing"].is<int>()) reader.sceneBreakSpacing = clampValue((int)r["sceneBreakSpacing"], 0, 60);
         if (r["textAlign"].is<int>()) reader.textAlign = clampValue((int)r["textAlign"], 0, 1);
         if (r["hyphenation"].is<bool>()) reader.hyphenation = r["hyphenation"];
         if (r["showProgress"].is<bool>()) reader.showProgress = r["showProgress"];

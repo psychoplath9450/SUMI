@@ -181,3 +181,15 @@ Check out these for reference:
 - `Sudoku.h` - grid-based game with partial refresh
 - `Flashcards.h` - file loading, multiple formats
 - `Weather.h` - network requests, JSON parsing
+- `ChessGame.h` - save/resume game state
+- `Cube3D.h` - menu-based Demo plugin with multiple modes
+
+## Widgets
+
+Widgets are different from plugins - they're small data displays on the home screen that show information at a glance.
+
+See [WIDGETS.md](WIDGETS.md) for:
+- How widgets work
+- Creating new widgets
+- API considerations for data-fetching widgets
+- Widget navigation and activation

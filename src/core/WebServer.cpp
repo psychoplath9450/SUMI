@@ -26,6 +26,7 @@
 #include "core/BluetoothManager.h"
 #endif
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <SD.h>
 #include <Preferences.h>
 
@@ -235,6 +236,188 @@ void SumiWebServer::setupAPIRoutes() {
     });
     
     // =========================================================================
+    // Backup/Restore Settings API
+    // =========================================================================
+    
+    // GET /api/backup - Download all settings as JSON
+    _server.on("/api/backup", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        Serial.println("[WEB] Backup settings requested");
+        
+        JsonDocument doc;
+        settingsManager.toJSON(doc.to<JsonObject>());
+        doc["backupVersion"] = 1;
+        doc["backupDate"] = millis();
+        doc["firmwareVersion"] = SUMI_VERSION;
+        
+        String response;
+        serializeJsonPretty(doc, response);
+        
+        AsyncWebServerResponse* resp = r->beginResponse(200, "application/json", response);
+        addCORSHeaders(resp);
+        resp->addHeader("Content-Disposition", "attachment; filename=\"sumi-backup.json\"");
+        r->send(resp);
+        
+        Serial.printf("[WEB] Backup sent: %d bytes\n", response.length());
+    });
+    
+    // POST /api/restore - Upload and restore settings from JSON
+    _server.on("/api/restore", HTTP_POST, [](AsyncWebServerRequest* r){}, NULL,
+        [this](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t, size_t) {
+            Serial.println("[WEB] Restore settings requested");
+            
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, data, len);
+            if (err) {
+                Serial.printf("[WEB] Restore JSON parse error: %s\n", err.c_str());
+                sendError(r, "Invalid JSON");
+                return;
+            }
+            
+            // Validate it's a backup file
+            if (!doc["backupVersion"].is<int>()) {
+                sendError(r, "Not a valid backup file");
+                return;
+            }
+            
+            // Restore settings
+            if (settingsManager.fromJSON(doc.as<JsonObjectConst>())) {
+                settingsManager.save();
+                Serial.println("[WEB] Settings restored successfully");
+                sendSuccess(r, "Settings restored");
+            } else {
+                sendError(r, "Restore failed");
+            }
+        });
+    
+    // =========================================================================
+    // KOReader Sync API
+    // =========================================================================
+    
+    // GET /api/sync/settings - Get sync settings
+    _server.on("/api/sync/settings", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        JsonDocument doc;
+        doc["url"] = settingsManager.sync.kosyncUrl;
+        doc["username"] = settingsManager.sync.kosyncUser;
+        // Don't send password
+        doc["enabled"] = settingsManager.sync.kosyncEnabled;
+        
+        String response;
+        serializeJson(doc, response);
+        AsyncWebServerResponse* resp = r->beginResponse(200, "application/json", response);
+        addCORSHeaders(resp);
+        r->send(resp);
+    });
+    
+    // POST /api/sync/settings - Update sync settings
+    _server.on("/api/sync/settings", HTTP_POST, [](AsyncWebServerRequest* r){}, NULL,
+        [this](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t, size_t) {
+            JsonDocument doc;
+            if (deserializeJson(doc, data, len)) {
+                sendError(r, "Invalid JSON");
+                return;
+            }
+            
+            if (doc["url"].is<const char*>()) {
+                strncpy(settingsManager.sync.kosyncUrl, doc["url"], sizeof(settingsManager.sync.kosyncUrl) - 1);
+            }
+            if (doc["username"].is<const char*>()) {
+                strncpy(settingsManager.sync.kosyncUser, doc["username"], sizeof(settingsManager.sync.kosyncUser) - 1);
+            }
+            if (doc["password"].is<const char*>()) {
+                strncpy(settingsManager.sync.kosyncPass, doc["password"], sizeof(settingsManager.sync.kosyncPass) - 1);
+            }
+            if (doc["enabled"].is<bool>()) {
+                settingsManager.sync.kosyncEnabled = doc["enabled"];
+            }
+            
+            settingsManager.save();
+            sendSuccess(r, "sync_settings_saved");
+        });
+    
+    // GET /api/sync/test - Test sync connection
+    _server.on("/api/sync/test", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        #if FEATURE_WIFI
+        if (!settingsManager.sync.kosyncEnabled || strlen(settingsManager.sync.kosyncUrl) == 0) {
+            sendError(r, "Sync not configured");
+            return;
+        }
+        
+        // Try to connect to sync server
+        HTTPClient http;
+        String url = String(settingsManager.sync.kosyncUrl) + "/healthcheck";
+        http.begin(url);
+        int code = http.GET();
+        http.end();
+        
+        JsonDocument doc;
+        if (code == 200) {
+            doc["success"] = true;
+            doc["message"] = "Connected to sync server";
+        } else {
+            doc["success"] = false;
+            doc["error"] = "Server returned " + String(code);
+        }
+        
+        String response;
+        serializeJson(doc, response);
+        AsyncWebServerResponse* resp = r->beginResponse(200, "application/json", response);
+        addCORSHeaders(resp);
+        r->send(resp);
+        #else
+        sendError(r, "WiFi not available");
+        #endif
+    });
+    
+    // =========================================================================
+    // Reading Statistics API
+    // =========================================================================
+    
+    // GET /api/stats - Get reading statistics
+    _server.on("/api/stats", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        JsonDocument doc;
+        
+        // Load stats from file
+        File f = SD.open("/.sumi/reading_stats.bin", FILE_READ);
+        if (f) {
+            uint32_t magic, totalPages, totalMinutes, booksFinished;
+            f.read((uint8_t*)&magic, 4);
+            f.read((uint8_t*)&totalPages, 4);
+            f.read((uint8_t*)&totalMinutes, 4);
+            f.read((uint8_t*)&booksFinished, 4);
+            f.close();
+            
+            if (magic == 0x53544154) {  // "STAT"
+                doc["totalPagesRead"] = totalPages;
+                doc["totalMinutesRead"] = totalMinutes;
+                doc["totalHoursRead"] = totalMinutes / 60;
+                doc["booksFinished"] = booksFinished;
+            } else {
+                doc["totalPagesRead"] = 0;
+                doc["totalMinutesRead"] = 0;
+                doc["totalHoursRead"] = 0;
+                doc["booksFinished"] = 0;
+            }
+        } else {
+            doc["totalPagesRead"] = 0;
+            doc["totalMinutesRead"] = 0;
+            doc["totalHoursRead"] = 0;
+            doc["booksFinished"] = 0;
+        }
+        
+        String response;
+        serializeJson(doc, response);
+        AsyncWebServerResponse* resp = r->beginResponse(200, "application/json", response);
+        addCORSHeaders(resp);
+        r->send(resp);
+    });
+    
+    // DELETE /api/stats - Reset reading statistics
+    _server.on("/api/stats", HTTP_DELETE, [this](AsyncWebServerRequest* r) {
+        SD.remove("/.sumi/reading_stats.bin");
+        sendSuccess(r, "Statistics reset");
+    });
+    
+    // =========================================================================
     // Reader Settings API
     // =========================================================================
     _server.on("/api/reader/settings", HTTP_GET, [this](AsyncWebServerRequest* r) {
@@ -243,6 +426,7 @@ void SumiWebServer::setupAPIRoutes() {
         doc["lineHeight"] = settingsManager.reader.lineHeight;
         doc["margins"] = settingsManager.reader.margins;
         doc["paraSpacing"] = settingsManager.reader.paraSpacing;
+        doc["sceneBreakSpacing"] = settingsManager.reader.sceneBreakSpacing;
         doc["textAlign"] = settingsManager.reader.textAlign;
         doc["hyphenation"] = settingsManager.reader.hyphenation;
         doc["showProgress"] = settingsManager.reader.showProgress;
@@ -271,6 +455,7 @@ void SumiWebServer::setupAPIRoutes() {
             if (doc["lineHeight"].is<int>()) settingsManager.reader.lineHeight = doc["lineHeight"];
             if (doc["margins"].is<int>()) settingsManager.reader.margins = doc["margins"];
             if (doc["paraSpacing"].is<int>()) settingsManager.reader.paraSpacing = doc["paraSpacing"];
+            if (doc["sceneBreakSpacing"].is<int>()) settingsManager.reader.sceneBreakSpacing = doc["sceneBreakSpacing"];
             if (doc["textAlign"].is<int>()) settingsManager.reader.textAlign = doc["textAlign"];
             if (doc["hyphenation"].is<bool>()) settingsManager.reader.hyphenation = doc["hyphenation"];
             if (doc["showProgress"].is<bool>()) settingsManager.reader.showProgress = doc["showProgress"];
@@ -811,7 +996,6 @@ void SumiWebServer::handleStatus(AsyncWebServerRequest* request) {
     features["lockscreen"] = FEATURE_LOCKSCREEN;
     features["bluetooth"] = FEATURE_BLUETOOTH;
     features["games"] = FEATURE_GAMES;
-    features["lowMemory"] = SUMI_LOW_MEMORY;
     
     String response;
     serializeJson(doc, response);

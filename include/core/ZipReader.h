@@ -30,6 +30,21 @@
 // _archive is stored as void* to avoid including miniz.h here
 
 // =============================================================================
+// Pre-allocation Function (call early in setup() to avoid fragmentation)
+// =============================================================================
+void ZipReader_preallocateBuffer();
+
+// Free buffers to reclaim ~43KB for portal mode (call before starting portal)
+void ZipReader_freeBuffers();
+
+// Debug: Log current buffer status
+void ZipReader_logStatus();
+
+// Force reset in-use flags (call if buffers get stuck)
+void ZipReader_resetFlags();
+void ZipReader_freeBuffers();
+
+// =============================================================================
 // Streaming Callback Type
 // =============================================================================
 // Called with chunks of decompressed data

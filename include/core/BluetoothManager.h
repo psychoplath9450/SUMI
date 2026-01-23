@@ -86,6 +86,33 @@ enum class KeyboardLayout {
 };
 
 // =============================================================================
+// Page Turner Key Mapping
+// =============================================================================
+struct PageTurnerMapping {
+    uint8_t nextPageKey;        // HID keycode for next page (default: Right Arrow = 0x4F)
+    uint8_t prevPageKey;        // HID keycode for prev page (default: Left Arrow = 0x50)
+    uint8_t altNextKey;         // Alternative next (default: Space = 0x2C)
+    uint8_t altPrevKey;         // Alternative prev (default: Backspace = 0x2A)
+    bool enabled;
+    
+    PageTurnerMapping() :
+        nextPageKey(0x4F),      // Right Arrow
+        prevPageKey(0x50),      // Left Arrow
+        altNextKey(0x2C),       // Space
+        altPrevKey(0x2A),       // Backspace
+        enabled(true) {}
+    
+    // Common page turner button mappings
+    bool isNextPage(uint8_t keyCode) const {
+        return keyCode == nextPageKey || keyCode == altNextKey;
+    }
+    
+    bool isPrevPage(uint8_t keyCode) const {
+        return keyCode == prevPageKey || keyCode == altPrevKey;
+    }
+};
+
+// =============================================================================
 // Key Event
 // =============================================================================
 struct KeyEvent {
@@ -168,6 +195,12 @@ public:
     void setKeyboardLayout(KeyboardLayout layout) { _keyboardLayout = layout; }
     KeyboardLayout getKeyboardLayout() const { return _keyboardLayout; }
     
+    // Page Turner support
+    void setPageTurnerMapping(const PageTurnerMapping& mapping) { _pageTurnerMapping = mapping; }
+    const PageTurnerMapping& getPageTurnerMapping() const { return _pageTurnerMapping; }
+    void enablePageTurner(bool enable) { _pageTurnerMapping.enabled = enable; }
+    bool isPageTurnerEnabled() const { return _pageTurnerMapping.enabled; }
+    
     // State callback
     void setStateCallback(BTStateCallback cb) { _stateCallback = cb; }
     
@@ -204,6 +237,7 @@ private:
     // Keyboard
     KeyboardLayout _keyboardLayout;
     uint8_t _lastModifiers;
+    PageTurnerMapping _pageTurnerMapping;
     
     // Callbacks
     BTScanCallback _scanCallback;

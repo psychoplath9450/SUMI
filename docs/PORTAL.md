@@ -17,8 +17,12 @@ The web portal lets you configure Sumi from a browser. It's embedded in the firm
 
 - **WiFi** - scan and connect to networks
 - **Home screen** - pick which apps show up and in what order
-- **Display** - orientation, sleep timeout, refresh settings
-- **Reader** - font size, margins, line spacing (syncs with on-device settings)
+- **Display** - orientation, sleep timeout, refresh settings, boot to last book
+- **Reader** - font size, margins, line spacing, scene break spacing
+- **Reading Statistics** - view pages read, time spent, books finished
+- **KOReader Sync** - sync reading progress with other devices
+- **Bluetooth** - pair keyboards and page turners
+- **Backup/Restore** - export and import all settings
 
 ## How It Works
 

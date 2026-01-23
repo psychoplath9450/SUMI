@@ -12,6 +12,7 @@
 
 #include "plugins/Weather.h"
 #include "core/WiFiManager.h"
+#include "core/HomeScreen.h"  // For saveWeatherCache
 
 #if FEATURE_WEATHER
 
@@ -899,7 +900,7 @@ void WeatherApp::fetchWeather() {
         _forecast[i].tempLow = minTemps[i] | 0.0f;
         _forecast[i].weatherCode = codes[i] | 0;
         
-        const char* dateStr = dates[i] | "????-??-??";
+        const char* dateStr = dates[i] | "0000-00-00";
         int year, month, day;
         sscanf(dateStr, "%d-%d-%d", &year, &month, &day);
         
@@ -916,6 +917,10 @@ void WeatherApp::fetchWeather() {
     
     _hasData = true;
     _lastUpdate = millis();
+    
+    // Save weather to cache for home screen widget
+    saveWeatherCache(_currentTemp, _currentWeatherCode, _currentHumidity, 
+                     _currentWind, _location, _useCelsius);
     
     Serial.printf("[WEATHER] Got %d day forecast, current: %d, %.1f\n", 
                   FORECAST_DAYS, _currentWeatherCode, _currentTemp);

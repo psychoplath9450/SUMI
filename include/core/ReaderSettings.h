@@ -94,12 +94,12 @@ struct LibReaderSettings {
         fontSize = FontSize::MEDIUM;
         margins = MarginSize::NORMAL;
         lineSpacing = LineSpacing::NORMAL;
-        justifyText = true;
+        justifyText = true;  // Justified text by default
         showProgress = true;
         showChapterName = true;
         showBattery = true;
-        pagesPerFullRefresh = 30;   // Full refresh every 30 pages
-        pagesPerHalfRefresh = 10;   // Half refresh every 10 pages
+        pagesPerFullRefresh = 15;   // Full refresh every 15 pages
+        pagesPerHalfRefresh = 5;    // Half refresh every 5 pages
         memset(reserved, 0, sizeof(reserved));
     }
     
@@ -119,11 +119,12 @@ struct LibReaderSettings {
     }
     
     int getMarginPx() const {
+        // Side margins - status bar handled separately
         switch (margins) {
-            case MarginSize::NARROW: return 10;
-            case MarginSize::NORMAL: return 20;
-            case MarginSize::WIDE:   return 35;
-            default: return 20;
+            case MarginSize::NARROW: return 5;   // Minimal margins
+            case MarginSize::NORMAL: return 10;  // Default
+            case MarginSize::WIDE:   return 20;  // More white space
+            default: return 10;
         }
     }
     

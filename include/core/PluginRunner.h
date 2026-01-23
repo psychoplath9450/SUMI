@@ -42,7 +42,7 @@ inline void drawContent(T& plugin) {
 }
 
 /**
- * Perform a full refresh of the display
+ * Perform a full refresh of the display (with black flash to clear ghosting)
  */
 template<typename T>
 inline void doFullRefresh(T& plugin) {
@@ -55,11 +55,12 @@ inline void doFullRefresh(T& plugin) {
 }
 
 /**
- * Perform a partial refresh of the display
+ * Perform a partial refresh of the display (fast, no flash)
  */
 template<typename T>
 inline void doPartialRefresh(T& plugin) {
-    display.setFullWindow();
+    // Use setPartialWindow for smoother updates (like HomeScreen does)
+    display.setPartialWindow(0, 0, display.width(), display.height());
     display.firstPage();
     do {
         drawContent(plugin);
@@ -298,6 +299,71 @@ void runPluginWithUpdate(T& plugin, const char* title) {
         lastBtn = btn;
         delay(30);
     }
+}
+
+/**
+ * Run a continuous animation plugin
+ * 
+ * Suitable for real-time(ish) graphics demos that need continuous frame updates
+ * Optimized for e-paper at ~2Hz to avoid ghosting
+ * Examples: Cube3D, animation demos, demoscene experiments
+ * 
+ * Plugin requirements:
+ * - Must implement init(w, h)
+ * - Must implement draw() that handles its own partial refresh
+ * - Must implement drawFullScreen() for initial render
+ * - Must implement handleInput(btn) that returns false to exit
+ * - Must implement isRunning() to check if animation should continue
+ */
+template<typename T>
+void runPluginAnimation(T& plugin, const char* title) {
+    Serial.printf("[PLUGIN] Starting (animation): %s\n", title);
+    plugin.init(display.width(), display.height());
+    
+    // Initial full draw
+    plugin.drawFullScreen();
+    
+    Button lastBtn = BTN_NONE;
+    unsigned long lastFrameTime = 0;
+    const unsigned long FRAME_INTERVAL = 50;  // Check input at 20Hz, animation is self-throttled
+    
+    while (plugin.isRunning()) {
+        Button btn = readButton();
+        
+        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
+            Serial.printf("[PLUGIN] Button pressed: %d\n", btn);
+            powerManager.resetActivityTimer();
+            
+            // Handle power button - enter deep sleep
+            if (btn == BTN_POWER) {
+                Serial.println("[PLUGIN] Power button - entering deep sleep");
+                powerManager.enterDeepSleep();
+                return;
+            }
+            
+            // Let plugin handle input (including BACK)
+            bool consumed = plugin.handleInput(btn);
+            if (!consumed && btn == BTN_BACK) {
+                Serial.println("[PLUGIN] Animation exiting to home");
+                PluginDisplay::exitToHome();
+                return;
+            }
+        }
+        lastBtn = btn;
+        
+        // Let the plugin handle its own frame timing and partial refresh
+        // This is key for animations - they manage their own display updates
+        if (millis() - lastFrameTime >= FRAME_INTERVAL) {
+            plugin.draw();
+            lastFrameTime = millis();
+        }
+        
+        delay(10);  // Short delay to keep input responsive
+    }
+    
+    // Animation ended (isRunning() returned false)
+    Serial.println("[PLUGIN] Animation ended, returning to home");
+    PluginDisplay::exitToHome();
 }
 
 #endif // SUMI_PLUGIN_RUNNER_H

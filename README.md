@@ -7,12 +7,13 @@ Custom firmware for the Xteink X4
 
 ## ⚠️ Important: Read This First
 
-**This project is very much a work in progress.** If you're looking for a stable, daily-driver e-reader experience, this is not it. Seriously. Go use:
+**This project is a work in progress.** While the e-reader and most features work well, some things may still have bugs. If you run into issues:
 
-- **[ https://github.com/crosspoint-reader/crosspoint-reader.git )** - A more mature alternative firmware
-- **Factory firmware** - What came on your device, it actually works reliably
+- Check the [CHANGELOG](CHANGELOG.md) for recent fixes
+- File an issue on GitHub
+- Or just use the **factory firmware** that came on your device
 
-SUMI is a hobby project I've been hacking on. Some things work great. Some things crash. The e-reader functionality in particular needs a lot of work. I'm sharing it because maybe someone finds it interesting or wants to contribute, not because it's ready for real use.
+SUMI is an active hobby project focused on making the Xteink X4 more useful. I'm sharing it because it might be helpful to others with similar devices.
 
 **You have been warned.**
 
@@ -57,10 +58,11 @@ SUMI is custom firmware that turns your Xteink X4 into a little e-ink companion 
 
 - A customizable home screen with apps you choose
 - A web-based portal for configuration (no tiny screen menus!)
-- Weather display
-- Games (Chess, Sudoku, etc.)
-- Flashcards
-- An e-reader (non functional currently)
+- **E-Reader with bookmarks, reading stats, and progress sync**
+- Weather display with 7-day forecast
+- Games (Chess, Sudoku, Minesweeper, Solitaire, and more)
+- Spaced repetition Flashcards (FSRS algorithm)
+- Bluetooth page turner support
 - And other stuff
 
 The whole idea is that you configure everything through a nice web interface on your phone/computer rather than navigating menus with 5 buttons on a slow e-ink screen.
@@ -74,24 +76,27 @@ Let me be real about where things stand:
 ### ✅ Works Pretty Well
 
 - **The Portal** - The web configuration interface is actually nice. You connect to the device's WiFi, open a browser, and configure everything from there. This part I'm happy with.
+- **E-Reader / Library** - Read EPUBs and TXT files with bookmarks, reading statistics, and adjustable fonts/margins. Quick-open resumes your last book instantly.
 - **Weather App** - Connects to OpenWeatherMap, shows 7-day forecast, auto-detects your location. Works reliably.
 - **Home Screen** - Customizable grid of apps, shows time and battery. Solid.
-- **Games** - Chess and Sudoku work. They're simple but functional.
-- **Flashcards** - You can create decks through the portal and study them. Works fine.
+- **Games** - Chess, Sudoku, Minesweeper, Solitaire, Checkers. They're simple but functional.
+- **Flashcards** - Create decks through the portal and study them with FSRS spaced repetition. Works fine.
 - **Sleep/Wake** - Deep sleep works, wake-on-button works, battery life is good.
 - **First-Time Setup** - The setup wizard walks you through connecting to WiFi and accessing the portal.
+- **Backup/Restore** - Export and import all your settings from the portal.
 
 ### ⚠️ Works But Has Issues
 
-- **Time Sync** - Works but can cause brief delays on wake (3-5 seconds) while it connects to sync.
+- **Time Sync** - Works but syncs in background (non-blocking) after wake.
 - **File Uploads** - Portal file upload works but can be slow for large files.
 - **Notes App** - Basic functionality works but needs polish.
+- **KOReader Sync** - Infrastructure is in place but needs more testing.
+- **EPUB Images** - Beta support, simple images work but complex layouts may not.
 
 ### ❌ Needs Significant Work
 
-- **E-Reader / Library** - This is the big one. The EPUB renderer has memory issues and will crash on complex books. Simple public domain stuff (Alice in Wonderland, etc.) usually works. Anything with lots of formatting, images, or complex CSS? Good luck. I've been chasing memory leaks and rendering bugs for a while. This is the main reason I say don't use this as a daily driver.
 - **PDF Support** - Listed in the portal but barely functional. Don't expect this to work.
-- **Images App** - Only supports BMP format currently. The portal will let you upload JPG/PNG but the device can't actually display them (I know, I know, I need to fix the portal to stop lying about this).
+- **Images App** - Supports BMP and JPEG. PNG support coming soon.
 - **Maps** - Placeholder, not actually implemented.
 
 ---
@@ -234,16 +239,16 @@ Controls:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Home Screen | ✅ Working | Customizable grid, time/battery display |
+| Home Screen | ✅ Working | Customizable grid, time/battery display, widgets |
 | Portal | ✅ Working | Web-based configuration |
-| Weather | ✅ Working | 7-day forecast, auto-location |
+| Weather | ✅ Working | 7-day forecast, auto-location, widget display |
 | Chess | ✅ Working | Play against simple AI |
 | Sudoku | ✅ Working | Multiple difficulties |
 | Flashcards | ✅ Working | Create via portal, spaced repetition |
 | Checkers | ✅ Working | Basic implementation |
+| Library/Reader | ✅ Working | Bookmarks, reading stats, adjustable fonts |
 | Notes | ⚠️ Partial | Basic text notes |
-| Library/Reader | ❌ Unstable | Crashes on complex EPUBs |
-| Images | ⚠️ Partial | BMP only, needs work |
+| Images | ⚠️ Partial | BMP and JPEG formats |
 | Maps | ❌ Not Done | Placeholder only |
 
 ---
@@ -252,17 +257,15 @@ Controls:
 
 Things I know are broken that I haven't fixed yet:
 
-1. **EPUB renderer crashes on complex books** - Memory issues with large files or complex CSS. This is the #1 problem.
+1. **Complex EPUBs** - Very complex EPUBs with lots of CSS may still cause issues. Stick to simpler books.
 
-2. **Portal shows wrong supported formats** - Says it accepts JPG/PNG for images but device only renders BMP. Misleading and annoying.
+2. **Portal shows wrong supported formats** - Says it accepts JPG/PNG for images but device only renders BMP and JPEG. PNG not supported yet.
 
 3. **Time can be wrong after sleep** - If WiFi credentials aren't saved or network is unavailable, time won't sync.
 
-4. **Partial refresh ghosting** - E-ink partial refresh leaves artifacts. Need to do full refresh more often.
+4. **Partial refresh ghosting** - E-ink partial refresh leaves artifacts. Full refresh happens periodically to clear.
 
-5. **No bookmark sync** - Reading position is saved but there's no cloud sync or anything.
-
-6. **Portal needs internet** - Uses CDN-hosted fonts/icons. Doesn't work fully offline.
+5. **Portal needs internet** - Uses CDN-hosted fonts/icons. Doesn't work fully offline.
 
 ---
 

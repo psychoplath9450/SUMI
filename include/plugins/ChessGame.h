@@ -4,7 +4,7 @@
 /**
  * @file ChessGame.h
  * @brief Full-featured Chess for Sumi e-reader with bitmap pieces
- * @version 2.1.16
+ * @version 2.2.0
  *
  * Features:
  * - 16x16 bitmap piece graphics
@@ -14,12 +14,14 @@
  * - Minimax AI with alpha-beta pruning (depth 3)
  * - Full chess rules: castling, en passant, promotion
  * - Check/checkmate/stalemate detection
+ * - Save/Resume game functionality
  */
 
 #include "config.h"
 #if FEATURE_GAMES
 
 #include <Arduino.h>
+#include <SD.h>
 #include <GxEPD2_BW.h>
 #include "core/PluginHelpers.h"
 
@@ -176,6 +178,25 @@ struct Move {
 };
 
 // =============================================================================
+// Saved Game Structure
+// =============================================================================
+#define CHESS_SAVE_PATH "/.sumi/chess_save.bin"
+
+struct ChessSaveData {
+    uint32_t magic = 0x43485353;  // "CHSS"
+    uint8_t version = 1;
+    int8_t board[8][8];
+    bool whiteTurn;
+    bool wCastleK, wCastleQ, bCastleK, bCastleQ;
+    int8_t epCol;
+    int16_t moveNum;
+    Move lastMove;
+    uint8_t reserved[16];
+    
+    bool isValid() const { return magic == 0x43485353 && version == 1; }
+};
+
+// =============================================================================
 // Chess Game Class
 // =============================================================================
 class ChessGame {
@@ -211,7 +232,12 @@ public:
     bool dirtySquares[8][8];
     bool anyDirty;
     
-    ChessGame() { newGame(); }
+    // Save/Resume state
+    enum MenuState { MENU_NONE, MENU_RESUME_PROMPT };
+    MenuState menuState;
+    int menuCursor;  // 0 = Yes, 1 = No
+    
+    ChessGame() { menuState = MENU_NONE; menuCursor = 0; newGame(); }
     
     void init(int w, int h) {
         screenW = w;
@@ -235,7 +261,104 @@ public:
         boardY = headerH + (availH - boardSize) / 2;
         
         Serial.printf("[CHESS] Cell: %d, Board at: %d,%d\n", cellSize, boardX, boardY);
-        newGame();
+        
+        // Check for saved game
+        if (hasSavedGame()) {
+            menuState = MENU_RESUME_PROMPT;
+            menuCursor = 0;
+            needsFullRedraw = true;
+        } else {
+            newGame();
+        }
+    }
+    
+    // =========================================================================
+    // Save/Load Functions
+    // =========================================================================
+    bool hasSavedGame() {
+        return SD.exists(CHESS_SAVE_PATH);
+    }
+    
+    bool saveGame() {
+        SD.mkdir("/.sumi");
+        File f = SD.open(CHESS_SAVE_PATH, FILE_WRITE);
+        if (!f) {
+            Serial.println("[CHESS] Failed to open save file");
+            return false;
+        }
+        
+        ChessSaveData save;
+        memcpy(save.board, board, sizeof(board));
+        save.whiteTurn = whiteTurn;
+        save.wCastleK = wCastleK;
+        save.wCastleQ = wCastleQ;
+        save.bCastleK = bCastleK;
+        save.bCastleQ = bCastleQ;
+        save.epCol = epCol;
+        save.moveNum = moveNum;
+        save.lastMove = lastMove;
+        memset(save.reserved, 0, sizeof(save.reserved));
+        
+        f.write((uint8_t*)&save, sizeof(ChessSaveData));
+        f.close();
+        
+        Serial.printf("[CHESS] Game saved (move %d)\n", moveNum);
+        return true;
+    }
+    
+    bool loadGame() {
+        File f = SD.open(CHESS_SAVE_PATH, FILE_READ);
+        if (!f) {
+            Serial.println("[CHESS] No save file found");
+            return false;
+        }
+        
+        ChessSaveData save;
+        f.read((uint8_t*)&save, sizeof(ChessSaveData));
+        f.close();
+        
+        if (!save.isValid()) {
+            Serial.println("[CHESS] Invalid save file");
+            deleteSavedGame();
+            return false;
+        }
+        
+        memcpy(board, save.board, sizeof(board));
+        whiteTurn = save.whiteTurn;
+        wCastleK = save.wCastleK;
+        wCastleQ = save.wCastleQ;
+        bCastleK = save.bCastleK;
+        bCastleQ = save.bCastleQ;
+        epCol = save.epCol;
+        moveNum = save.moveNum;
+        lastMove = save.lastMove;
+        
+        // Reset UI state
+        curR = 6; curC = 4;
+        prevCurR = curR; prevCurC = curC;
+        selR = selC = -1;
+        hasSel = false;
+        aiThinking = false;
+        inCheck = gameOver = checkmate = stalemate = false;
+        
+        memset(validMoves, 0, sizeof(validMoves));
+        memset(dirtySquares, 0, sizeof(dirtySquares));
+        anyDirty = false;
+        needsFullRedraw = true;
+        
+        // Update game state (check detection)
+        updateGameState();
+        
+        Serial.printf("[CHESS] Game loaded (move %d, %s to move)\n", 
+                      moveNum, whiteTurn ? "white" : "black");
+        return true;
+    }
+    
+    void deleteSavedGame() {
+        if (SD.exists(CHESS_SAVE_PATH)) {
+            SD.remove(CHESS_SAVE_PATH);
+            Serial.println("[CHESS] Save file deleted");
+        }
     }
     
     void newGame() {
@@ -280,17 +403,51 @@ public:
             return false;
         }
         
-        Serial.printf("[CHESS] handleInput: btn=%d, curR=%d, curC=%d, hasSel=%d\n", 
-                      btn, curR, curC, hasSel);
+        Serial.printf("[CHESS] handleInput: btn=%d, menuState=%d, curR=%d, curC=%d\n", 
+                      btn, (int)menuState, curR, curC);
         
-        // Use raw buttons directly - no remapping needed
-        // This matches the main menu behavior in portrait mode:
-        // UP = move up, DOWN = move down, LEFT = move left, RIGHT = move right
+        // Handle menu states first
+        if (menuState == MENU_RESUME_PROMPT) {
+            switch (btn) {
+                case BTN_LEFT:
+                case BTN_RIGHT:
+                    menuCursor = 1 - menuCursor;  // Toggle Yes/No
+                    needsFullRedraw = true;
+                    return true;
+                case BTN_CONFIRM:
+                    if (menuCursor == 0) {
+                        // Resume saved game
+                        loadGame();
+                        deleteSavedGame();  // Delete after loading
+                    } else {
+                        // Start new game
+                        deleteSavedGame();
+                        newGame();
+                    }
+                    menuState = MENU_NONE;
+                    needsFullRedraw = true;
+                    return true;
+                case BTN_BACK:
+                    // Start new game on back
+                    deleteSavedGame();
+                    newGame();
+                    menuState = MENU_NONE;
+                    needsFullRedraw = true;
+                    return true;
+                default:
+                    return true;
+            }
+        }
         
+        // Normal game input
         if (gameOver) {
-            if (btn == BTN_CONFIRM) { newGame(); return true; }
+            if (btn == BTN_CONFIRM) { 
+                deleteSavedGame();  // Clear any old save
+                newGame(); 
+                return true; 
+            }
             if (btn == BTN_BACK) return false;
-            return true;  // Consume other buttons while showing game over
+            return true;
         }
         
         prevCurR = curR;
@@ -323,7 +480,8 @@ public:
                     memset(validMoves, 0, sizeof(validMoves));
                     return true;
                 }
-                Serial.println("[CHESS] BACK pressed, exiting");
+                // Just exit - game is auto-saved after every move
+                Serial.println("[CHESS] BACK pressed, exiting (auto-saved)");
                 return false;
             default: return false;
         }
@@ -408,9 +566,14 @@ public:
                 updateGameState();
                 Serial.printf("[CHESS] Move complete, gameOver=%d, inCheck=%d\n", gameOver, inCheck);
                 
+                // Auto-save after player move
                 if (!gameOver) {
+                    saveGame();
                     aiThinking = true;
                     Serial.println("[CHESS] AI thinking...");
+                } else {
+                    // Game over - delete save file
+                    deleteSavedGame();
                 }
                 needsFullRedraw = true;  // Refresh for status update
                 return true;
@@ -474,6 +637,14 @@ public:
             
             updateGameState();
             aiThinking = false;
+            
+            // Auto-save after AI move (or delete if game over)
+            if (gameOver) {
+                deleteSavedGame();
+            } else {
+                saveGame();
+            }
+            
             needsFullRedraw = true;
             return true;
         }
@@ -613,6 +784,73 @@ public:
         char coord[4] = { (char)('a' + curC), (char)('8' - curR), '\0' };
         display.setCursor(screenW - 90, footerY);
         display.printf("Move %d %s", moveNum, coord);
+        
+        // Draw menu dialogs on top
+        if (menuState != MENU_NONE) {
+            drawMenuDialog();
+        }
+    }
+    
+    void drawMenuDialog() {
+        // Dialog dimensions
+        int dialogW = 280;
+        int dialogH = 120;
+        int dialogX = (screenW - dialogW) / 2;
+        int dialogY = (screenH - dialogH) / 2;
+        
+        // Draw dialog background with border
+        display.fillRect(dialogX, dialogY, dialogW, dialogH, GxEPD_WHITE);
+        display.drawRect(dialogX, dialogY, dialogW, dialogH, GxEPD_BLACK);
+        display.drawRect(dialogX + 2, dialogY + 2, dialogW - 4, dialogH - 4, GxEPD_BLACK);
+        
+        display.setFont(&FreeSansBold12pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        
+        // Title
+        const char* title = "Resume Game?";
+        int16_t tx, ty; uint16_t tw, th;
+        display.getTextBounds(title, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor(dialogX + (dialogW - tw) / 2, dialogY + 35);
+        display.print(title);
+        
+        // Subtitle
+        display.setFont(&FreeSans9pt7b);
+        const char* subtitle = "Found a saved game";
+        display.getTextBounds(subtitle, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor(dialogX + (dialogW - tw) / 2, dialogY + 55);
+        display.print(subtitle);
+        
+        // Buttons
+        int btnW = 80;
+        int btnH = 32;
+        int btnY = dialogY + dialogH - 45;
+        int btnSpacing = 30;
+        int yesX = dialogX + (dialogW / 2) - btnW - (btnSpacing / 2);
+        int noX = dialogX + (dialogW / 2) + (btnSpacing / 2);
+        
+        // Yes button
+        if (menuCursor == 0) {
+            display.fillRoundRect(yesX, btnY, btnW, btnH, 4, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+        } else {
+            display.drawRoundRect(yesX, btnY, btnW, btnH, 4, GxEPD_BLACK);
+            display.setTextColor(GxEPD_BLACK);
+        }
+        display.setCursor(yesX + 25, btnY + 22);
+        display.print("Yes");
+        
+        // No button
+        if (menuCursor == 1) {
+            display.fillRoundRect(noX, btnY, btnW, btnH, 4, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+        } else {
+            display.drawRoundRect(noX, btnY, btnW, btnH, 4, GxEPD_BLACK);
+            display.setTextColor(GxEPD_BLACK);
+        }
+        display.setCursor(noX + 28, btnY + 22);
+        display.print("No");
+        
+        display.setTextColor(GxEPD_BLACK);
     }
     
     void drawSquare(int r, int c) {
@@ -1052,6 +1290,7 @@ public:
             gameOver = true;
             checkmate = inCheck;
             stalemate = !inCheck;
+            deleteSavedGame();  // Clear save when game ends
         }
     }
     

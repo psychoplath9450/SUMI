@@ -66,12 +66,26 @@ bool EpubParser::open(const String& path) {
         }
     }
     
-    // Parse container.xml to find OPF
+    // Parse container.xml to find OPF path (stores in _opfPath member)
     if (!parseContainer()) {
         if (_sourceType == EpubSourceType::ZIP_FILE) {
             epubZip.close();
         }
         return false;
+    }
+    
+    // Now parse OPF separately - this reduces stack depth
+    // parseContainer's stack is freed before parseOPF allocates
+    if (!parseOPF(_opfPath)) {
+        if (_sourceType == EpubSourceType::ZIP_FILE) {
+            epubZip.close();
+        }
+        return false;
+    }
+    
+    // Parse NCX for chapter titles (optional, after OPF stack is freed)
+    if (_ncxPath.length() > 0) {
+        parseNCX(_ncxPath);
     }
     
     _isOpen = true;
@@ -97,6 +111,7 @@ void EpubParser::close() {
     _contentBasePath = "";
     _ncxPath = "";
     _coverImagePath = "";
+    _opfPath = "";
 }
 
 // =============================================================================
@@ -219,8 +234,7 @@ int EpubParser::getChapterForToc(int tocIndex) const {
 
 bool EpubParser::parseContainer() {
     // Read META-INF/container.xml
-    String containerPath = "META-INF/container.xml";
-    String container = readFile(containerPath);
+    String container = readFile("META-INF/container.xml");
     
     if (container.length() == 0) {
         _error = "Cannot read container.xml";
@@ -234,17 +248,19 @@ bool EpubParser::parseContainer() {
         return false;
     }
     
-    // Extract full-path attribute
-    String opfPath = extractAttribute(container.substring(rfStart), "full-path");
-    if (opfPath.length() == 0) {
+    // Extract full-path attribute and store in member variable
+    // This allows container String to be freed before parseOPF runs
+    _opfPath = extractAttribute(container.substring(rfStart), "full-path");
+    if (_opfPath.length() == 0) {
         _error = "No full-path in rootfile";
         return false;
     }
     
-    Serial.printf("[EPUB] OPF path: %s\n", opfPath.c_str());
+    Serial.printf("[EPUB] OPF path: %s\n", _opfPath.c_str());
     
-    // Parse OPF
-    return parseOPF(opfPath);
+    // Don't call parseOPF here - let open() call it after this returns
+    // This reduces stack depth
+    return true;
 }
 
 // =============================================================================
@@ -425,10 +441,8 @@ bool EpubParser::parseOPF(const String& opfPath) {
         }
     }
     
-    // Parse NCX for proper chapter titles
-    if (_ncxPath.length() > 0) {
-        parseNCX(_ncxPath);
-    }
+    // Don't parse NCX here - let open() call it after parseOPF returns
+    // This reduces stack depth further
     
     return _chapters.size() > 0;
 }

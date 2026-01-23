@@ -21,6 +21,106 @@ extern "C" {
 }
 
 // =============================================================================
+// Pre-allocated Decompression Buffers (avoids heap fragmentation)
+// =============================================================================
+// TINFL_LZ_DICT_SIZE is 32768 (32KB)
+// tinfl_decompressor is ~11KB
+// We MUST allocate these at boot before heap fragments
+// Without this, cover extraction and EPUB reading will fail
+static uint8_t* _sharedDictBuffer = nullptr;
+static bool _dictBufferInUse = false;
+static tinfl_decompressor* _sharedDecompressor = nullptr;
+static bool _decompressorInUse = false;
+
+// Call this EARLY in setup() - before display init - to pre-allocate
+void ZipReader_preallocateBuffer() {
+    if (_sharedDictBuffer != nullptr && _sharedDecompressor != nullptr) {
+        Serial.printf("[ZIP] Buffers already allocated: dict=%p, decomp=%p\n", 
+                      _sharedDictBuffer, _sharedDecompressor);
+        return;  // Already allocated
+    }
+    
+    int freeHeap = ESP.getFreeHeap();
+    Serial.printf("[ZIP] Attempting to pre-allocate buffers (heap=%d)\n", freeHeap);
+    
+    // Pre-allocate 32KB dictionary buffer
+    if (_sharedDictBuffer == nullptr) {
+        _sharedDictBuffer = (uint8_t*)malloc(TINFL_LZ_DICT_SIZE);
+        if (_sharedDictBuffer) {
+            memset(_sharedDictBuffer, 0, TINFL_LZ_DICT_SIZE);  // Initialize to zero
+            Serial.printf("[ZIP] Pre-allocated 32KB dictionary buffer at %p\n", _sharedDictBuffer);
+        } else {
+            Serial.printf("[ZIP] CRITICAL: Failed to pre-allocate dictionary buffer! (heap=%d, need=%d)\n",
+                          ESP.getFreeHeap(), TINFL_LZ_DICT_SIZE);
+        }
+    }
+    
+    // Pre-allocate ~11KB decompressor
+    if (_sharedDecompressor == nullptr) {
+        _sharedDecompressor = tinfl_decompressor_alloc();
+        if (_sharedDecompressor) {
+            Serial.printf("[ZIP] Pre-allocated decompressor (~11KB) at %p\n", _sharedDecompressor);
+        } else {
+            Serial.println("[ZIP] CRITICAL: Failed to pre-allocate decompressor!");
+        }
+    }
+    
+    // Reset in-use flags to ensure clean state
+    _dictBufferInUse = false;
+    _decompressorInUse = false;
+    
+    if (!_sharedDictBuffer || !_sharedDecompressor) {
+        Serial.println("[ZIP] EPUB reading may fail due to heap fragmentation");
+    } else {
+        Serial.printf("[ZIP] Pre-allocation complete. Heap: %d -> %d (used ~43KB)\n",
+                      freeHeap, ESP.getFreeHeap());
+    }
+}
+
+// Free ZIP buffers to reclaim ~43KB for portal mode
+void ZipReader_freeBuffers() {
+    if (_dictBufferInUse || _decompressorInUse) {
+        Serial.println("[ZIP] WARNING: Cannot free buffers - in use!");
+        return;
+    }
+    
+    if (_sharedDictBuffer) {
+        free(_sharedDictBuffer);
+        _sharedDictBuffer = nullptr;
+        Serial.println("[ZIP] Freed 32KB dictionary buffer");
+    }
+    
+    if (_sharedDecompressor) {
+        tinfl_decompressor_free(_sharedDecompressor);
+        _sharedDecompressor = nullptr;
+        Serial.println("[ZIP] Freed ~11KB decompressor");
+    }
+    
+    Serial.printf("[ZIP] Buffers freed, heap now: %d\n", ESP.getFreeHeap());
+}
+
+// Log current buffer status for debugging
+void ZipReader_logStatus() {
+    Serial.println("[ZIP] ========== Buffer Status ==========");
+    Serial.printf("[ZIP] Dictionary: ptr=%p, inUse=%d\n", _sharedDictBuffer, _dictBufferInUse);
+    Serial.printf("[ZIP] Decompressor: ptr=%p, inUse=%d\n", _sharedDecompressor, _decompressorInUse);
+    Serial.printf("[ZIP] Heap free: %d bytes\n", ESP.getFreeHeap());
+    Serial.println("[ZIP] =====================================");
+}
+
+// Force reset in-use flags (recovery mechanism)
+void ZipReader_resetFlags() {
+    if (_dictBufferInUse || _decompressorInUse) {
+        Serial.println("[ZIP] WARNING: Force-resetting in-use flags!");
+        Serial.printf("[ZIP] Before: dictInUse=%d, decompInUse=%d\n", 
+                      _dictBufferInUse, _decompressorInUse);
+    }
+    _dictBufferInUse = false;
+    _decompressorInUse = false;
+    Serial.println("[ZIP] In-use flags reset to false");
+}
+
+// =============================================================================
 // Constructor / Destructor
 // =============================================================================
 
@@ -304,12 +404,8 @@ bool ZipReader::readFileToBuffer(const String& innerPath, uint8_t** outData, siz
     size_t compSize = (size_t)stat.m_comp_size;
     size_t uncompSize = (size_t)stat.m_uncomp_size;
     
-    // Size limit for ESP32-C3 (64KB max per file)
-    #ifdef SUMI_LOW_MEMORY
-    const size_t MAX_FILE_SIZE = 64 * 1024;
-    #else
+    // Size limit for file decompression
     const size_t MAX_FILE_SIZE = 256 * 1024;
-    #endif
     
     if (uncompSize > MAX_FILE_SIZE) {
         Serial.printf("[ZIP] File too large: %s (%d bytes, max %d)\n", 
@@ -364,17 +460,39 @@ bool ZipReader::readFileToBuffer(const String& innerPath, uint8_t** outData, siz
             return false;
         }
         
-        // Decompress using tinfl
-        tinfl_decompressor inflator;
-        tinfl_init(&inflator);
+        // Use pre-allocated decompressor (~11KB - too big for stack or dynamic alloc)
+        tinfl_decompressor* inflator = nullptr;
+        bool usingSharedDecompressor = false;
+        
+        if (_sharedDecompressor != nullptr && !_decompressorInUse) {
+            inflator = _sharedDecompressor;
+            _decompressorInUse = true;
+            usingSharedDecompressor = true;
+        } else {
+            inflator = tinfl_decompressor_alloc();
+            if (!inflator) {
+                _error = "Failed to allocate decompressor";
+                free(compData);
+                free(data);
+                fclose(file);
+                return false;
+            }
+        }
+        tinfl_init(inflator);
         
         size_t inBytes = compSize;
         size_t outBytes = uncompSize;
         
-        tinfl_status status = tinfl_decompress(&inflator, compData, &inBytes,
+        tinfl_status status = tinfl_decompress(inflator, compData, &inBytes,
                                                data, data, &outBytes,
                                                TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
         
+        // Release decompressor
+        if (usingSharedDecompressor) {
+            _decompressorInUse = false;
+        } else {
+            tinfl_decompressor_free(inflator);
+        }
         free(compData);
         
         success = (status == TINFL_STATUS_DONE);
@@ -496,11 +614,23 @@ bool ZipReader::streamFileTo(const String& innerPath, Print& output, size_t chun
 
 bool ZipReader::inflateStream(FILE* file, size_t compSize, size_t uncompSize,
                                ZipStreamCallback callback, size_t chunkSize) {
-    // Allocate decompressor
-    tinfl_decompressor* inflator = (tinfl_decompressor*)malloc(sizeof(tinfl_decompressor));
-    if (!inflator) {
-        _error = "Failed to allocate decompressor";
-        return false;
+    // Use pre-allocated decompressor (~11KB - too big for stack or dynamic alloc)
+    tinfl_decompressor* inflator = nullptr;
+    bool usingSharedDecompressor = false;
+    
+    if (_sharedDecompressor != nullptr && !_decompressorInUse) {
+        inflator = _sharedDecompressor;
+        _decompressorInUse = true;
+        usingSharedDecompressor = true;
+        Serial.println("[ZIP] Using pre-allocated decompressor");
+    } else {
+        // Fall back to dynamic allocation
+        inflator = tinfl_decompressor_alloc();
+        if (!inflator) {
+            _error = "Failed to allocate decompressor";
+            return false;
+        }
+        Serial.println("[ZIP] Allocated new decompressor");
     }
     tinfl_init(inflator);
     
@@ -508,17 +638,54 @@ bool ZipReader::inflateStream(FILE* file, size_t compSize, size_t uncompSize,
     uint8_t* inBuffer = (uint8_t*)malloc(chunkSize);
     if (!inBuffer) {
         _error = "Failed to allocate input buffer";
-        free(inflator);
+        if (usingSharedDecompressor) {
+            _decompressorInUse = false;
+        } else {
+            tinfl_decompressor_free(inflator);
+        }
         return false;
     }
     
     // Output buffer (LZ77 dictionary - must be TINFL_LZ_DICT_SIZE = 32KB)
-    uint8_t* outBuffer = (uint8_t*)malloc(TINFL_LZ_DICT_SIZE);
-    if (!outBuffer) {
-        _error = "Failed to allocate dictionary buffer";
-        free(inBuffer);
-        free(inflator);
-        return false;
+    // Try to use pre-allocated buffer first to avoid fragmentation
+    uint8_t* outBuffer = nullptr;
+    bool usingSharedBuffer = false;
+    
+    Serial.printf("[ZIP] Dict buffer state: ptr=%p, inUse=%d, heap=%d\n", 
+                  _sharedDictBuffer, _dictBufferInUse, ESP.getFreeHeap());
+    
+    if (_sharedDictBuffer != nullptr && !_dictBufferInUse) {
+        outBuffer = _sharedDictBuffer;
+        _dictBufferInUse = true;
+        usingSharedBuffer = true;
+        Serial.println("[ZIP] Using pre-allocated dictionary buffer");
+    } else {
+        // Log why we're not using pre-allocated buffer
+        if (_sharedDictBuffer == nullptr) {
+            Serial.println("[ZIP] WARN: No pre-allocated dictionary buffer!");
+        } else if (_dictBufferInUse) {
+            Serial.println("[ZIP] WARN: Dictionary buffer already in use - attempting re-allocation");
+            // Try to force-release if stuck (recovery mechanism)
+            // This shouldn't happen but provides resilience
+        }
+        
+        // Fall back to dynamic allocation
+        Serial.printf("[ZIP] Attempting malloc(%d) with %d heap free\n", 
+                      TINFL_LZ_DICT_SIZE, ESP.getFreeHeap());
+        outBuffer = (uint8_t*)malloc(TINFL_LZ_DICT_SIZE);
+        if (!outBuffer) {
+            _error = "Failed to allocate dictionary buffer";
+            Serial.printf("[ZIP] ERROR: %s (heap=%d, need=%d)\n", 
+                          _error.c_str(), ESP.getFreeHeap(), TINFL_LZ_DICT_SIZE);
+            free(inBuffer);
+            if (usingSharedDecompressor) {
+                _decompressorInUse = false;
+            } else {
+                tinfl_decompressor_free(inflator);
+            }
+            return false;
+        }
+        Serial.println("[ZIP] Allocated new dictionary buffer");
     }
     memset(outBuffer, 0, TINFL_LZ_DICT_SIZE);
     
@@ -578,9 +745,20 @@ bool ZipReader::inflateStream(FILE* file, size_t compSize, size_t uncompSize,
         }
     }
     
-    free(outBuffer);
+    // Only free if we dynamically allocated (not the shared buffer)
+    if (usingSharedBuffer) {
+        _dictBufferInUse = false;  // Release shared buffer for reuse
+    } else {
+        free(outBuffer);
+    }
     free(inBuffer);
-    free(inflator);
+    
+    // Release decompressor
+    if (usingSharedDecompressor) {
+        _decompressorInUse = false;  // Release shared decompressor for reuse
+    } else {
+        tinfl_decompressor_free(inflator);
+    }
     
     return success;
 }

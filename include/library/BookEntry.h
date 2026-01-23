@@ -12,14 +12,9 @@
 
 namespace Library {
 
-// Memory limits based on device capabilities
-#if SUMI_LOW_MEMORY
-    constexpr int MAX_BOOKS = 50;
-    constexpr int TEXT_BUFFER_SIZE = 4096;
-#else
-    constexpr int MAX_BOOKS = 200;
-    constexpr int TEXT_BUFFER_SIZE = 16384;
-#endif
+// Memory limits
+constexpr int MAX_BOOKS = 200;
+constexpr int TEXT_BUFFER_SIZE = 16384;
 
 /**
  * @brief Type of book file

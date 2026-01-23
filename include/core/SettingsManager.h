@@ -25,6 +25,12 @@ struct DisplaySettings {
     uint8_t clockStyle;         // 0=digital, 1=analog, 2=minimal
     uint8_t homeLayout;         // 0=grid, 1=list
     bool invertColors;          // Dark mode
+    bool bootToLastBook;        // NEW: Skip home screen, open last book
+    
+    // === Widget Visibility Settings ===
+    bool showBookWidget;        // Show book cover widget
+    bool showWeatherWidget;     // Show weather widget
+    bool showOrientWidget;      // Show orientation toggle widget
     
     // === Lock Screen Settings ===
     uint8_t lockStyle;          // 0=clock, 1=photo, 2=quote, 3=minimal
@@ -66,6 +72,7 @@ struct ReaderSettings {
     uint8_t lineHeight;         // 100-200 (stored as percentage, 150 = 1.5x)
     uint8_t margins;            // 5-40 pixels
     uint8_t paraSpacing;        // 0-30 pixels
+    uint8_t sceneBreakSpacing;  // NEW: Extra spacing for scene breaks (0-60 pixels)
     uint8_t textAlign;          // 0=left, 1=justify
     bool hyphenation;
     bool showProgress;          // Progress bar at bottom

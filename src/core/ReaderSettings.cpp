@@ -206,26 +206,26 @@ void LibReaderSettingsManager::applyToLayout(TextLayout& layout) {
     int lineHeight = _settings.getLineHeight();
     int paraSpacing = _settings.getParaSpacing();
     
+    // Calculate margins consistently with applyFontSettings in Library.h
+    const int statusBarHeight = 35;
+    int topMargin = marginPx + 5;
+    int bottomMargin = statusBarHeight + marginPx;
+    
     Serial.printf("[READER_SETTINGS] Applying to layout:\n");
     Serial.printf("[READER_SETTINGS]   marginPx=%d (setting=%d)\n", marginPx, (int)_settings.margins);
+    Serial.printf("[READER_SETTINGS]   margins: L/R=%d, T=%d, B=%d\n", marginPx, topMargin, bottomMargin);
     Serial.printf("[READER_SETTINGS]   lineHeight=%d\n", lineHeight);
     Serial.printf("[READER_SETTINGS]   paraSpacing=%d\n", paraSpacing);
     Serial.printf("[READER_SETTINGS]   justify=%d\n", _settings.justifyText);
     Serial.printf("[READER_SETTINGS]   fontSize=%d\n", (int)_settings.fontSize);
     
     // setMargins(left, right, top, bottom)
-    layout.setMargins(marginPx, marginPx, 10, 40);
+    layout.setMargins(marginPx, marginPx, topMargin, bottomMargin);
     layout.setLineHeight(lineHeight);
     layout.setParaSpacing(paraSpacing);
     layout.setJustify(_settings.justifyText);
     
     // Font selection based on size
-    // Note: On low-memory devices, only FreeSans9pt is available
-#if SUMI_LOW_MEMORY
-    // Always use 9pt on low memory
-    extern const GFXfont FreeSans9pt7b;
-    layout.setFont(&FreeSans9pt7b);
-#else
     extern const GFXfont FreeSans9pt7b;
     extern const GFXfont FreeSans12pt7b;
     
@@ -239,5 +239,4 @@ void LibReaderSettingsManager::applyToLayout(TextLayout& layout) {
             layout.setFont(&FreeSans12pt7b);
             break;
     }
-#endif
 }
