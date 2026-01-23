@@ -14,30 +14,16 @@ Custom firmware for the Xteink X4
 
 ---
 
-## 🚨 MAJOR DISCLAIMER - PLEASE READ
+## ⚠️ Important: Read This First
 
-**This is an experimental proof-of-concept, NOT a finished product.**
+**This project is a work in progress.** While the e-reader and most features work well, some things may still have bugs. If you run into issues:
 
-SUMI is essentially a framework and tech demo. It is:
+- Check the [CHANGELOG](CHANGELOG.md) for recent fixes
+- File an issue on GitHub
+- Or just use the **factory firmware** that came on your device
 
-- ❌ **NOT production ready**
-- ❌ **NOT polished or optimized**
-- ❌ **NOT a replacement for your Kindle/Kobo**
-- ❌ **NOT reliable enough for daily use**
+SUMI is an active hobby project focused on making the Xteink X4 more useful. I'm sharing it because it might be helpful to others with similar devices.
 
-**What to actually expect:**
-- Everything is **slow**. This is a hobby ESP32 project, not commercial firmware.
-- The UI is **glitchy**. Screen artifacts, visual bugs, and refresh issues are common.
-- The e-reader **barely works**. It will probably fail on most real-world EPUB files.
-- Features may be **half-implemented** or completely non-functional.
-- Things will **crash**. Memory is limited and the code is not bulletproof.
-- You **will** encounter bugs. Lots of them.
-
-If you're looking for a reliable e-reader experience, use the stock firmware or buy a Kindle. This project exists for tinkerers who want to experiment with ESP32 + e-ink development, not for people who want to actually read books comfortably.
-
-**You have been warned.**
-
----
 
 ## ⚠️ SD Card Folder Structure (REQUIRED)
 
@@ -77,75 +63,52 @@ SD Card Root/
 
 
 
-## What Is This?
+## What Even Is This?
 
-SUMI is an experimental custom firmware / framework for the Xteink X4. It's a playground for learning embedded development with e-ink displays.
+SUMI is custom firmware that turns your Xteink X4 into a little e-ink companion device with:
 
-**In theory**, it has:
-
-- A customizable home screen with widgets and apps
-- A web-based portal for configuration
-- E-Reader functionality
-- Weather display
-- Games (Chess, Sudoku, Minesweeper, Solitaire, Checkers)
-- Flashcards with FSRS algorithm
+- A customizable home screen with widgets and apps you choose
+- A web-based portal for configuration (no tiny screen menus!)
+- **E-Reader with bookmarks, reading stats, and progress sync**
+- Weather display with 7-day forecast
+- Games (Chess, Sudoku, Minesweeper, Solitaire, and more)
+- Spaced repetition Flashcards (FSRS algorithm)
 - Bluetooth page turner support
+- And other stuff
 
-**In practice**, most of these features are rough implementations that work sometimes, under ideal conditions, with simple test data. Real-world usage will likely be frustrating.
-
----
-
-## Honest Status Report
-
-Let me be brutally honest about where things stand:
-
-### 🟡 Somewhat Functional (but don't get excited)
-
-- **The Portal** - The web configuration interface is actually the most polished part. It works reasonably well. This is probably the only thing I'm not embarrassed about.
-- **Home Screen** - Shows apps, time, battery. It's basic but it works.
-- **Weather App** - Connects to OpenWeatherMap. Usually works if you have internet.
-- **Games** - Chess, Sudoku, etc. Simple but functional. These work okay since they're self-contained.
-- **Sleep/Wake** - Deep sleep works. Battery life is decent.
-- **First-Time Setup** - The setup wizard basically works.
-
-### 🟠 Barely Functional (manage expectations)
-
-- **E-Reader / Library** - This is where reality gets harsh:
-  - Will probably **fail on most EPUBs** you throw at it
-  - Only works reliably with **very simple** EPUB files
-  - Complex formatting, CSS, or embedded content = crashes or garbage rendering
-  - Memory constraints mean large books may not load at all
-  - Page turning is **slow**
-  - Text rendering is **glitchy**
-  - Don't expect bookmarks or progress tracking to work reliably
-  - **Seriously, this is not a usable e-reader.** It's a demo that sometimes displays text from simple files.
-- **Flashcards** - Basic functionality exists but it's rough around the edges.
-- **Notes App** - Extremely basic. Barely more than a text file viewer.
-- **File Uploads** - Works but slow. Large files may time out or fail.
-- **Time Sync** - Usually works. Sometimes doesn't.
-
-### 🔴 Non-Functional / Placeholder
-
-- **PDF Support** - Listed in the UI but essentially doesn't work. Forget about it.
-- **Images App** - BMP only. Limited functionality.
-- **Maps** - Complete placeholder. Does not work.
-- **EPUB Images** - Very broken. Simple inline images might display. Probably won't.
-- **KOReader Sync** - Infrastructure exists, actual functionality is untested/broken.
+The whole idea is that you configure everything through a nice web interface on your phone/computer rather than navigating menus with 5 buttons on a slow e-ink screen.
 
 ---
 
-## Performance Reality Check
+## The Good, The Bad, and The Crashy
 
-**Everything is slow.** This is an ESP32 with limited RAM running on a slow e-ink display. Expect:
+Let me be real about where things stand:
 
-- **2-5 second** delays when opening apps
-- **Noticeable lag** when navigating menus
-- **Screen ghosting** and refresh artifacts
-- **Multi-second** page turns in the e-reader
-- **Frequent full-screen refreshes** to clear ghosting (which are even slower)
-- **Random freezes** requiring a reboot
+### ✅ Works Pretty Well
 
-If you're used to commercial e-readers, this will feel painfully slow. That's just the nature of the hardware and my unoptimized code.
+- **The Portal** - The web configuration interface is actually nice. You connect to the device's WiFi, open a browser, and configure everything from there. This part I'm happy with.
+- **E-Reader / Library** - Read EPUBs and TXT files with bookmarks, reading statistics, and adjustable fonts/margins. Quick-open resumes your last book instantly.
+- **Weather App** - Connects to OpenWeatherMap, shows 7-day forecast, auto-detects your location. Works reliably.
+- **Home Screen** - Customizable grid of apps with widgets for current book and weather. Shows time and battery. Solid.
+- **Games** - Chess, Sudoku, Minesweeper, Solitaire, Checkers. They're simple but functional.
+- **Flashcards** - Create decks through the portal and study them with FSRS spaced repetition. Works fine.
+- **Sleep/Wake** - Deep sleep works, wake-on-button works, battery life is good.
+- **First-Time Setup** - The setup wizard walks you through connecting to WiFi and accessing the portal.
+- **Backup/Restore** - Export and import all your settings from the portal.
+
+### ⚠️ Works But Has Issues
+
+- **Time Sync** - Works but syncs in background (non-blocking) after wake.
+- **File Uploads** - Portal file upload works but can be slow for large files.
+- **Notes App** - Basic functionality works but needs polish.
+- **KOReader Sync** - Infrastructure is in place but needs more testing.
+- **EPUB Images** - Beta support, simple images work but complex layouts may not.
+
+### ❌ Needs Significant Work
+
+- **PDF Support** - Listed in the portal but barely functional. Don't expect this to work.
+- **Images App** - Supports BMP and JPEG. PNG support coming soon.
+- **Maps** - Placeholder, not actually implemented.
 
 ---
 
@@ -154,7 +117,6 @@ If you're used to commercial e-readers, this will feel painfully slow. That's ju
 - **MicroSD Card** - Required for storing books, images, settings. 8GB+ recommended.
 - **USB-C cable** - For flashing firmware
 - **A computer** - For flashing and using the portal
-- **Patience** - Lots of it
 
 ---
 
@@ -240,7 +202,7 @@ The portal lets you:
 - Adjust reader settings (font size, margins, line spacing)
 - Backup and restore your settings
 
-### E-Reader (Use With Low Expectations)
+### E-Reader
 
 <p align="center">
   <img src="docs/images/library_browser.jpg" width="280" alt="Library Browser">
@@ -248,19 +210,13 @@ The portal lets you:
   <img src="docs/images/reader_settings.jpg" width="280" alt="Reader Settings">
 </p>
 
-**Reality check:** This e-reader is a proof-of-concept. It might display text from simple EPUB files. That's about it.
-
-What sometimes works:
-- Loading very simple EPUBs with minimal formatting
-- Basic text display with adjustable font size
-- Page navigation (slowly)
-
-What probably won't work:
-- Most EPUBs you download from the internet
-- Books with complex CSS, tables, or formatting
-- Large books (memory limitations)
-- Reliable progress saving
-- Smooth reading experience
+Full EPUB and TXT support with:
+- Flippable cover browser for your library
+- Justified text with adjustable fonts, margins, and line spacing
+- Chapter navigation
+- Bookmarks and reading statistics
+- Progress tracking (chapter and page)
+- Quick-resume to your last position
 
 ### Weather
 
@@ -289,15 +245,13 @@ Controls:
 - **Solitaire** - Klondike solitaire
 - **Checkers** - Basic checkers
 
-(The games are actually the most reliable part of this firmware since they're self-contained and simple.)
-
 ### Flashcards
 
 <p align="center">
   <img src="docs/images/flashcards.jpg" width="350" alt="Flashcards">
 </p>
 
-Spaced repetition flashcards using the FSRS algorithm. Create decks through the portal with question/answer pairs, then study on the device. 
+Spaced repetition flashcards using the FSRS algorithm. Create decks through the portal with question/answer pairs, then study on the device. Tracks your progress and schedules reviews.
 
 ### Settings
 
@@ -309,45 +263,37 @@ Access WiFi settings, open the portal, adjust display settings, and reboot the d
 
 ---
 
-## Features Status
+## Features
 
-| Feature | Status | Reality |
-|---------|--------|---------|
-| Home Screen | 🟡 Basic | Works but slow |
-| Portal | 🟢 Functional | Actually decent |
-| E-Reader | 🔴 Barely Works | Fails on most EPUBs, extremely limited |
-| Weather | 🟡 Basic | Usually works |
-| Chess | 🟡 Basic | Works okay |
-| Sudoku | 🟡 Basic | Works okay |
-| Flashcards | 🟡 Basic | Rough but functional |
-| Checkers | 🟡 Basic | Works okay |
-| Notes | 🟠 Minimal | Very basic |
-| Images | 🔴 Limited | BMP only, barely functional |
-| Maps | 🔴 Placeholder | Does not work |
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Home Screen | ✅ Working | Customizable grid, widgets, time/battery display |
+| Portal | ✅ Working | Web-based configuration with live preview |
+| E-Reader | ✅ Working | EPUB/TXT, bookmarks, reading stats, adjustable fonts |
+| Weather | ✅ Working | 7-day forecast, auto-location, widget display |
+| Chess | ✅ Working | Play against simple AI |
+| Sudoku | ✅ Working | Multiple difficulties |
+| Flashcards | ✅ Working | Create via portal, FSRS spaced repetition |
+| Checkers | ✅ Working | Basic implementation |
+| Notes | ⚠️ Partial | Basic text notes |
+| Images | ⚠️ Partial | BMP and JPEG formats |
+| Maps | ❌ Not Done | Placeholder only |
 
 ---
 
-## Known Issues (There Are Many)
+## Known Issues
 
-1. **The e-reader will fail on most EPUBs** - This is the biggest issue. The parser is extremely limited.
+Things I know are broken that I haven't fixed yet:
 
-2. **Everything is slow** - Inherent limitation of the hardware and unoptimized code.
+1. **Complex EPUBs** - Very complex EPUBs with lots of CSS may still cause issues. Stick to simpler books.
 
-3. **Screen ghosting** - E-ink partial refresh leaves artifacts everywhere.
+2. **Portal shows wrong supported formats** - Says it accepts JPG/PNG for images but device only renders BMP and JPEG. PNG not supported yet.
 
-4. **Memory crashes** - Large files, complex EPUBs, or too many operations = crash.
+3. **Time can be wrong after sleep** - If WiFi credentials aren't saved or network is unavailable, time won't sync.
 
-5. **Complex EPUBs break everything** - CSS, tables, images, nested formatting = crash or garbage output.
+4. **Partial refresh ghosting** - E-ink partial refresh leaves artifacts. Full refresh happens periodically to clear.
 
-6. **Portal shows wrong supported formats** - UI says things are supported that aren't.
-
-7. **Time sync is unreliable** - Sometimes works, sometimes doesn't.
-
-8. **Portal needs internet** - Uses CDN-hosted fonts/icons. Doesn't work fully offline.
-
-9. **Random freezes** - Just restart the device.
-
-10. **Probably dozens more I haven't documented.**
+5. **Portal needs internet** - Uses CDN-hosted fonts/icons. Doesn't work fully offline.
 
 ---
 
@@ -403,16 +349,14 @@ pio run -t erase
 
 ## Contributing
 
-This project needs a lot of work. If you're into embedded development and want to help make a janky e-ink project less janky, PRs are welcome.
+Found a bug? Want to fix the EPUB renderer? PRs welcome.
 
-The code is rough. Really rough. This started as a learning project and it shows.
+The code is... not the cleanest. This started as a learning project and it shows. Don't judge too harshly.
 
-**Areas that desperately need help:**
-- **EPUB rendering** - The whole parser/renderer needs to be rewritten or replaced
-- **Memory management** - Leaks everywhere
-- **Image format support** - Proper decoding for common formats
-- **General stability** - Crash recovery, error handling
-- **Performance optimization** - Everything could be faster
+Areas that need the most help:
+- **EPUB rendering** - Memory management, complex CSS handling
+- **Image format support** - Adding proper JPG/PNG decoding
+- **General stability** - Memory leaks, crash recovery
 
 ---
 
@@ -432,10 +376,7 @@ MIT. Do whatever you want with it.
 
 ## Final Thoughts
 
-This is a hobby project. A learning exercise. A proof-of-concept that proves mostly that e-ink development is hard and EPUBs are complicated.
+This project exists because I wanted to learn embedded development and I like e-ink. It's not trying to compete with Kindle or Kobo or any other firmwares. It's just a thing I made.
 
-If you flash this expecting a polished experience, you will be disappointed. If you flash this expecting a buggy framework to tinker with and maybe learn something from, you might have some fun.
 
-**It is what it is.**
-
-Happy hacking (and debugging).
+Happy hacking.
