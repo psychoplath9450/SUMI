@@ -33,7 +33,7 @@ SUMI is essentially a framework and tech demo. It is:
 - Things will **crash**. Memory is limited and the code is not bulletproof.
 - You **will** encounter bugs. Lots of them.
 
-If you're looking for a reliable e-reader experience, use the stock firmware or buy a Kindle. This project exists for tinkerers who want to experiment with ESP32 + e-ink development, not for people who want to actually read books comfortably.
+If you're looking for a reliable e-reader experience, use the stock firmware or check out Crosspoint. This project exists for tinkerers who want to experiment with ESP32 + e-ink development, not for people who want to actually read books comfortably (for now atleast).
 
 **You have been warned.**
 
