@@ -944,53 +944,79 @@ public:
         int px = x + (cellSize - pieceW) / 2;
         int py = y + (cellSize - pieceH) / 2;
         
-        // Draw piece
-        for (int by = 0; by < bmpSize; by++) {
-            uint16_t row = (pgm_read_byte(&bitmap[by * 2]) << 8) | pgm_read_byte(&bitmap[by * 2 + 1]);
-            for (int bx = 0; bx < bmpSize; bx++) {
-                bool bit = (row >> (15 - bx)) & 1;
-                if (bit) {
-                    uint16_t color;
-                    if (isWhite) {
-                        // White pieces: white fill on dark, black outline on light
-                        color = onDark ? GxEPD_WHITE : GxEPD_BLACK;
-                    } else {
-                        // Black pieces: always black with white outline if on dark
-                        color = onDark ? GxEPD_WHITE : GxEPD_BLACK;
-                    }
-                    
-                    for (int sy = 0; sy < scale; sy++) {
-                        for (int sx = 0; sx < scale; sx++) {
-                            display.drawPixel(px + bx * scale + sx, py + by * scale + sy, color);
+        if (isWhite) {
+            // WHITE PIECES: solid fill with outline
+            // First pass: draw black outline
+            for (int by = 0; by < bmpSize; by++) {
+                uint16_t row = (pgm_read_byte(&bitmap[by * 2]) << 8) | pgm_read_byte(&bitmap[by * 2 + 1]);
+                for (int bx = 0; bx < bmpSize; bx++) {
+                    bool bit = (row >> (15 - bx)) & 1;
+                    if (bit) {
+                        uint16_t color = onDark ? GxEPD_WHITE : GxEPD_BLACK;
+                        for (int sy = 0; sy < scale; sy++) {
+                            for (int sx = 0; sx < scale; sx++) {
+                                display.drawPixel(px + bx * scale + sx, py + by * scale + sy, color);
+                            }
                         }
                     }
                 }
             }
-        }
-        
-        // For black pieces on light squares, fill interior
-        if (!isWhite && !onDark) {
-            // Already drawn black, good
-        }
-        
-        // For white pieces on light squares, draw outline then white interior
-        if (isWhite && !onDark) {
-            // Draw slightly smaller white fill
-            int inset = scale;
-            for (int by = 1; by < bmpSize - 1; by++) {
+            
+            // Second pass: fill interior with white (on light squares)
+            if (!onDark) {
+                for (int by = 1; by < bmpSize - 1; by++) {
+                    uint16_t row = (pgm_read_byte(&bitmap[by * 2]) << 8) | pgm_read_byte(&bitmap[by * 2 + 1]);
+                    for (int bx = 1; bx < bmpSize - 1; bx++) {
+                        bool bit = (row >> (15 - bx)) & 1;
+                        bool above = ((pgm_read_byte(&bitmap[(by-1) * 2]) << 8) | pgm_read_byte(&bitmap[(by-1) * 2 + 1])) >> (15 - bx) & 1;
+                        bool below = ((pgm_read_byte(&bitmap[(by+1) * 2]) << 8) | pgm_read_byte(&bitmap[(by+1) * 2 + 1])) >> (15 - bx) & 1;
+                        bool left = (row >> (15 - bx + 1)) & 1;
+                        bool right = (row >> (15 - bx - 1)) & 1;
+                        
+                        // Fill interior (surrounded by set bits)
+                        if (bit && above && below && left && right) {
+                            for (int sy = 0; sy < scale; sy++) {
+                                for (int sx = 0; sx < scale; sx++) {
+                                    display.drawPixel(px + bx * scale + sx, py + by * scale + sy, GxEPD_WHITE);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // BLACK PIECES: dithered/stippled pattern for "gray" appearance
+            for (int by = 0; by < bmpSize; by++) {
                 uint16_t row = (pgm_read_byte(&bitmap[by * 2]) << 8) | pgm_read_byte(&bitmap[by * 2 + 1]);
-                for (int bx = 1; bx < bmpSize - 1; bx++) {
+                for (int bx = 0; bx < bmpSize; bx++) {
                     bool bit = (row >> (15 - bx)) & 1;
-                    bool above = ((pgm_read_byte(&bitmap[(by-1) * 2]) << 8) | pgm_read_byte(&bitmap[(by-1) * 2 + 1])) >> (15 - bx) & 1;
-                    bool below = ((pgm_read_byte(&bitmap[(by+1) * 2]) << 8) | pgm_read_byte(&bitmap[(by+1) * 2 + 1])) >> (15 - bx) & 1;
-                    bool left = (row >> (15 - bx + 1)) & 1;
-                    bool right = (row >> (15 - bx - 1)) & 1;
-                    
-                    // Fill interior (surrounded by set bits)
-                    if (bit && above && below && left && right) {
+                    if (bit) {
+                        // Check if this is an edge pixel (for solid outline)
+                        bool above = (by > 0) ? ((pgm_read_byte(&bitmap[(by-1) * 2]) << 8) | pgm_read_byte(&bitmap[(by-1) * 2 + 1])) >> (15 - bx) & 1 : false;
+                        bool below = (by < bmpSize-1) ? ((pgm_read_byte(&bitmap[(by+1) * 2]) << 8) | pgm_read_byte(&bitmap[(by+1) * 2 + 1])) >> (15 - bx) & 1 : false;
+                        bool left = (bx > 0) ? (row >> (15 - bx + 1)) & 1 : false;
+                        bool right = (bx < bmpSize-1) ? (row >> (15 - bx - 1)) & 1 : false;
+                        bool isEdge = !above || !below || !left || !right;
+                        
                         for (int sy = 0; sy < scale; sy++) {
                             for (int sx = 0; sx < scale; sx++) {
-                                display.drawPixel(px + bx * scale + sx, py + by * scale + sy, GxEPD_WHITE);
+                                int screenX = px + bx * scale + sx;
+                                int screenY = py + by * scale + sy;
+                                
+                                if (isEdge) {
+                                    // Solid outline - contrasting color
+                                    display.drawPixel(screenX, screenY, onDark ? GxEPD_WHITE : GxEPD_BLACK);
+                                } else {
+                                    // Interior: checkerboard dither pattern for "gray"
+                                    bool dither = ((screenX + screenY) % 2 == 0);
+                                    if (onDark) {
+                                        // On dark square: white/dark checkerboard
+                                        display.drawPixel(screenX, screenY, dither ? GxEPD_WHITE : GxEPD_BLACK);
+                                    } else {
+                                        // On light square: black/white checkerboard
+                                        display.drawPixel(screenX, screenY, dither ? GxEPD_BLACK : GxEPD_WHITE);
+                                    }
+                                }
                             }
                         }
                     }

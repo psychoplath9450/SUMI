@@ -428,7 +428,7 @@ public:
         books.reserve(LIBRARY_MAX_BOOKS);
     }
     
-    void init(int w, int h, bool autoResume = true) {
+    void init(int w, int h, bool autoResume = false) {
         // Use the dimensions passed by the system (GxEPD2 handles rotation)
         screenW = w;
         screenH = h;

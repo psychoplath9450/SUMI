@@ -3,6 +3,15 @@
 **Ink, Simplified.**
 
 Custom firmware for the Xteink X4
+
+---
+
+<p align="center">
+  <img src="docs/images/home_screen.jpg" width="280" alt="Home Screen">
+  <img src="docs/images/reading_view.jpg" width="280" alt="Reading">
+  <img src="docs/images/weather_app.jpg" width="280" alt="Weather">
+</p>
+
 ---
 
 ## ⚠️ Important: Read This First
@@ -23,6 +32,10 @@ SUMI is an active hobby project focused on making the Xteink X4 more useful. I'm
 
 **The firmware will only recognize files in folders with these EXACT names.** If your folders are named anything else, SUMI won't find your files.
 
+<p align="center">
+  <img src="docs/images/sd_card_structure.png" width="600" alt="SD Card Structure">
+</p>
+
 Create these folders on your SD card **before using SUMI**:
 
 ```
@@ -30,6 +43,7 @@ SD Card Root/
 ├── books/          ← Put your .epub files here
 ├── flashcards/     ← Flashcard deck files go here
 ├── images/         ← BMP images only
+├── maps/           ← Map tiles (if using maps)
 └── notes/          ← Text notes
 ```
 
@@ -56,7 +70,7 @@ SD Card Root/
 
 SUMI is custom firmware that turns your Xteink X4 into a little e-ink companion device with:
 
-- A customizable home screen with apps you choose
+- A customizable home screen with widgets and apps you choose
 - A web-based portal for configuration (no tiny screen menus!)
 - **E-Reader with bookmarks, reading stats, and progress sync**
 - Weather display with 7-day forecast
@@ -78,7 +92,7 @@ Let me be real about where things stand:
 - **The Portal** - The web configuration interface is actually nice. You connect to the device's WiFi, open a browser, and configure everything from there. This part I'm happy with.
 - **E-Reader / Library** - Read EPUBs and TXT files with bookmarks, reading statistics, and adjustable fonts/margins. Quick-open resumes your last book instantly.
 - **Weather App** - Connects to OpenWeatherMap, shows 7-day forecast, auto-detects your location. Works reliably.
-- **Home Screen** - Customizable grid of apps, shows time and battery. Solid.
+- **Home Screen** - Customizable grid of apps with widgets for current book and weather. Shows time and battery. Solid.
 - **Games** - Chess, Sudoku, Minesweeper, Solitaire, Checkers. They're simple but functional.
 - **Flashcards** - Create decks through the portal and study them with FSRS spaced repetition. Works fine.
 - **Sleep/Wake** - Deep sleep works, wake-on-button works, battery life is good.
@@ -149,23 +163,11 @@ Let me be real about where things stand:
 
 On first boot (or after erasing), you'll see the setup wizard:
 
-<p align="center">
-  <img src="docs/images/setup_wifi.jpg" width="300" alt="Setup WiFi Screen">
-</p>
-
 1. The device creates a WiFi hotspot called something like `Sumi-Setup-XXXX`
 2. Connect to it with your phone or computer (no password)
 3. Open `http://sumi.local` or `http://192.168.4.1` in your browser
 4. You'll see the portal - connect to your home WiFi from there
 5. Configure your apps, upload books, etc.
-
-Once you're done, you'll see this:
-
-<p align="center">
-  <img src="docs/images/setup_complete.jpg" width="300" alt="Setup Complete">
-</p>
-
-Press any button and you're at the home screen.
 
 ---
 
@@ -174,7 +176,7 @@ Press any button and you're at the home screen.
 ### Home Screen
 
 <p align="center">
-  <img src="docs/images/home_screen.jpg" width="300" alt="Home Screen">
+  <img src="docs/images/home_screen.jpg" width="350" alt="Home Screen">
 </p>
 
 Navigate with the buttons:
@@ -182,47 +184,47 @@ Navigate with the buttons:
 - **OK/SELECT** - Open selected app
 - **BACK** - Return to home from any app
 
-The home screen shows time (top left) and battery percentage (top right). The apps shown are whatever you've enabled in the portal.
+The home screen shows time (top left) and battery percentage (top right). Widgets show your current book cover and weather. The apps shown are whatever you've enabled in the portal.
 
 ### The Portal
 
 The portal is where you do most configuration. To access it after initial setup:
 
 1. Open **Settings** on the device
-2. Select **Portal**
-3. Select **Start Portal**
-4. Connect to the `Sumi-Setup-XXXX` WiFi and visit `sumi.local`
-
-#### Dashboard
+2. Select **Open Portal**
+3. Connect to the `Sumi-Setup-XXXX` WiFi and visit `sumi.local`
 
 <p align="center">
-  <img src="docs/images/portal_dashboard.png" width="600" alt="Portal Dashboard">
+  <img src="docs/images/portal_customize.png" width="350" alt="Portal Customize">
 </p>
 
-Shows device status and quick actions.
+The portal lets you:
+- Choose which apps appear on your home screen with live preview
+- Upload books, flashcard decks, and images
+- Configure weather location and display settings
+- Adjust reader settings (font size, margins, line spacing)
+- Backup and restore your settings
 
-#### Customize
+### E-Reader
 
 <p align="center">
-  <img src="docs/images/portal_customize.png" width="600" alt="Portal Customize">
+  <img src="docs/images/library_browser.jpg" width="280" alt="Library Browser">
+  <img src="docs/images/reading_view.jpg" width="280" alt="Reading View">
+  <img src="docs/images/reader_settings.jpg" width="280" alt="Reader Settings">
 </p>
 
-Choose which apps appear on your home screen. The live preview shows how it'll look. You can also change themes and layout here.
-
-#### Files
-
-<p align="center">
-  <img src="docs/images/portal_files.png" width="600" alt="Portal Files">
-</p>
-
-Upload books, images, flashcard decks, etc. Configure reader settings like font size and margins.
-
-**Note about books:** Stick to simple EPUBs. Public domain books from Project Gutenberg usually work. Complex modern EPUBs with lots of styling tend to crash. I'm working on it.
+Full EPUB and TXT support with:
+- Flippable cover browser for your library
+- Justified text with adjustable fonts, margins, and line spacing
+- Chapter navigation
+- Bookmarks and reading statistics
+- Progress tracking (chapter and page)
+- Quick-resume to your last position
 
 ### Weather
 
 <p align="center">
-  <img src="docs/images/weather_app.jpg" width="300" alt="Weather App">
+  <img src="docs/images/weather_app.jpg" width="350" alt="Weather App">
 </p>
 
 Shows current conditions and 7-day forecast. Uses OpenWeatherMap (free tier). Location is auto-detected from your IP, or you can set a ZIP code manually.
@@ -233,20 +235,49 @@ Controls:
 - **DOWN** - Toggle °F/°C
 - **OK** - Refresh
 
+### Games
+
+<p align="center">
+  <img src="docs/images/chess.jpg" width="280" alt="Chess">
+  <img src="docs/images/sudoku.jpg" width="280" alt="Sudoku">
+</p>
+
+- **Chess** - Play against a simple AI with full rules (castling, en passant, promotion)
+- **Sudoku** - Multiple difficulties with pencil marks
+- **Minesweeper** - Classic minesweeper
+- **Solitaire** - Klondike solitaire
+- **Checkers** - Basic checkers
+
+### Flashcards
+
+<p align="center">
+  <img src="docs/images/flashcards.jpg" width="350" alt="Flashcards">
+</p>
+
+Spaced repetition flashcards using the FSRS algorithm. Create decks through the portal with question/answer pairs, then study on the device. Tracks your progress and schedules reviews.
+
+### Settings
+
+<p align="center">
+  <img src="docs/images/settings.jpg" width="350" alt="Settings">
+</p>
+
+Access WiFi settings, open the portal, adjust display settings, and reboot the device.
+
 ---
 
 ## Features
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Home Screen | ✅ Working | Customizable grid, time/battery display, widgets |
-| Portal | ✅ Working | Web-based configuration |
+| Home Screen | ✅ Working | Customizable grid, widgets, time/battery display |
+| Portal | ✅ Working | Web-based configuration with live preview |
+| E-Reader | ✅ Working | EPUB/TXT, bookmarks, reading stats, adjustable fonts |
 | Weather | ✅ Working | 7-day forecast, auto-location, widget display |
 | Chess | ✅ Working | Play against simple AI |
 | Sudoku | ✅ Working | Multiple difficulties |
-| Flashcards | ✅ Working | Create via portal, spaced repetition |
+| Flashcards | ✅ Working | Create via portal, FSRS spaced repetition |
 | Checkers | ✅ Working | Basic implementation |
-| Library/Reader | ✅ Working | Bookmarks, reading stats, adjustable fonts |
 | Notes | ⚠️ Partial | Basic text notes |
 | Images | ⚠️ Partial | BMP and JPEG formats |
 | Maps | ❌ Not Done | Placeholder only |
