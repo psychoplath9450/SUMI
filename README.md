@@ -24,22 +24,6 @@ Custom firmware for the Xteink X4
 
 SUMI is an active hobby project focused on making the Xteink X4 more useful. I'm sharing it because it might be helpful to others with similar devices.
 
-<<<<<<< Updated upstream
-**What to actually expect:**
-- Everything is **slow**. This is a hobby ESP32 project, not commercial firmware.
-- The UI is **glitchy**. Screen artifacts, visual bugs, and refresh issues are common.
-- The e-reader **barely works**. It will probably fail on most real-world EPUB files.
-- Features may be **half-implemented** or completely non-functional.
-- Things will **crash**. Memory is limited and the code is not bulletproof.
-- You **will** encounter bugs. Lots of them.
-
-If you're looking for a reliable e-reader experience, use the stock firmware or check out Crosspoint. This project exists for tinkerers who want to experiment with ESP32 + e-ink development, not for people who want to actually read books comfortably (for now atleast).
-
-**You have been warned.**
-
----
-=======
->>>>>>> Stashed changes
 
 ## ⚠️ SD Card Folder Structure (REQUIRED)
 
