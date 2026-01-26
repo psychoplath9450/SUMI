@@ -10,9 +10,9 @@ We will acknowledge your report within 48 hours and provide a detailed response 
 
 | Version | Supported |
 |---------|-----------|
-| 2.1.x   | ✅ Yes    |
-| 2.0.x   | ⚠️ Critical fixes only |
-| < 2.0   | ❌ No     |
+| 1.4.x   | ✅ Yes    |
+| 1.3.x   | ⚠️ Critical fixes only |
+| < 1.3   | ❌ No     |
 
 ## Security Considerations
 

@@ -1,17 +1,15 @@
 /**
  * @file ReaderSettings.h
- * @brief Reader Settings Management for Sumi E-Reader
+ * @brief Reader Settings Definitions
+ * @version 1.4.3
+ *
+ * Contains all reader-related settings structures and enums.
+ * Settings are stored in binary format on SD card for quick load.
  * 
- * VERSION 2.1.6: Now connected to SettingsManager for portal sync
- * 
- * Features:
- * - Font size selection
- * - Margin adjustment
- * - Line spacing options
- * - Justify text toggle
- * - SYNCS WITH WEB PORTAL via SettingsManager
- * 
- * Version: 2.1.16
+ * Layout system optimized for e-ink rendering:
+ * - Viewable margins (hardware) + screen margin (user preference)
+ * - Line height compression for font-specific tuning
+ * - Optional paragraph spacing vs indent
  */
 
 #ifndef SUMI_READER_SETTINGS_H
@@ -19,227 +17,306 @@
 
 #include <Arduino.h>
 #include <SD.h>
-
-// Forward declaration
-class SettingsManager;
-extern SettingsManager settingsManager;
+#include "config.h"
 
 // =============================================================================
-// Font Size Options
+// Enums
 // =============================================================================
+
+// Font size options (maps to actual pixel sizes)
 enum class FontSize : uint8_t {
-    SMALL = 0,    // 9pt - More text per page
-    MEDIUM = 1,   // 12pt - Default balance
-    LARGE = 2     // 14pt - Easier reading
+    SMALL = 0,      // 12pt equivalent
+    MEDIUM = 1,     // 14pt equivalent (default)
+    LARGE = 2,      // 16pt equivalent
+    EXTRA_LARGE = 3 // 18pt equivalent
 };
 
-// =============================================================================
-// Margin Options
-// =============================================================================
-enum class MarginSize : uint8_t {
-    NARROW = 0,   // 10px - Maximum reading area
-    NORMAL = 1,   // 20px - Default
-    WIDE = 2      // 35px - More white space
-};
-
-// =============================================================================
-// Line Spacing Options
-// =============================================================================
+// Line spacing options (compression multiplier)
 enum class LineSpacing : uint8_t {
-    COMPACT = 0,  // 1.2x - Dense text
-    NORMAL = 1,   // 1.5x - Default
-    RELAXED = 2   // 1.8x - Easy on eyes
+    TIGHT = 0,      // 0.95x (more lines per page)
+    NORMAL = 1,     // 1.0x (default)
+    WIDE = 2        // 1.1x (easier reading)
+};
+
+// Text alignment
+enum class TextAlign : uint8_t {
+    JUSTIFIED = 0,  // Full justification (default)
+    LEFT = 1,       // Left aligned
+    CENTER = 2,     // Center aligned (for headers)
+    RIGHT = 3       // Right aligned
+};
+
+// Font style (for inline formatting)
+enum class FontStyle : uint8_t {
+    NORMAL = 0,
+    BOLD = 1,
+    ITALIC = 2,
+    BOLD_ITALIC = 3
 };
 
 // =============================================================================
-// Refresh Mode (3 levels: fast, half, full)
+// Viewable Margins
+// These account for the e-ink panel's non-viewable edges
 // =============================================================================
-enum class RefreshMode : uint8_t {
-    FAST = 0,     // Quick partial (ghosting builds up)
-    HALF = 1,     // Medium clean (clears ghosting, moderate speed)
-    FULL = 2      // Complete clean (slow, no ghosting)
-};
+namespace ViewableMargins {
+    // Hardware-specific margins (pixels lost at edges of e-ink panel)
+    constexpr int TOP = 9;
+    constexpr int RIGHT = 3;
+    constexpr int BOTTOM = 3;
+    constexpr int LEFT = 3;
+    
+    // Status bar area at bottom (for page numbers, chapter title)
+    constexpr int STATUS_BAR_HEIGHT = 22;
+}
 
 // =============================================================================
-// Reader Settings Structure (for Library app)
+// Reader Settings Structure
 // =============================================================================
+
+#define READER_SETTINGS_MAGIC   0x52534554  // "RSET"
+#define READER_SETTINGS_VERSION 3           // Bumped for new fields
+#define READER_SETTINGS_PATH    "/.sumi/reader.bin"
+
 struct LibReaderSettings {
-    // Magic number for validation
-    static const uint32_t MAGIC = 0x52534554;  // "RSET"
-    static const uint8_t VERSION = 2;  // Bumped for portal sync
-    
     uint32_t magic;
-    uint8_t version;
+    uint16_t version;
     
-    // Display settings
+    // === Font Settings ===
     FontSize fontSize;
-    MarginSize margins;
     LineSpacing lineSpacing;
-    bool justifyText;
+    TextAlign textAlign;
     
-    // Reading behavior
-    bool showProgress;         // Show progress percentage
-    bool showChapterName;      // Show chapter in status bar
-    bool showBattery;          // Show battery in status bar
-    uint8_t pagesPerFullRefresh;  // Full refresh interval
-    uint8_t pagesPerHalfRefresh;  // Half refresh interval (clears ghosting)
+    // === Layout Settings ===
+    uint8_t screenMargin;           // User margin added to viewable margins (0-20, default 5)
+    bool extraParagraphSpacing;     // true = add space between paragraphs, false = use indent
+    
+    // === Display Settings ===
+    bool showPageNumbers;
+    bool showChapterTitle;
+    uint8_t refreshFrequency;       // Pages between full refresh (default 15)
     
     // Reserved for future use
-    uint8_t reserved[14];
+    uint8_t reserved[12];
     
-    // Initialize with defaults
     LibReaderSettings() {
-        magic = MAGIC;
-        version = VERSION;
+        setDefaults();
+    }
+    
+    void setDefaults() {
+        magic = READER_SETTINGS_MAGIC;
+        version = READER_SETTINGS_VERSION;
         fontSize = FontSize::MEDIUM;
-        margins = MarginSize::NORMAL;
         lineSpacing = LineSpacing::NORMAL;
-        justifyText = true;  // Justified text by default
-        showProgress = true;
-        showChapterName = true;
-        showBattery = true;
-        pagesPerFullRefresh = 15;   // Full refresh every 15 pages
-        pagesPerHalfRefresh = 5;    // Half refresh every 5 pages
+        textAlign = TextAlign::JUSTIFIED;
+        screenMargin = 5;
+        extraParagraphSpacing = true;
+        showPageNumbers = true;
+        showChapterTitle = true;
+        refreshFrequency = 15;
         memset(reserved, 0, sizeof(reserved));
     }
     
-    // Validate settings
-    bool isValid() const {
-        return magic == MAGIC && version <= VERSION;
-    }
+    // === Computed Layout Values ===
     
-    // Get actual pixel values
-    int getFontHeight() const {
+    // Get base line height for font size (before compression)
+    int getBaseFontHeight() const {
         switch (fontSize) {
-            case FontSize::SMALL:  return 18;
-            case FontSize::MEDIUM: return 22;
-            case FontSize::LARGE:  return 28;
-            default: return 22;
+            case FontSize::SMALL:       return 22;  // ~12pt
+            case FontSize::MEDIUM:      return 26;  // ~14pt
+            case FontSize::LARGE:       return 30;  // ~16pt
+            case FontSize::EXTRA_LARGE: return 34;  // ~18pt
+            default: return 26;
         }
     }
     
-    int getMarginPx() const {
-        // Side margins - status bar handled separately
-        switch (margins) {
-            case MarginSize::NARROW: return 5;   // Minimal margins
-            case MarginSize::NORMAL: return 10;  // Default
-            case MarginSize::WIDE:   return 20;  // More white space
-            default: return 10;
+    // Get line compression multiplier
+    float getLineCompression() const {
+        switch (lineSpacing) {
+            case LineSpacing::TIGHT:  return 0.95f;
+            case LineSpacing::NORMAL: return 1.0f;
+            case LineSpacing::WIDE:   return 1.1f;
+            default: return 1.0f;
         }
     }
     
+    // Get actual line height (base height * compression)
     int getLineHeight() const {
-        int base = getFontHeight();
-        switch (lineSpacing) {
-            case LineSpacing::COMPACT: return base + 2;
-            case LineSpacing::NORMAL:  return base + 6;
-            case LineSpacing::RELAXED: return base + 10;
-            default: return base + 6;
+        return (int)(getBaseFontHeight() * getLineCompression());
+    }
+    
+    // Get paragraph spacing (half line height when enabled)
+    int getParagraphSpacing() const {
+        if (!extraParagraphSpacing) return 0;
+        return getLineHeight() / 2;
+    }
+    
+    // Get total left margin (viewable + user)
+    int getMarginLeft() const {
+        return ViewableMargins::LEFT + screenMargin;
+    }
+    
+    // Get total right margin (viewable + user)
+    int getMarginRight() const {
+        return ViewableMargins::RIGHT + screenMargin;
+    }
+    
+    // Get total top margin (viewable + user)
+    int getMarginTop() const {
+        return ViewableMargins::TOP + screenMargin;
+    }
+    
+    // Get total bottom margin (viewable + user + status bar)
+    int getMarginBottom() const {
+        return ViewableMargins::BOTTOM + screenMargin + ViewableMargins::STATUS_BAR_HEIGHT;
+    }
+    
+    // Get content width for given screen width
+    int getContentWidth(int screenWidth) const {
+        return screenWidth - getMarginLeft() - getMarginRight();
+    }
+    
+    // Get content height for given screen height
+    int getContentHeight(int screenHeight) const {
+        return screenHeight - getMarginTop() - getMarginBottom();
+    }
+    
+    // Calculate approximate lines per page
+    int getLinesPerPage(int screenHeight) const {
+        int contentHeight = getContentHeight(screenHeight);
+        return contentHeight / getLineHeight();
+    }
+    
+    // === UI Helpers ===
+    
+    static const char* getFontSizeName(FontSize fs) {
+        switch (fs) {
+            case FontSize::SMALL:       return "Small";
+            case FontSize::MEDIUM:      return "Medium";
+            case FontSize::LARGE:       return "Large";
+            case FontSize::EXTRA_LARGE: return "Extra Large";
+            default: return "?";
         }
     }
     
-    int getParaSpacing() const {
-        switch (lineSpacing) {
-            case LineSpacing::COMPACT: return 4;
-            case LineSpacing::NORMAL:  return 8;
-            case LineSpacing::RELAXED: return 12;
-            default: return 8;
+    static const char* getLineSpacingName(LineSpacing ls) {
+        switch (ls) {
+            case LineSpacing::TIGHT:  return "Tight";
+            case LineSpacing::NORMAL: return "Normal";
+            case LineSpacing::WIDE:   return "Wide";
+            default: return "?";
         }
     }
     
-    // Get display names
-    static const char* getFontSizeName(FontSize size) {
-        switch (size) {
-            case FontSize::SMALL:  return "Small";
-            case FontSize::MEDIUM: return "Medium";
-            case FontSize::LARGE:  return "Large";
-            default: return "Medium";
+    static const char* getTextAlignName(TextAlign ta) {
+        switch (ta) {
+            case TextAlign::JUSTIFIED: return "Justified";
+            case TextAlign::LEFT:      return "Left";
+            case TextAlign::CENTER:    return "Center";
+            case TextAlign::RIGHT:     return "Right";
+            default: return "?";
         }
     }
     
-    static const char* getMarginName(MarginSize size) {
-        switch (size) {
-            case MarginSize::NARROW: return "Narrow";
-            case MarginSize::NORMAL: return "Normal";
-            case MarginSize::WIDE:   return "Wide";
-            default: return "Normal";
-        }
-    }
-    
-    static const char* getSpacingName(LineSpacing spacing) {
-        switch (spacing) {
-            case LineSpacing::COMPACT: return "Compact";
-            case LineSpacing::NORMAL:  return "Normal";
-            case LineSpacing::RELAXED: return "Relaxed";
-            default: return "Normal";
-        }
-    }
+    // For backwards compatibility with old code
+    int getMarginPx() const { return screenMargin + ViewableMargins::LEFT; }
+    int getParaSpacing() const { return getParagraphSpacing(); }
+    uint8_t pagesPerFullRefresh() const { return refreshFrequency; }
+    bool justifyText() const { return textAlign == TextAlign::JUSTIFIED; }
 };
 
 // =============================================================================
-// Settings Manager - NOW SYNCS WITH WEB PORTAL
+// Settings Manager
 // =============================================================================
-class LibReaderSettingsManager {
+
+class ReaderSettingsManager {
 public:
-    static const char* SETTINGS_PATH;
+    ReaderSettingsManager() : _dirty(false) {}
     
-    LibReaderSettingsManager() : _loaded(false) {}
+    LibReaderSettings& get() { return _settings; }
+    const LibReaderSettings& get() const { return _settings; }
     
-    // Load settings from SD AND sync with portal
-    bool load();
-    
-    // Save settings to SD AND sync with portal
-    bool save();
-    
-    // Sync from portal settings (call after portal changes)
-    void syncFromPortal();
-    
-    // Sync to portal settings (call before portal reads)
-    void syncToPortal();
-    
-    // Get current settings
-    LibReaderSettings& get() {
-        if (!_loaded) load();
-        return _settings;
+    bool load() {
+        File f = SD.open(READER_SETTINGS_PATH, FILE_READ);
+        if (!f) {
+            Serial.println("[SETTINGS] No reader settings, using defaults");
+            _settings.setDefaults();
+            return false;
+        }
+        
+        LibReaderSettings temp;
+        if (f.read((uint8_t*)&temp, sizeof(LibReaderSettings)) != sizeof(LibReaderSettings)) {
+            f.close();
+            _settings.setDefaults();
+            return false;
+        }
+        f.close();
+        
+        // Validate magic and migrate if needed
+        if (temp.magic != READER_SETTINGS_MAGIC) {
+            Serial.println("[SETTINGS] Invalid reader settings magic, using defaults");
+            _settings.setDefaults();
+            return false;
+        }
+        
+        // Handle version migration
+        if (temp.version < READER_SETTINGS_VERSION) {
+            Serial.printf("[SETTINGS] Migrating from version %d to %d\n", temp.version, READER_SETTINGS_VERSION);
+            // Copy compatible fields
+            _settings.fontSize = temp.fontSize;
+            _settings.showPageNumbers = temp.showPageNumbers;
+            _settings.showChapterTitle = temp.showChapterTitle;
+            _settings.refreshFrequency = temp.refreshFrequency;
+            // Use defaults for new fields
+            _settings.magic = READER_SETTINGS_MAGIC;
+            _settings.version = READER_SETTINGS_VERSION;
+            save();  // Save migrated settings
+            return true;
+        }
+        
+        _settings = temp;
+        _dirty = false;
+        Serial.println("[SETTINGS] Loaded reader settings");
+        return true;
     }
     
-    // Apply settings to text layout
-    void applyToLayout(class TextLayout& layout);
-    
-    // Debug logging
-    void logSettings(const char* context);
-    
-    // Check if settings require cache rebuild
-    bool requiresCacheRebuild(const LibReaderSettings& oldSettings) const {
-        return _settings.fontSize != oldSettings.fontSize ||
-               _settings.margins != oldSettings.margins ||
-               _settings.lineSpacing != oldSettings.lineSpacing ||
-               _settings.justifyText != oldSettings.justifyText;
+    bool save() {
+        // Ensure directory exists
+        if (!SD.exists("/.sumi")) {
+            SD.mkdir("/.sumi");
+        }
+        
+        File f = SD.open(READER_SETTINGS_PATH, FILE_WRITE);
+        if (!f) {
+            Serial.println("[SETTINGS] Failed to save reader settings");
+            return false;
+        }
+        
+        f.write((const uint8_t*)&_settings, sizeof(LibReaderSettings));
+        f.close();
+        
+        _dirty = false;
+        Serial.println("[SETTINGS] Saved reader settings");
+        return true;
     }
     
-    // Get refresh mode for current page
-    RefreshMode getRefreshMode(int& pagesUntilHalf, int& pagesUntilFull) const {
-        if (pagesUntilFull <= 1) {
-            pagesUntilFull = _settings.pagesPerFullRefresh;
-            pagesUntilHalf = _settings.pagesPerHalfRefresh;
-            return RefreshMode::FULL;
+    void markDirty() { _dirty = true; }
+    bool isDirty() const { return _dirty; }
+    
+    // Save if dirty (call periodically or on exit)
+    void saveIfDirty() {
+        if (_dirty) {
+            save();
         }
-        if (pagesUntilHalf <= 1) {
-            pagesUntilHalf = _settings.pagesPerHalfRefresh;
-            pagesUntilFull--;
-            return RefreshMode::HALF;
-        }
-        pagesUntilHalf--;
-        pagesUntilFull--;
-        return RefreshMode::FAST;
     }
     
 private:
     LibReaderSettings _settings;
-    bool _loaded;
+    bool _dirty;
 };
 
-// Global instance
-extern LibReaderSettingsManager readerSettings;
+// =============================================================================
+// Global Instance
+// =============================================================================
+extern ReaderSettingsManager readerSettings;
 
 #endif // SUMI_READER_SETTINGS_H

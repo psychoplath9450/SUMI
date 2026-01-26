@@ -1,6 +1,6 @@
 # Settings Reference
 
-*Last updated: January 22, 2026*
+*Last updated: January 25, 2026*
 
 Settings are stored in two places:
 
@@ -20,29 +20,43 @@ Settings are stored in two places:
 
 ## Reader Settings
 
-These sync between the on-device menu and the web portal.
+These sync between the on-device menu and the web portal. Settings version is v3 (auto-migrates from older versions).
 
 | Setting | Default | Options |
 |---------|---------|---------|
-| fontSize | Medium | Small, Medium, Large |
-| margins | Normal | Narrow, Normal, Wide |
-| lineSpacing | Normal | Compact, Normal, Relaxed |
-| justifyText | true | true/false |
-| sceneBreakSpacing | 30px | 0-60px spacing for `<hr>` tags |
+| fontSize | MEDIUM | SMALL (22px), MEDIUM (26px), LARGE (30px), EXTRA_LARGE (34px) |
+| lineSpacing | NORMAL | TIGHT (0.95x), NORMAL (1.0x), WIDE (1.1x) |
+| screenMargin | 5px | 0, 5, 10, 15, or 20 pixels |
+| textAlign | JUSTIFIED | JUSTIFIED, LEFT, CENTER, RIGHT |
+| extraParagraphSpacing | false | Add half-line-height between paragraphs |
+| requirePreprocessed | true | Require portal pre-processing for EPUBs |
+| refreshFrequency | 15 | Pages between full e-ink refresh |
 
-The actual pixel values:
+### Margin System
 
-| Font Size | Height |
-|-----------|--------|
-| Small | 18px |
-| Medium | 22px |
-| Large | 28px |
+Margins are calculated from multiple layers:
+1. **Viewable margins** (hardcoded, compensate for e-ink panel edges):
+   - Top: 9px, Right: 3px, Bottom: 3px, Left: 3px
+2. **Screen margin** (user configurable): 0-20px
+3. **Status bar area** (bottom): 22px reserved
 
-| Margins | Pixels |
-|---------|--------|
-| Narrow | 5px |
-| Normal | 10px |
-| Wide | 20px |
+Total margin = viewable + screen margin (+ status bar at bottom)
+
+### Require Pre-processing
+
+**New in v1.4.2:** This setting controls whether books must be processed through the portal before reading.
+
+- **When ON (default):** Only pre-processed books can be opened. If you try to open an unprocessed EPUB, you'll see "Process this book in the portal first". This is recommended because on-device EPUB parsing was causing memory issues and reliability problems.
+
+- **When OFF:** Falls back to on-device EPUB parsing using miniz and expat. This also outputs rich text markers for formatting preservation, but may fail on complex books or when memory is low.
+
+### Rich Text Formatting
+
+Both portal and on-device processing preserve formatting using markers:
+- `**bold**` - Rendered in bold font
+- `*italic*` - Rendered in italic font (falls back to regular if unavailable)
+- `# Header` - Rendered centered and bold
+- `• bullet` - Rendered with bullet character
 
 ## Bookmarks
 

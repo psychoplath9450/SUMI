@@ -1,7 +1,7 @@
 /**
  * @file Sudoku.h
  * @brief Sudoku puzzle game for Sumi e-reader
- * @version 2.2.1
+ * @version 1.3.0
  * 
  * Features:
  * - Navigate with D-pad, press OK to enter edit mode
@@ -102,7 +102,6 @@ private:
     void markCursorDirty();
 };
 
-extern SudokuGame sudokuGame;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_SUDOKU_H

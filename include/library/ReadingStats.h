@@ -1,7 +1,7 @@
 /**
  * @file ReadingStats.h
  * @brief Reading statistics tracking for the Library plugin
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #ifndef SUMI_LIBRARY_READING_STATS_H

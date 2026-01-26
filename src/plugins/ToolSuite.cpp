@@ -1,7 +1,7 @@
 /**
  * @file ToolSuite.cpp
  * @brief Utility tools implementation
- * @version 2.1.17
+ * @version 1.3.0
  * 
  * Uses runPluginSelfRefresh for proper display control
  * Raw button handling (no remapping)
@@ -11,7 +11,6 @@
 
 #if FEATURE_GAMES
 
-ToolSuiteApp toolSuiteApp;
 
 static const char* CALC_LABELS[] = {
     "C", "(", ")", "/",

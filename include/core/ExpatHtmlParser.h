@@ -11,7 +11,7 @@
  * - Handles HTML entities
  * - Low memory footprint
  * 
- * Version: 2.1.16
+ * @version 1.3.0
  */
 
 #ifndef SUMI_EXPAT_HTML_PARSER_H

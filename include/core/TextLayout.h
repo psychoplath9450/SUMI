@@ -1,335 +1,311 @@
 /**
  * @file TextLayout.h
- * @brief Advanced Text Layout Engine for Sumi E-Reader
- * @version 2.4.0
+ * @brief Text Layout Engine for E-Ink Display
+ * @version 1.4.2
  *
- * Professional e-reader text rendering with:
- * - Per-word font styles (Bold, Italic, Bold-Italic)
- * - Optimal line breaking with Knuth-Plass style DP algorithm
- * - Text justification with proper word spacing
- * - Paragraph indentation with em-space
- * - Extra paragraph spacing option  
- * - Line compression (compact/normal/relaxed spacing)
- * - Soft hyphen support for EPUBs
- * - Image page handling
+ * Professional text layout with:
+ * - Streaming text input (addText() called incrementally)
+ * - Word wrapping with justification
+ * - Paragraph handling
+ * - Style tracking (bold, italic)
+ * - Page-based output for rendering
  *
- * Architecture based on professional e-reader implementations
+ * Memory-conscious design:
+ *
+ * - Pages stored to SD card, not RAM
+ * - Only current page loaded for rendering
  */
 
 #ifndef SUMI_TEXT_LAYOUT_H
 #define SUMI_TEXT_LAYOUT_H
 
 #include <Arduino.h>
-#include <vector>
-#include <list>
 #include <GxEPD2_BW.h>
-#include "PageCache.h"
+#include <SD.h>
 #include "config.h"
-
-// Forward declarations
-extern GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display;
-
-// LineSpacing is defined in ReaderSettings.h - forward declare here
-// Values: COMPACT=0, NORMAL=1, RELAXED=2
-enum class LineSpacing : uint8_t;
+#include "core/ReaderSettings.h"
 
 // =============================================================================
-// Text Alignment Modes (matches EPUB standards)
+// Layout Constants
 // =============================================================================
-enum class TextAlign : uint8_t {
-    LEFT = 0,
-    CENTER = 1,
-    RIGHT = 2,
-    JUSTIFY = 3
+// Layout limits - minimal for ESP32-C3 (pages cached to SD anyway)
+#define MAX_WORDS_PER_LINE      12      // Words per line
+#define MAX_LINES_PER_PAGE      20      // Lines per page (800px / 34px line height)
+#define MAX_PAGES_PER_CHAPTER   500
+#define WORD_BUFFER_SIZE        24      // Max word length
+
+// =============================================================================
+// Word Structure
+// =============================================================================
+struct LayoutWord {
+    char text[WORD_BUFFER_SIZE];  // Word text (uses WORD_BUFFER_SIZE)
+    int16_t x;              // X position on line
+    int16_t width;          // Pixel width
+    FontStyle style;        // Font style
+    
+    LayoutWord() : x(0), width(0), style(FontStyle::NORMAL) {
+        memset(text, 0, sizeof(text));
+    }
 };
 
 // =============================================================================
-// Font Style (per-word styling for inline formatting)
-// =============================================================================
-enum class FontStyle : uint8_t {
-    REGULAR = 0,
-    BOLD = 1,
-    ITALIC = 2,
-    BOLD_ITALIC = 3
-};
-
-// =============================================================================
-// Styled Word - word with its individual style
-// =============================================================================
-struct StyledWord {
-    String text;
-    uint16_t width;              // Pixel width when rendered
-    FontStyle style;             // Bold/Italic/etc for this word
-    
-    StyledWord() : width(0), style(FontStyle::REGULAR) {}
-    StyledWord(const String& t, uint16_t w, FontStyle s = FontStyle::REGULAR) 
-        : text(t), width(w), style(s) {}
-};
-
-// =============================================================================
-// Measured Word (used during layout) - LEGACY COMPATIBILITY
-// =============================================================================
-struct MeasuredWord {
-    String text;
-    int width;
-    FontStyle style;
-    bool endsWithSpace;
-    bool endsParagraph;
-    
-    MeasuredWord() : width(0), style(FontStyle::REGULAR), 
-                     endsWithSpace(false), endsParagraph(false) {}
-    MeasuredWord(const String& t, int w, FontStyle s = FontStyle::REGULAR) 
-        : text(t), width(w), style(s), endsWithSpace(false), endsParagraph(false) {}
-};
-
-// =============================================================================
-// Text Block - a paragraph being processed
-// Contains words with styles, handles layout into lines
-// =============================================================================
-class TextBlock {
-public:
-    TextAlign alignment;
-    bool extraParagraphSpacing;
-    bool hyphenationEnabled;
-    
-    TextBlock(TextAlign align = TextAlign::JUSTIFY, 
-              bool extraSpacing = true,
-              bool hyphenation = false)
-        : alignment(align), 
-          extraParagraphSpacing(extraSpacing),
-          hyphenationEnabled(hyphenation) {}
-    
-    // Add a word with its style
-    void addWord(const String& word, FontStyle style);
-    
-    // Set alignment
-    void setAlignment(TextAlign align) { alignment = align; }
-    TextAlign getAlignment() const { return alignment; }
-    
-    // Check if empty
-    bool isEmpty() const { return _words.empty(); }
-    size_t size() const { return _words.size(); }
-    
-    // Clear all words
-    void clear() { _words.clear(); _wordStyles.clear(); }
-    
-    // Get words and styles (for iteration)
-    std::list<String>& getWords() { return _words; }
-    std::list<FontStyle>& getWordStyles() { return _wordStyles; }
-    const std::list<String>& getWords() const { return _words; }
-    const std::list<FontStyle>& getWordStyles() const { return _wordStyles; }
-    
-    // Apply paragraph indent (em-space at start)
-    void applyParagraphIndent();
-    
-private:
-    std::list<String> _words;
-    std::list<FontStyle> _wordStyles;
-};
-
-// =============================================================================
-// Layout Line - a single line ready for rendering
+// Line Structure
 // =============================================================================
 struct LayoutLine {
-    std::vector<StyledWord> words;
-    std::vector<uint16_t> wordXPositions;  // Pre-calculated X position for each word
-    TextAlign alignment;
-    bool isLastInParagraph;
-    bool isHeader;
-    int spaceWidth;  // Space width for this line
-    int totalWordWidth;  // Sum of word widths
+    LayoutWord words[MAX_WORDS_PER_LINE];
+    uint8_t wordCount;
+    int16_t y;              // Y position (baseline)
+    int16_t width;          // Total width of words
+    bool justified;         // Whether spacing was applied
     
-    LayoutLine() : alignment(TextAlign::JUSTIFY), 
-                   isLastInParagraph(false), 
-                   isHeader(false),
-                   spaceWidth(6),
-                   totalWordWidth(0) {}
+    LayoutLine() : wordCount(0), y(0), width(0), justified(false) {}
     
-    bool isEmpty() const { return words.empty(); }
-    int wordCount() const { return words.size(); }
-    
-    void addWord(const StyledWord& w) {
-        words.push_back(w);
-        totalWordWidth += w.width;
-    }
-    
-    // Calculate natural width with single spaces
-    int naturalWidth() const {
-        if (words.size() <= 1) return totalWordWidth;
-        return totalWordWidth + spaceWidth * (words.size() - 1);
+    void clear() {
+        wordCount = 0;
+        y = 0;
+        width = 0;
+        justified = false;
     }
 };
 
 // =============================================================================
-// Text Layout Engine Class
+// Page Structure
+// =============================================================================
+struct LayoutPage {
+    LayoutLine lines[MAX_LINES_PER_PAGE];
+    uint8_t lineCount;
+    uint16_t pageNumber;
+    
+    LayoutPage() : lineCount(0), pageNumber(0) {}
+    
+    void clear() {
+        lineCount = 0;
+        for (int i = 0; i < MAX_LINES_PER_PAGE; i++) {
+            lines[i].clear();
+        }
+    }
+    
+    // Serialize to file
+    bool saveTo(File& f) const {
+        f.write((const uint8_t*)&pageNumber, sizeof(pageNumber));
+        f.write((const uint8_t*)&lineCount, sizeof(lineCount));
+        
+        for (int i = 0; i < lineCount; i++) {
+            const LayoutLine& line = lines[i];
+            f.write((const uint8_t*)&line.wordCount, sizeof(line.wordCount));
+            f.write((const uint8_t*)&line.y, sizeof(line.y));
+            f.write((const uint8_t*)&line.width, sizeof(line.width));
+            f.write((const uint8_t*)&line.justified, sizeof(line.justified));
+            
+            for (int j = 0; j < line.wordCount; j++) {
+                const LayoutWord& word = line.words[j];
+                f.write((const uint8_t*)word.text, sizeof(word.text));
+                f.write((const uint8_t*)&word.x, sizeof(word.x));
+                f.write((const uint8_t*)&word.width, sizeof(word.width));
+                f.write((const uint8_t*)&word.style, sizeof(word.style));
+            }
+        }
+        return true;
+    }
+    
+    // Deserialize from file
+    bool loadFrom(File& f) {
+        clear();
+        
+        if (f.read((uint8_t*)&pageNumber, sizeof(pageNumber)) != sizeof(pageNumber)) return false;
+        if (f.read((uint8_t*)&lineCount, sizeof(lineCount)) != sizeof(lineCount)) return false;
+        
+        if (lineCount > MAX_LINES_PER_PAGE) return false;
+        
+        for (int i = 0; i < lineCount; i++) {
+            LayoutLine& line = lines[i];
+            if (f.read((uint8_t*)&line.wordCount, sizeof(line.wordCount)) != sizeof(line.wordCount)) return false;
+            if (f.read((uint8_t*)&line.y, sizeof(line.y)) != sizeof(line.y)) return false;
+            if (f.read((uint8_t*)&line.width, sizeof(line.width)) != sizeof(line.width)) return false;
+            if (f.read((uint8_t*)&line.justified, sizeof(line.justified)) != sizeof(line.justified)) return false;
+            
+            if (line.wordCount > MAX_WORDS_PER_LINE) return false;
+            
+            for (int j = 0; j < line.wordCount; j++) {
+                LayoutWord& word = line.words[j];
+                if (f.read((uint8_t*)word.text, sizeof(word.text)) != sizeof(word.text)) return false;
+                if (f.read((uint8_t*)&word.x, sizeof(word.x)) != sizeof(word.x)) return false;
+                if (f.read((uint8_t*)&word.width, sizeof(word.width)) != sizeof(word.width)) return false;
+                if (f.read((uint8_t*)&word.style, sizeof(word.style)) != sizeof(word.style)) return false;
+            }
+        }
+        return true;
+    }
+};
+
+// =============================================================================
+// Text Layout Engine
 // =============================================================================
 class TextLayout {
 public:
     TextLayout();
     
-    // =========================================================================
+    // ==========================================================================
     // Configuration
-    // =========================================================================
-    
+    // ==========================================================================
     void setPageSize(int width, int height);
     void setMargins(int left, int right, int top, int bottom);
     void setLineHeight(int height);
-    void setLineSpacing(LineSpacing spacing);
+    void setLineHeightMultiplier(float mult);  // 0.95 (tight), 1.0 (normal), 1.1 (wide)
     void setParaSpacing(int spacing);
-    void setDefaultAlign(TextAlign align);
-    void setJustify(bool justify);
-    void setExtraParagraphSpacing(bool extra);
-    void setHyphenationEnabled(bool enabled);
-    void setParagraphIndent(bool indent);
-    
-    // Font management - single font (legacy)
+    void setUseParaIndent(bool useIndent);     // Use em-dash indent instead of spacing
+    void setJustify(bool enable);
     void setFont(const GFXfont* font);
+    void setBoldFont(const GFXfont* font);
+    void setItalicFont(const GFXfont* font);
+    void setBoldItalicFont(const GFXfont* font);
     
-    // Font management - font family with styles (4 variants)
-    void setFontFamily(const GFXfont* regular, 
-                       const GFXfont* bold,
-                       const GFXfont* italic, 
-                       const GFXfont* boldItalic);
-    
-    // =========================================================================
-    // Main Layout Method
-    // =========================================================================
+    // ==========================================================================
+    // Streaming Input
+    // ==========================================================================
     
     /**
-     * Paginate text into cached pages
-     * @param text Full text content to paginate
-     * @return Vector of CachedPage ready to save to cache
+     * Reset layout for new content
      */
-    std::vector<CachedPage> paginateText(const String& text);
+    void reset();
     
-    // =========================================================================
-    // Incremental Layout (for streaming HTML parsing)
-    // =========================================================================
+    /**
+     * Add plain text to the layout (call multiple times for streaming)
+     * Text is broken into words and laid out into lines/pages
+     */
+    void addText(const char* text, size_t len);
     
-    void beginLayout();
-    void addParagraph(const String& para, bool isHeader = false);
-    void addStyledParagraph(TextBlock& block, bool isHeader = false);
-    void addImagePage(const String& imagePath);
-    std::vector<CachedPage> getCompletedPages();
-    CachedPage finishLayout();
+    /**
+     * Add rich text with markers (from portal preprocessor)
+     * Parses: **bold**, *italic*, # headers, • bullets, [Image]
+     * Soft hyphens (U+00AD) are preserved for line breaking
+     */
+    void addRichText(const char* text, size_t len);
     
-    // =========================================================================
-    // Metrics
-    // =========================================================================
+    /**
+     * Signal end of paragraph (adds vertical space)
+     */
+    void endParagraph();
     
-    int getContentWidth() const { return _contentWidth; }
-    int getContentHeight() const { return _contentHeight; }
-    int getLinesPerPage() const { return _linesPerPage; }
-    int getSpaceWidth() const { return _spaceWidth; }
-    float getLineCompression() const { return _lineCompression; }
+    /**
+     * Set current style for subsequent text
+     */
+    void setCurrentStyle(FontStyle style);
     
-    // Measure text width with specific style
-    int measureText(const String& text, FontStyle style);
+    /**
+     * Finalize layout (complete last line/page)
+     */
+    void finalize();
     
-    // Measure text with default style (REGULAR)
-    int measureTextRegular(const String& text);
-
+    // ==========================================================================
+    // Output
+    // ==========================================================================
+    
+    /**
+     * Get total number of pages
+     */
+    int getPageCount() const { return _pageCount; }
+    
+    /**
+     * Render a specific page to display
+     * Loads page from cache if necessary
+     */
+    void renderPage(int pageNum, GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT>& display);
+    
+    /**
+     * Set cache path for page storage
+     */
+    void setCachePath(const String& path);
+    
 private:
-    // Page dimensions
-    int _pageWidth;
-    int _pageHeight;
+    // Configuration
+    int _pageWidth, _pageHeight;
     int _marginLeft, _marginRight, _marginTop, _marginBottom;
-    int _contentWidth;
-    int _contentHeight;
-    
-    // Typography
+    int _contentWidth, _contentHeight;
     int _lineHeight;
-    int _baseLineHeight;
-    float _lineCompression;      // Multiplier for line spacing
+    float _lineHeightMultiplier;  // Line compression (0.95, 1.0, 1.1)
     int _paraSpacing;
-    int _spaceWidth;
-    int _linesPerPage;
-    TextAlign _defaultAlign;
+    bool _useParaIndent;          // When true, use em-dash indent instead of spacing
     bool _justify;
-    bool _extraParagraphSpacing;
-    bool _hyphenationEnabled;
-    bool _paragraphIndent;
-    
-    // Font family (4 variants for styled text)
-    const GFXfont* _fontRegular;
+    const GFXfont* _font;
     const GFXfont* _fontBold;
     const GFXfont* _fontItalic;
     const GFXfont* _fontBoldItalic;
     
-    // Layout state
-    CachedPage _currentPage;
-    int _currentY;
-    int _currentOffset;
-    std::vector<CachedPage> _completedPages;
-    bool _inLayout;
-    int _wordCount;
+    // Current state
+    FontStyle _currentStyle;
+    int _currentY;          // Current Y position on page
+    int _pageCount;
+    bool _isHeaderLine;     // True when processing # header line (centered, bold)
+    bool _isBulletLine;     // True when processing • bullet line
     
-    // =========================================================================
+    // Current line being built
+    LayoutLine _currentLine;
+    int _currentLineWidth;
+    
+    // Current page being built
+    LayoutPage _currentPage;
+    
+    // Word buffer for accumulating characters
+    char _wordBuffer[WORD_BUFFER_SIZE];
+    int _wordBufferLen;
+    
+    // Cache path for storing pages
+    String _cachePath;
+    
+    // ==========================================================================
     // Internal Methods
-    // =========================================================================
+    // ==========================================================================
     
-    // Get the appropriate font for a style
-    const GFXfont* getFontForStyle(FontStyle style) const;
+    /**
+     * Flush current word to line
+     */
+    void flushWord();
     
-    // Split text into paragraphs
-    std::vector<String> splitParagraphs(const String& text);
+    /**
+     * Complete current line (apply justification, move to next)
+     */
+    void finishLine(bool isParagraphEnd = false);
     
-    // Create TextBlock from paragraph text (basic - all regular style)
-    TextBlock createTextBlock(const String& para, TextAlign align);
+    /**
+     * Complete current page (save to cache, start new)
+     */
+    void finishPage();
     
-    // Split paragraph into words and measure them (legacy method)
-    std::vector<MeasuredWord> measureWords(const String& para);
+    /**
+     * Get pixel width of text with current font
+     */
+    int getTextWidth(const char* text, FontStyle style);
     
-    // Calculate word widths with their styles
-    std::vector<uint16_t> calculateWordWidths(TextBlock& block);
+    /**
+     * Get space width for current font
+     */
+    int getSpaceWidth();
     
-    // Optimal line breaking using dynamic programming
-    // Minimizes "badness" (squared remaining space) for even appearance
-    std::vector<size_t> computeOptimalLineBreaks(
-        const std::vector<uint16_t>& wordWidths,
-        int pageWidth, int spaceWidth);
+    /**
+     * Apply justification spacing to a line
+     */
+    void justifyLine(LayoutLine& line);
     
-    // Greedy line breaking (faster, used for very long paragraphs)
-    std::vector<size_t> computeGreedyLineBreaks(
-        const std::vector<uint16_t>& wordWidths,
-        int pageWidth, int spaceWidth);
+    /**
+     * Get font for style
+     */
+    const GFXfont* getFontForStyle(FontStyle style);
     
-    // Wrap measured words into lines (legacy method)
-    std::vector<LayoutLine> wrapToLines(const std::vector<MeasuredWord>& words);
+    /**
+     * Save page to cache file
+     */
+    void savePageToCache(const LayoutPage& page);
     
-    // Layout a TextBlock into lines and add to pages
-    void layoutTextBlock(TextBlock& block, bool isHeader);
-    
-    // Convert LayoutLine to CachedLine with positioned words
-    CachedLine positionLine(const LayoutLine& line, int y);
-    
-    // Calculate word X positions based on alignment
-    std::vector<uint16_t> calculateWordPositions(
-        const std::vector<StyledWord>& words,
-        int lineWidth, int spaceWidth,
-        TextAlign align, bool isLastLine);
-    
-    // Legacy: Calculate justified positions
-    std::vector<int> calculateJustifiedPositions(
-        const std::vector<MeasuredWord>& words, 
-        int lineWidth, 
-        bool isLast);
-    
-    // Page management
-    bool addLineToPage(const CachedLine& line);
-    void newPage();
-    void completePage();
-    bool hasRoomForLine() const;
-    
-    // Update metrics after config change
-    void updateMetrics();
-    
-    // Soft hyphen handling
-    static bool containsSoftHyphen(const String& word);
-    static void stripSoftHyphens(String& word);
+    /**
+     * Load page from cache file
+     */
+    bool loadPageFromCache(int pageNum, LayoutPage& out);
 };
 
-// Global instance
-extern TextLayout textLayout;
+// =============================================================================
+// Global Instance
+// =============================================================================
+extern TextLayout* textLayout;
 
 #endif // SUMI_TEXT_LAYOUT_H

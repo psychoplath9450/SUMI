@@ -1160,6 +1160,55 @@ input[type="range"] {
 .text-center { text-align: center; }
 .text-muted { color: var(--mac-gray-dark); }
 
+/* Spinner Animation */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--mac-gray);
+  border-top-color: var(--mac-highlight);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Book cover preview in grid */
+.book-cover-preview {
+  width: 100%;
+  height: 80px;
+  object-fit: contain;
+  border-radius: 2px;
+  background: var(--mac-gray-light);
+}
+
+.book-item-with-cover {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.cover-status {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-top: 2px;
+}
+
+.cover-status.has-cover {
+  background: #d4edda;
+  color: #155724;
+}
+
+.cover-status.no-cover {
+  background: #fff3cd;
+  color: #856404;
+}
+
 </style>
 </head>
 <body>
@@ -1179,13 +1228,16 @@ input[type="range"] {
     </div>
   </header>
   
+  <!-- Connection Mode Banner -->
+  <div id="connectionBanner" style="display: none;"></div>
+  
   <div class="main">
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
         <div class="nav-section-title">Setup</div>
-        <div class="nav-item active" data-page="home"><span class="nav-icon">🏠</span>Dashboard</div>
+        <div class="nav-item" data-page="summary"><span class="nav-icon">📋</span>My SUMI</div>
         <div class="nav-item" data-page="builder"><span class="nav-icon">🎨</span>Customize</div>
-        <div class="nav-item" data-page="wifi"><span class="nav-icon">📶</span>WiFi</div>
+        <div class="nav-item active" data-page="wifi"><span class="nav-icon">📶</span>WiFi</div>
       </div>
       <div class="nav-section">
         <div class="nav-section-title">Content</div>
@@ -1202,64 +1254,159 @@ input[type="range"] {
     </nav>
     
     <main class="content">
-      <!-- ==================== HOME PAGE ==================== -->
-      <div class="page active" id="page-home">
+      <!-- ==================== MY SUMI SUMMARY PAGE ==================== -->
+      <div class="page" id="page-summary">
         <div class="page-header">
-          <h1 class="page-title">Welcome to Sumi</h1>
-          <p class="page-desc">Your e-ink companion is ready to be configured</p>
+          <h1 class="page-title">My SUMI</h1>
+          <p class="page-desc">Your device configuration at a glance</p>
         </div>
         
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-icon">🔋</div>
-            <div class="stat-value" id="statBattery">--%</div>
-            <div class="stat-label">Battery</div>
+        <!-- Device Status -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #e3f2fd 0%, #bbdefb 100%);">
+            <span class="card-title">📟 Device Status</span>
           </div>
-          <div class="stat-card">
-            <div class="stat-icon">💾</div>
-            <div class="stat-value" id="statStorage">--</div>
-            <div class="stat-label">Storage</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon">📶</div>
-            <div class="stat-value" id="statWifi">--</div>
-            <div class="stat-label">WiFi</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon">⏱️</div>
-            <div class="stat-value" id="statUptime">--</div>
-            <div class="stat-label">Uptime</div>
-          </div>
-        </div>
-        
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Quick Setup</span>
-          </div>
-          <div class="card-body">
-            <p class="text-muted mb-8">Get started with these essential steps:</p>
-            <div class="btn-group" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
-              <button class="btn btn-primary" onclick="showPage('wifi')">📶 Connect WiFi</button>
-              <button class="btn btn-secondary" onclick="showPage('builder')">🎨 Customize</button>
-              <button class="btn btn-secondary" onclick="showPage('files')">📁 Manage Files</button>
-              <button class="btn btn-secondary" onclick="showPage('bluetooth')">⌨️ Pair Keyboard</button>
+          <div class="card-body" id="summaryDevice">
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: center;">
+              <div><div style="font-size: 24px;">🔋</div><div style="font-weight: 600;" id="sumBattery">--%</div><div style="font-size: 11px; color: #666;">Battery</div></div>
+              <div><div style="font-size: 24px;">💾</div><div style="font-weight: 600;" id="sumStorage">--</div><div style="font-size: 11px; color: #666;">Storage</div></div>
+              <div><div style="font-size: 24px;">🧠</div><div style="font-weight: 600;" id="sumMemory">--</div><div style="font-size: 11px; color: #666;">Free RAM</div></div>
+              <div><div style="font-size: 24px;">⏱️</div><div style="font-weight: 600;" id="sumUptime">--</div><div style="font-size: 11px; color: #666;">Uptime</div></div>
             </div>
           </div>
         </div>
         
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Device Info</span>
+        <!-- Connection & Location -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #e8f5e9 0%, #c8e6c9 100%);">
+            <span class="card-title">🌐 Connection & Location</span>
           </div>
-          <div class="card-body">
-            <table style="width:100%;font-size:11px;">
-              <tr><td class="text-muted" style="padding:6px 0">Firmware</td><td style="text-align:right" id="infoFirmware">--</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0">Display</td><td style="text-align:right">4.26" 800×480 E-Ink</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0">IP Address</td><td style="text-align:right" id="infoIP">--</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0">Free Memory</td><td style="text-align:right" id="infoMem">--</td></tr>
+          <div class="card-body" id="summaryConnection">
+            <table style="width: 100%; font-size: 12px;">
+              <tr><td style="padding: 6px 0; color: #666;">WiFi Network</td><td style="text-align: right; font-weight: 500;" id="sumWifiSSID">Not connected</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">IP Address</td><td style="text-align: right; font-weight: 500;" id="sumWifiIP">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Weather Location</td><td style="text-align: right; font-weight: 500;" id="sumLocation">Not set</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Timezone</td><td style="text-align: right; font-weight: 500;" id="sumTimezone">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Current Time</td><td style="text-align: right; font-weight: 500;" id="sumTime">--</td></tr>
             </table>
           </div>
         </div>
+        
+        <!-- SD Card Contents -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #fff3e0 0%, #ffe0b2 100%);">
+            <span class="card-title">💾 SD Card Contents</span>
+          </div>
+          <div class="card-body" id="summaryContent">
+            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; text-align: center; margin-bottom: 12px;">
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">📚</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumBooks">0</div>
+                <div style="font-size: 10px; color: #666;">Books</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">🖼️</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumImages">0</div>
+                <div style="font-size: 10px; color: #666;">Images</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">🗺️</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumMaps">0</div>
+                <div style="font-size: 10px; color: #666;">Maps</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">🎴</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumCards">0</div>
+                <div style="font-size: 10px; color: #666;">Flashcards</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">📝</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumNotes">0</div>
+                <div style="font-size: 10px; color: #666;">Notes</div>
+              </div>
+            </div>
+            <div id="sumBooksStatus" style="background: #e8f5e9; border-radius: 6px; padding: 8px 12px; font-size: 11px; display: none;">
+              <span style="color: #2e7d32;">✓ All books processed and ready</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Home Screen Customization -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #f3e5f5 0%, #e1bee7 100%);">
+            <span class="card-title">🎨 Home Screen</span>
+          </div>
+          <div class="card-body" id="summaryHomeScreen">
+            <table style="width: 100%; font-size: 12px;">
+              <tr><td style="padding: 6px 0; color: #666;">Theme</td><td style="text-align: right; font-weight: 500;" id="sumTheme">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Icon Style</td><td style="text-align: right; font-weight: 500;" id="sumIconStyle">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Orientation</td><td style="text-align: right; font-weight: 500;" id="sumOrientation">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Status Bar</td><td style="text-align: right; font-weight: 500;" id="sumStatusBar">--</td></tr>
+            </table>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
+              <div style="font-size: 11px; color: #666; margin-bottom: 8px;">Enabled Apps:</div>
+              <div id="sumApps" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Display & Power Settings -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #e0f7fa 0%, #b2ebf2 100%);">
+            <span class="card-title">⚙️ Settings</span>
+          </div>
+          <div class="card-body" id="summarySettings">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Display</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">Boot to Last Book</td><td style="text-align: right;" id="sumBootBook">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Invert Colors</td><td style="text-align: right;" id="sumInvert">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Sleep Timer</td><td style="text-align: right;" id="sumSleepTimer">--</td></tr>
+                </table>
+              </div>
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Reader</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">Font Size</td><td style="text-align: right;" id="sumFontSize">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Line Height</td><td style="text-align: right;" id="sumLineHeight">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Justify Text</td><td style="text-align: right;" id="sumJustify">--</td></tr>
+                </table>
+              </div>
+            </div>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Sync</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">KOSync</td><td style="text-align: right;" id="sumKosync">--</td></tr>
+                </table>
+              </div>
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Keyboard</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">Bluetooth</td><td style="text-align: right;" id="sumBluetooth">--</td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Last Updated -->
+        <div style="text-align: center; font-size: 11px; color: #999; margin-top: 16px;">
+          <span id="sumLastUpdated">Last updated: --</span>
+          <button class="btn btn-sm btn-secondary" style="margin-left: 12px;" onclick="refreshSummary()">🔄 Refresh</button>
+        </div>
+      </div>
+
+      <!-- ==================== OLD HOME PAGE (hidden, keep for stat IDs) ==================== -->
+      <div class="page" id="page-home" style="display:none;">
+        <div id="statBattery" style="display:none;">--%</div>
+        <div id="statStorage" style="display:none;">--</div>
+        <div id="statWifi" style="display:none;">--</div>
+        <div id="statUptime" style="display:none;">--</div>
+        <div id="infoFirmware" style="display:none;">--</div>
+        <div id="infoIP" style="display:none;">--</div>
+        <div id="infoMem" style="display:none;">--</div>
       </div>
 
       <!-- ==================== BUILDER PAGE ==================== -->
@@ -1444,10 +1591,28 @@ input[type="range"] {
       </div>
 
       <!-- ==================== WIFI PAGE ==================== -->
-      <div class="page" id="page-wifi">
+      <div class="page active" id="page-wifi">
         <div class="page-header">
           <h1 class="page-title">WiFi Settings</h1>
           <p class="page-desc">Connect to your home network</p>
+        </div>
+        
+        <!-- Important info banner -->
+        <div class="card" style="background: linear-gradient(135deg, #e3f2fd 0%, #e8f5e9 100%); border: 1px solid #90caf9; margin-bottom: 12px;">
+          <div class="card-body" style="padding: 12px;">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <div style="font-size: 24px;">💡</div>
+              <div style="flex: 1;">
+                <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px;">Why Connect to WiFi?</div>
+                <div style="font-size: 11px; color: #555; line-height: 1.5;">
+                  Internet access enables: <strong>Weather updates</strong>, <strong>time sync</strong>, <strong>KOSync reading progress</strong>, and <strong>EPUB pre-processing</strong> (extracts chapters and covers for instant book loading).
+                </div>
+                <div style="font-size: 11px; color: #666; line-height: 1.5; margin-top: 8px; padding-top: 8px; border-top: 1px solid #ccc;">
+                  <strong>Steps:</strong> Enter your WiFi credentials below → After SUMI connects, switch your phone/laptop to the same WiFi → Access portal at the new IP address shown
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         
         <div class="card">
@@ -1489,12 +1654,51 @@ input[type="range"] {
         
         <!-- Books Panel -->
         <div class="file-panel active" id="panel-books">
-          <div class="upload-zone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event,'books')">
+          <!-- Cover Processing Info Card -->
+          <div class="card" style="background: linear-gradient(135deg, #e8f4fd 0%, #f0e6ff 100%); border: 1px solid #b8d4e8; margin-bottom: 12px;">
+            <div class="card-body" style="padding: 12px;">
+              <div style="display: flex; align-items: flex-start; gap: 10px;">
+                <div style="font-size: 24px;">🚀</div>
+                <div style="flex: 1;">
+                  <div style="font-weight: 600; font-size: 13px; margin-bottom: 4px;">Smart Book Processing</div>
+                  <div style="font-size: 11px; color: #555; line-height: 1.4;">
+                    When you upload EPUBs, your browser pre-processes everything: extracts chapters as plain text, 
+                    optimizes cover art, and creates a ready-to-read cache. SUMI loads books instantly with zero processing!
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Dynamic warning for unprocessed books (populated by JS) -->
+          <div id="coverWarning"></div>
+          
+          <!-- Lightbulb tip for processing (populated by JS when on home network) -->
+          <div id="processingTip" style="display: none;"></div>
+          
+          <div class="upload-zone" id="bookUploadZone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleBookDrop(event)">
             <div class="icon">📚</div>
             <div class="text">Drop books here or click to upload</div>
-            <div class="hint">Supports: EPUB, PDF, TXT</div>
-            <input type="file" accept=".epub,.pdf,.txt" multiple onchange="uploadFiles(this.files,'books')">
+            <div class="hint">Supports: EPUB (with automatic cover extraction)</div>
+            <input type="file" accept=".epub,.pdf,.txt" multiple onchange="uploadBooks(this.files)">
           </div>
+          
+          <!-- Upload Progress (hidden by default) -->
+          <div id="uploadProgress" style="display: none; margin-bottom: 12px;">
+            <div class="card">
+              <div class="card-body" style="padding: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                  <div class="spinner" style="width: 20px; height: 20px; border: 2px solid #ddd; border-top-color: #007aff; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                  <div id="uploadStatusText" style="font-size: 12px; font-weight: 500;">Processing...</div>
+                </div>
+                <div class="progress" style="height: 6px; margin-bottom: 6px;">
+                  <div class="progress-bar" id="uploadProgressBar" style="width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <div id="uploadDetailText" style="font-size: 10px; color: #888;"></div>
+              </div>
+            </div>
+          </div>
+          
           <div class="card">
             <div class="card-header">
               <span class="card-title">Your Books</span>
@@ -1530,6 +1734,10 @@ input[type="range"] {
                     <span class="toggle-label">Justify Text</span>
                     <div class="toggle-switch on" id="togJustify" onclick="toggleReaderOpt(this,'textAlign');updateReaderPreview()"></div>
                   </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Require Pre-processing</span>
+                    <div class="toggle-switch on" id="togReqPreprocess" onclick="toggleReaderOpt(this,'requirePreprocessed')" title="Books must be processed via portal to open (recommended)"></div>
+                  </div>
                 </div>
                 <div>
                   <div style="font-size:9px;font-weight:bold;margin-bottom:4px;color:var(--mac-gray-dark);">Preview</div>
@@ -1544,6 +1752,20 @@ input[type="range"] {
         
         <!-- Images Panel -->
         <div class="file-panel" id="panel-images">
+          <!-- Info box -->
+          <div style="background: #e8f4fd; border: 1px solid #bee5eb; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <div style="font-size: 16px;">💡</div>
+              <div style="flex: 1; font-size: 11px; color: #0c5460; line-height: 1.5;">
+                <strong>Image Tips:</strong><br>
+                • <strong>Format:</strong> BMP files (1-bit monochrome or 24-bit color)<br>
+                • <strong>Processing:</strong> Color images auto-convert to grayscale with dithering<br>
+                • <strong>Size:</strong> Images are scaled to fit the 800×480 e-ink display<br>
+                • <strong>Sleep Screen:</strong> Enable "Shuffle Images" in Settings to use as a rotating sleep screen slideshow
+              </div>
+            </div>
+          </div>
+          
           <div class="upload-zone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event,'images')">
             <div class="icon">🖼️</div>
             <div class="text">Drop images here</div>
@@ -1585,11 +1807,86 @@ input[type="range"] {
             <button class="btn btn-secondary" onclick="document.getElementById('ankiImport').click()">📥 Import</button>
             <input type="file" id="ankiImport" accept=".txt,.csv,.apkg" style="display:none" onchange="importAnkiDeck(this.files[0])">
           </div>
+          
+          <!-- Info box -->
+          <div style="background: #e8f4fd; border: 1px solid #bee5eb; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <div style="font-size: 16px;">💡</div>
+              <div style="flex: 1; font-size: 11px; color: #0c5460; line-height: 1.5;">
+                <strong>Supported Formats:</strong><br>
+                • <strong>CSV/TSV (recommended):</strong> <code>question,answer</code> or <code>term⇥definition</code> — works with Quizlet & Anki exports<br>
+                • <strong>TXT:</strong> Alternating lines (question on one line, answer on next) or <code>question;answer</code> per line<br>
+                • <strong>JSON:</strong> Array of objects with field pairs: front/back, question/answer, term/definition, word/meaning, or kanji/reading
+              </div>
+            </div>
+          </div>
+          
           <div class="card">
             <div class="card-header"><span class="card-title">Your Decks</span><button class="btn btn-sm btn-secondary" onclick="refreshFiles('flashcards')">🔄</button></div>
             <div class="card-body">
               <div id="deckList">
                 <div class="file-empty"><div class="icon">🎴</div><div>No decks yet</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Flashcard Settings</span></div>
+            <div class="card-body">
+              <div style="display:grid;grid-template-columns:1fr 180px;gap:12px;">
+                <div>
+                  <div class="slider-row">
+                    <span class="slider-label">Font Size</span>
+                    <select id="fcFontSize" onchange="updateFlashcardPreview();saveFlashcardSettings()">
+                      <option value="0">Small</option>
+                      <option value="1" selected>Medium</option>
+                      <option value="2">Large</option>
+                      <option value="3">Extra Large</option>
+                    </select>
+                  </div>
+                  <div class="toggle">
+                    <span class="toggle-label">Center Text</span>
+                    <div class="toggle-switch on" id="togFcCenter" onclick="toggleSwitchSimple(this);updateFlashcardPreview();saveFlashcardSettings()"></div>
+                  </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Shuffle Cards</span>
+                    <div class="toggle-switch on" id="togFcShuffle" onclick="toggleSwitchSimple(this);saveFlashcardSettings()"></div>
+                  </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Show Progress Bar</span>
+                    <div class="toggle-switch on" id="togFcProgress" onclick="toggleSwitchSimple(this);updateFlashcardPreview();saveFlashcardSettings()"></div>
+                  </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Show Stats</span>
+                    <div class="toggle-switch on" id="togFcStats" onclick="toggleSwitchSimple(this);updateFlashcardPreview();saveFlashcardSettings()"></div>
+                  </div>
+                </div>
+                <div>
+                  <div style="font-size:9px;font-weight:bold;margin-bottom:4px;color:var(--mac-gray-dark);">Preview</div>
+                  <div id="flashcardPreview" style="background:#f5f5f0;border:1px solid var(--mac-black);height:200px;overflow:hidden;font-family:sans-serif;position:relative;">
+                    <!-- Progress bar -->
+                    <div id="fcPreviewProgress" style="height:6px;background:#ddd;margin:6px 8px;">
+                      <div style="width:40%;height:100%;background:#333;"></div>
+                    </div>
+                    <div style="font-size:8px;padding:0 8px;color:#666;">Card 2 of 5</div>
+                    <div style="border-top:1px solid #333;margin:4px 0;"></div>
+                    <!-- Question area -->
+                    <div id="fcPreviewQuestion" style="padding:4px 8px;">
+                      <div style="font-size:8px;color:#666;margin-bottom:2px;">Question:</div>
+                      <div id="fcPreviewQText" style="font-size:14px;font-weight:bold;">What is 2 + 2?</div>
+                    </div>
+                    <div style="border-top:1px solid #333;margin:4px 8px;"></div>
+                    <!-- Answer area -->
+                    <div id="fcPreviewAnswer" style="padding:4px 8px;">
+                      <div style="font-size:8px;color:#666;margin-bottom:2px;">Answer:</div>
+                      <div id="fcPreviewAText" style="font-size:14px;font-weight:bold;">4</div>
+                    </div>
+                    <!-- Footer -->
+                    <div style="position:absolute;bottom:0;left:0;right:0;border-top:1px solid #333;padding:4px 8px;background:#f5f5f0;display:flex;justify-content:space-between;font-size:8px;">
+                      <span id="fcPreviewStats">2/0</span>
+                      <span>&lt;Wrong  Right&gt;</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1881,13 +2178,20 @@ const PLUGINS = {
 };
 
 // Default apps: Widgets first (all 3), then apps, then settings
-const DEFAULTS = ['weather','orient','book','library','flashcards','chess','cube3d','settings'];
+const DEFAULTS = ['weather','book','library','flashcards','chess','sudoku','settings'];
 
 // =============================================================================
 // STATE
 // =============================================================================
 let selected = new Set(DEFAULTS);
 let originalSelected = new Set(DEFAULTS);
+let processingState = {
+  active: false,
+  current: 0,
+  total: 0,
+  currentBook: '',
+  currentStep: ''
+};
 let builderConfig = {
   // Theme & Layout
   theme: 0,
@@ -1952,6 +2256,7 @@ function showPage(pageId) {
   document.getElementById('sidebar').classList.remove('open');
   
   // Load page-specific data
+  if (pageId === 'summary') refreshSummary();
   if (pageId === 'wifi') loadWifiStatus();
   if (pageId === 'bluetooth') loadBT();
   if (pageId === 'files') refreshFiles('books');
@@ -1984,7 +2289,7 @@ async function loadStatus() {
   document.getElementById('powerPercent').textContent = bat + '%';
   document.getElementById('powerVolts').textContent = (d.battery?.voltage ?? 0).toFixed(2) + ' V';
   
-  const storage = d.storage?.sd_total_mb ? Math.round(d.storage.sd_total_mb) + ' MB' : 'No SD';
+  const storage = d.storage?.sd_total_mb ? (d.storage.sd_total_mb / 1024).toFixed(1) + ' GB' : 'No SD';
   document.getElementById('statStorage').textContent = storage;
   
   // Track WiFi connection state
@@ -1993,6 +2298,9 @@ async function loadStatus() {
   document.getElementById('headerStatus').textContent = wifiConnected ? 'Connected' : 'Setup Mode';
   const statusDot = document.getElementById('statusDot');
   if (statusDot) statusDot.classList.toggle('disconnected', !wifiConnected);
+  
+  // Update connection banner based on ACTUAL WiFi state
+  updateConnectionBanner(wifiConnected, d.wifi?.ssid, d.wifi?.ip);
   
   // Check for WiFi warnings after status update
   checkWifiWarnings();
@@ -2007,6 +2315,216 @@ async function loadStatus() {
   document.getElementById('infoMem').textContent = Math.round((d.free_heap || 0) / 1024) + ' KB';
   document.getElementById('aboutMem').textContent = Math.round((d.free_heap || 0) / 1024) + ' KB';
   document.getElementById('aboutSD').textContent = storage;
+  
+  // Also update summary page if visible
+  if (document.getElementById('page-summary')?.classList.contains('active')) {
+    refreshSummary();
+  }
+}
+
+// =============================================================================
+// MY SUMI SUMMARY
+// =============================================================================
+async function refreshSummary() {
+  try {
+    // Get device status
+    const status = await api('/api/status');
+    if (status) {
+      document.getElementById('sumBattery').textContent = (status.battery?.percent ?? '--') + '%';
+      document.getElementById('sumStorage').textContent = status.storage?.sd_total_mb ? (status.storage.sd_total_mb / 1024).toFixed(1) + ' GB' : 'No SD';
+      document.getElementById('sumMemory').textContent = Math.round((status.free_heap || 0) / 1024) + ' KB';
+      document.getElementById('sumUptime').textContent = Math.floor((status.uptime || 0) / 60) + ' min';
+      
+      // WiFi info
+      if (status.wifi?.connected) {
+        document.getElementById('sumWifiSSID').textContent = status.wifi.ssid || 'Connected';
+        document.getElementById('sumWifiIP').textContent = status.wifi.ip || '--';
+      } else {
+        document.getElementById('sumWifiSSID').textContent = 'Not connected';
+        document.getElementById('sumWifiIP').textContent = '192.168.4.1 (Hotspot)';
+      }
+    }
+    
+    // Get settings
+    const settings = await api('/api/settings');
+    if (settings) {
+      // Weather/Location
+      document.getElementById('sumLocation').textContent = settings.weather?.zipCode || settings.weather?.location || 'Auto (IP-based)';
+      document.getElementById('sumTimezone').textContent = settings.display?.timezone || 'Auto';
+      
+      // Display settings
+      document.getElementById('sumBootBook').textContent = settings.display?.bootToLastBook ? '✓ On' : '✗ Off';
+      document.getElementById('sumInvert').textContent = settings.display?.invertColors ? '✓ On' : '✗ Off';
+      document.getElementById('sumSleepTimer').textContent = settings.display?.sleepMinutes ? settings.display.sleepMinutes + ' min' : 'Off';
+      
+      // Reader settings
+      document.getElementById('sumFontSize').textContent = (settings.reader?.fontSize || 18) + 'px';
+      document.getElementById('sumLineHeight').textContent = (settings.reader?.lineHeight || 150) + '%';
+      document.getElementById('sumJustify').textContent = settings.reader?.justify ? '✓ On' : '✗ Off';
+      
+      // Sync
+      document.getElementById('sumKosync').textContent = settings.sync?.kosyncEnabled ? '✓ Enabled' : '✗ Off';
+      
+      // Bluetooth
+      document.getElementById('sumBluetooth').textContent = settings.bluetooth?.btEnabled ? '✓ Enabled' : '✗ Off';
+      
+      // Theme & Layout from builder config
+      const themes = ['Classic', 'Modern', 'Minimal', 'Retro'];
+      document.getElementById('sumTheme').textContent = themes[builderConfig.theme] || 'Classic';
+      document.getElementById('sumIconStyle').textContent = builderConfig.iconStyle === 'rounded' ? 'Rounded' : 'Flat';
+      document.getElementById('sumOrientation').textContent = builderConfig.orientation === 'portrait' ? 'Portrait' : 'Landscape';
+      
+      const statusBarParts = [];
+      if (builderConfig.showBattery) statusBarParts.push('Battery');
+      if (builderConfig.showClock) statusBarParts.push('Clock');
+      if (builderConfig.showWifi) statusBarParts.push('WiFi');
+      document.getElementById('sumStatusBar').textContent = statusBarParts.length > 0 ? statusBarParts.join(', ') : 'Hidden';
+    }
+    
+    // Get enabled apps
+    const appsDiv = document.getElementById('sumApps');
+    appsDiv.innerHTML = '';
+    const allPlugins = [...PLUGINS.core, ...PLUGINS.games, ...PLUGINS.tools, ...PLUGINS.widgets, ...PLUGINS.system];
+    for (const id of selected) {
+      const plugin = allPlugins.find(p => p.id === id);
+      if (plugin) {
+        const badge = document.createElement('span');
+        badge.style.cssText = 'background: #e9ecef; padding: 4px 8px; border-radius: 12px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;';
+        badge.innerHTML = `${plugin.icon} ${plugin.name}`;
+        appsDiv.appendChild(badge);
+      }
+    }
+    
+    // Get file counts
+    const bookData = await api('/api/files?path=/books');
+    const imageData = await api('/api/files?path=/images');
+    const mapData = await api('/api/files?path=/maps');
+    const cardData = await api('/api/files?path=/flashcards');
+    const noteData = await api('/api/files?path=/notes');
+    
+    const bookCount = bookData?.files?.filter(f => !f.dir && /\.(epub|txt|pdf)$/i.test(f.name)).length || 0;
+    const imageCount = imageData?.files?.filter(f => !f.dir && /\.(bmp|raw)$/i.test(f.name)).length || 0;
+    const mapCount = mapData?.files?.filter(f => f.dir || /\.(jpg|jpeg|png|bmp)$/i.test(f.name)).length || 0;
+    const cardCount = cardData?.files?.filter(f => !f.dir && /\.(json|csv|tsv|txt)$/i.test(f.name)).length || 0;
+    const noteCount = noteData?.files?.filter(f => !f.dir && /\.(txt|md)$/i.test(f.name)).length || 0;
+    
+    document.getElementById('sumBooks').textContent = bookCount;
+    document.getElementById('sumImages').textContent = imageCount;
+    document.getElementById('sumMaps').textContent = mapCount;
+    document.getElementById('sumCards').textContent = cardCount;
+    document.getElementById('sumNotes').textContent = noteCount;
+    
+    // Check book processing status
+    try {
+      const bookStatus = await fetch('/api/books/status');
+      const bookStatusData = await bookStatus.json();
+      const statusDiv = document.getElementById('sumBooksStatus');
+      
+      if (bookStatusData.unprocessed?.length > 0) {
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = '#fff3cd';
+        statusDiv.innerHTML = `<span style="color: #856404;">⚠️ ${bookStatusData.unprocessed.length} book${bookStatusData.unprocessed.length > 1 ? 's' : ''} need processing</span> <a href="#" onclick="showPage('files'); setTimeout(() => showFileTab('books'), 100); return false;" style="color: #856404; font-weight: 600; margin-left: 8px;">Process →</a>`;
+      } else if (bookCount > 0) {
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = '#d4edda';
+        statusDiv.innerHTML = `<span style="color: #155724;">✓ All ${bookCount} book${bookCount > 1 ? 's' : ''} processed and ready</span>`;
+      } else {
+        statusDiv.style.display = 'none';
+      }
+    } catch (e) {
+      document.getElementById('sumBooksStatus').style.display = 'none';
+    }
+    
+    // Current time
+    document.getElementById('sumTime').textContent = new Date().toLocaleTimeString();
+    
+    // Last updated
+    document.getElementById('sumLastUpdated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+    
+  } catch (e) {
+    console.error('Failed to refresh summary:', e);
+  }
+}
+
+// Update the connection banner based on actual WiFi state from API + browser internet check
+async function updateConnectionBanner(sumiConnected, ssid, sumiIP) {
+  const banner = document.getElementById('connectionBanner');
+  if (!banner) return;
+  
+  banner.style.display = 'block';
+  
+  if (!sumiConnected) {
+    // State 1: SUMI is in hotspot-only mode (no WiFi credentials saved)
+    banner.innerHTML = `
+      <div style="background: linear-gradient(90deg, #fff3cd 0%, #ffe69c 100%); border-bottom: 1px solid #ffc107; padding: 8px 16px; display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 18px;">📡</span>
+        <div style="flex: 1;">
+          <span style="font-weight: 600; color: #856404;">Hotspot Mode</span>
+          <span style="color: #856404; font-size: 12px;"> — Connect SUMI to your home WiFi for weather, sync, and book processing.</span>
+        </div>
+        <a href="#" onclick="showPage('wifi'); return false;" style="background: #ffc107; color: #856404; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: 600;">Setup WiFi →</a>
+      </div>
+    `;
+    return;
+  }
+  
+  // SUMI is connected to home WiFi - check if browser is still on hotspot
+  // 192.168.4.1 definitively means hotspot
+  // sumi.local could be either - need to verify internet access
+  const browserHost = window.location.hostname;
+  const isDefinitelyOnHotspot = (browserHost === '192.168.4.1');
+  const sumiHasHomeIP = sumiIP && sumiIP !== '192.168.4.1';
+  
+  // If we're at sumi.local and SUMI is connected to home WiFi,
+  // we need to check if browser has internet to know which network we're on
+  let browserHasInternet = false;
+  if (!isDefinitelyOnHotspot && sumiHasHomeIP) {
+    // Use image load to test internet - this actually fails without connectivity
+    browserHasInternet = await new Promise((resolve) => {
+      const img = new Image();
+      const timeout = setTimeout(() => {
+        img.onload = img.onerror = null;
+        resolve(false);
+      }, 3000);
+      img.onload = () => {
+        clearTimeout(timeout);
+        resolve(true);
+      };
+      img.onerror = () => {
+        clearTimeout(timeout);
+        resolve(false);
+      };
+      // Use a tiny favicon with cache-busting
+      img.src = 'https://www.google.com/favicon.ico?t=' + Date.now();
+    });
+  }
+  
+  if (isDefinitelyOnHotspot || (!browserHasInternet && sumiHasHomeIP)) {
+    // State 2: Browser on hotspot but SUMI connected to home WiFi - prompt to switch
+    banner.innerHTML = `
+      <div style="background: linear-gradient(90deg, #fff3cd 0%, #ffe69c 100%); border-bottom: 2px solid #ffc107; padding: 10px 16px; display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 20px;">⚠️</span>
+        <div style="flex: 1;">
+          <span style="font-weight: 700; color: #856404;">Switch to ${ssid} for book processing</span>
+          <div style="color: #856404; font-size: 12px; margin-top: 4px;">
+            Then visit <a href="http://sumi.local" style="color: #856404; font-weight: 600;">sumi.local</a> or <a href="http://${sumiIP}" style="color: #856404; font-weight: 600;">${sumiIP}</a>
+          </div>
+        </div>
+      </div>
+    `;
+  } else {
+    // State 3: Both SUMI and browser on home network - full features!
+    banner.innerHTML = `
+      <div style="background: linear-gradient(90deg, #d4edda 0%, #c3e6cb 100%); border-bottom: 1px solid #28a745; padding: 8px 16px; display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 18px;">✅</span>
+        <div style="flex: 1;">
+          <span style="font-weight: 600; color: #155724;">Connected via Home Network</span>
+          <span style="color: #155724; font-size: 12px;"> — Full features available: weather, sync, book processing.</span>
+        </div>
+        <span style="color: #155724; font-size: 11px; opacity: 0.8;">${ssid} • ${sumiIP}</span>
+      </div>
+    `;
+  }
 }
 
 // =============================================================================
@@ -2467,6 +2985,11 @@ async function saveAndDeploy() {
         hItemsPerRow: hCols,
         vItemsPerRow: vCols,
         
+        // Widget visibility - derived from selected set
+        showBookWidget: selected.has('book'),
+        showWeatherWidget: selected.has('weather'),
+        showOrientWidget: selected.has('orient'),
+        
         // Appearance
         buttonShape: {rounded:0, square:2, circle:1}[builderConfig.iconStyle] || 0,
         bgTheme: builderConfig.theme,
@@ -2499,7 +3022,8 @@ async function saveAndDeploy() {
         fontSize: parseInt(document.getElementById('readerFontSize')?.value) || 18,
         lineHeight: parseInt(document.getElementById('readerLineHeight')?.value) || 150,
         margins: parseInt(document.getElementById('readerMargins')?.value) || 20,
-        sceneBreakSpacing: parseInt(document.getElementById('readerSceneBreak')?.value) || 30
+        textAlign: document.getElementById('togJustify')?.classList.contains('on') ? 1 : 0,
+        requirePreprocessed: document.getElementById('togReqPreprocess')?.classList.contains('on') ?? true
       }
     });
     
@@ -2543,19 +3067,43 @@ async function loadWifiStatus() {
   const d = await api('/api/status');
   if (d?.wifi) {
     wifiConnected = d.wifi.connected;
+    
     if (d.wifi.connected) {
-      document.getElementById('wifiStatus').innerHTML = `
-        <div style="color:var(--success);font-weight:600;margin-bottom:8px;">✓ Connected</div>
-        <div>Network: ${d.wifi.ssid}</div>
-        <div style="color:var(--text-muted);">IP: ${d.wifi.ip}</div>
-        <div style="color:var(--text-muted);margin-top:8px;font-size:12px;">📍 Weather location auto-detected from IP</div>
-        <button class="btn btn-sm btn-secondary" style="margin-top:12px;" onclick="disconnectWifi()">📴 Disconnect</button>
-      `;
+      // SUMI is connected to a network - check if browser is on hotspot
+      // Only 192.168.4.1 definitively means hotspot (sumi.local works via mDNS from home network too)
+      const browserHost = window.location.hostname;
+      const isOnHotspot = (browserHost === '192.168.4.1');
+      
+      if (isOnHotspot) {
+        // User is on hotspot but SUMI connected to WiFi - prompt to switch for full features
+        document.getElementById('wifiStatus').innerHTML = `
+          <div style="color:var(--success);font-weight:600;margin-bottom:8px;">✓ SUMI Connected to ${d.wifi.ssid}</div>
+          <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin: 10px 0;">
+            <div style="font-size: 12px; color: #856404; line-height: 1.5;">
+              <strong>Switch to ${d.wifi.ssid}</strong> for book processing, then visit:<br>
+              <a href="http://sumi.local" style="color: #856404; font-weight: 600;">sumi.local</a> or 
+              <a href="http://${d.wifi.ip}" style="color: #856404; font-weight: 600;">${d.wifi.ip}</a>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-secondary" style="margin-top:8px;" onclick="disconnectWifi()">📴 Disconnect</button>
+        `;
+      } else {
+        // User is already on home network - all good!
+        document.getElementById('wifiStatus').innerHTML = `
+          <div style="color:var(--success);font-weight:600;margin-bottom:8px;">✓ Connected to ${d.wifi.ssid}</div>
+          <div style="color:var(--text-muted);font-size:12px;">IP: ${d.wifi.ip}</div>
+          <div style="color:var(--text-muted);margin-top:8px;font-size:12px;">📍 Weather location auto-detected from IP</div>
+          <button class="btn btn-sm btn-secondary" style="margin-top:12px;" onclick="disconnectWifi()">📴 Disconnect</button>
+        `;
+      }
     } else {
       document.getElementById('wifiStatus').innerHTML = `
         <div style="color:var(--warning);font-weight:600;margin-bottom:8px;">📡 Hotspot Mode</div>
-        <div style="color:var(--text-muted);">Connect to a WiFi network below to access Sumi from your home network</div>
+        <div style="color:var(--text-muted);">Connect to a WiFi network below to enable weather, sync, and book processing features</div>
       `;
+      
+      // Auto-scan for networks if not connected yet
+      scanWifi();
     }
     // Update warning after status is known
     checkWifiWarnings();
@@ -2631,7 +3179,18 @@ function showFileTab(tab) {
   document.querySelectorAll('.file-panel').forEach(p => p.classList.remove('active'));
   document.querySelector(`.file-tab[onclick*="${tab}"]`)?.classList.add('active');
   document.getElementById('panel-' + tab)?.classList.add('active');
+  
+  // Don't refresh books tab while processing - it would wipe out the progress UI
+  if (tab === 'books' && processingState.active) {
+    return;
+  }
+  
   refreshFiles(tab);
+  
+  // Load flashcard settings when tab is shown
+  if (tab === 'flashcards') {
+    loadFlashcardSettings();
+  }
 }
 
 async function refreshFiles(type) {
@@ -2645,6 +3204,43 @@ async function refreshFiles(type) {
   if (type === 'books') {
     // Include epub, txt, pdf files (no directories)
     files = files.filter(f => !f.dir && /\.(epub|txt|pdf)$/i.test(f.name));
+    
+    // Get processing status and metadata for books
+    try {
+      const statusResp = await fetch('/api/books/status');
+      const statusData = await statusResp.json();
+      
+      // Build lookup map for processed books with metadata
+      const processedMap = {};
+      (statusData.processed || []).forEach(b => {
+        processedMap[b.name] = b;
+      });
+      
+      files = files.map(f => {
+        const meta = processedMap[f.name];
+        if (meta) {
+          return {
+            ...f,
+            isProcessed: true,
+            hash: meta.hash || simpleHash(f.name),
+            title: meta.title,
+            author: meta.author,
+            totalChapters: meta.totalChapters,
+            totalWords: meta.totalWords,
+            estimatedPages: meta.estimatedPages,
+            estimatedReadingMins: meta.estimatedReadingMins,
+            currentChapter: meta.currentChapter,
+            currentPage: meta.currentPage,
+            lastRead: meta.lastRead
+          };
+        } else {
+          return { ...f, isProcessed: false, hash: simpleHash(f.name) };
+        }
+      });
+    } catch (e) {
+      // If status API fails, just show books without processed indicator
+      files = files.map(f => ({ ...f, isProcessed: false, hash: simpleHash(f.name) }));
+    }
   } else if (type === 'images') {
     // Only BMP and RAW formats are supported on e-ink display
     files = files.filter(f => !f.dir && /\.(bmp|raw)$/i.test(f.name));
@@ -2660,6 +3256,11 @@ async function refreshFiles(type) {
   fileCache[type] = files;
   renderFileGrid(type);
   updateFileCounts();
+  
+  // Check if any books need processing (only for books tab)
+  if (type === 'books') {
+    checkBooksNeedProcessing();
+  }
 }
 
 function renderFileGrid(type) {
@@ -2698,10 +3299,70 @@ function renderFileGrid(type) {
         <button class="delete-btn" onclick="event.stopPropagation();deleteFile('maps','${f.name}')" style="position:absolute;top:4px;right:4px;width:20px;height:20px;border:none;background:var(--error);color:white;border-radius:50%;cursor:pointer;font-size:12px;line-height:1;">×</button>
       </div>
     `).join('');
+  } else if (type === 'books') {
+    // Special rendering for books with cover images and metadata
+    grid.innerHTML = files.map(f => {
+      // Use download API to fetch covers from SD card
+      const coverUrl = f.isProcessed && f.hash ? `/api/download?path=/.sumi/books/${f.hash}/cover_thumb.jpg` : null;
+      
+      // Format reading time
+      const formatReadTime = (mins) => {
+        if (!mins) return '';
+        const hrs = Math.floor(mins / 60);
+        const m = mins % 60;
+        return hrs > 0 ? `${hrs}h ${m}m` : `${m}m`;
+      };
+      
+      // Build metadata line
+      let metaInfo = [];
+      if (f.isProcessed) {
+        if (f.totalChapters) metaInfo.push(`${f.totalChapters} ch`);
+        if (f.estimatedPages) metaInfo.push(`~${f.estimatedPages} pg`);
+        if (f.estimatedReadingMins) metaInfo.push(formatReadTime(f.estimatedReadingMins));
+      } else {
+        metaInfo.push(formatSize(f.size));
+      }
+      
+      // Progress indicator
+      let progressBar = '';
+      if (f.isProcessed && f.currentChapter !== undefined && f.totalChapters > 0) {
+        const progressPct = Math.round((f.currentChapter / f.totalChapters) * 100);
+        progressBar = `<div style="height:3px;background:#e9ecef;border-radius:2px;margin-top:4px;overflow:hidden;">
+          <div style="height:100%;width:${progressPct}%;background:#007bff;"></div>
+        </div>
+        <div style="font-size:9px;color:#007bff;margin-top:2px;">${progressPct}% complete</div>`;
+      }
+      
+      const processedBadge = f.isProcessed 
+        ? `<div style="position:absolute;top:6px;left:6px;background:#28a745;color:white;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;box-shadow:0 2px 4px rgba(0,0,0,0.3);">✓</div>`
+        : `<div style="position:absolute;top:6px;left:6px;background:#ffc107;color:#333;border-radius:4px;padding:2px 6px;font-size:8px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.2);">PROCESS</div>`;
+      
+      const thumbContent = coverUrl
+        ? `<img src="${coverUrl}" onerror="this.parentElement.innerHTML='${getBookIcon(f.name)}'" style="width:100%;height:100%;object-fit:cover;">`
+        : `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:32px;background:#f0f0f0;">${getBookIcon(f.name)}</div>`;
+      
+      // Title: use metadata title or filename
+      const displayTitle = f.title || f.name.replace(/\.epub$/i, '');
+      const displayAuthor = f.author && f.author !== 'Unknown' ? f.author : '';
+      
+      return `
+        <div class="file-item" style="position:relative;">
+          <div class="thumb" style="position:relative;background:#e9ecef;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);aspect-ratio:2/3;min-height:100px;">
+            ${thumbContent}
+            ${processedBadge}
+          </div>
+          <div class="name" title="${f.name}" style="font-weight:600;font-size:11px;margin-top:6px;line-height:1.3;">${displayTitle.substring(0, 30)}${displayTitle.length > 30 ? '...' : ''}</div>
+          ${displayAuthor ? `<div style="font-size:10px;color:#666;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${displayAuthor}</div>` : ''}
+          <div class="meta" style="font-size:10px;color:#888;margin-top:3px;">${metaInfo.join(' • ')}</div>
+          ${progressBar}
+          <button class="delete-btn" onclick="event.stopPropagation();deleteFile('books','${f.name}')" style="position:absolute;top:4px;right:4px;width:20px;height:20px;border:none;background:var(--error);color:white;border-radius:50%;cursor:pointer;font-size:12px;line-height:1;">×</button>
+        </div>
+      `;
+    }).join('');
   } else {
     grid.innerHTML = files.map(f => `
       <div class="file-item" onclick="openFile('${type}','${f.name}')">
-        <div class="thumb">${type === 'images' ? `<img src="/images/${f.name}" onerror="this.parentElement.innerHTML='🖼️'" style="width:100%;height:100%;object-fit:cover;">` : (type === 'books' ? getBookIcon(f.name) : '📝')}</div>
+        <div class="thumb">${type === 'images' ? `<img src="/images/${f.name}" onerror="this.parentElement.innerHTML='🖼️'" style="width:100%;height:100%;object-fit:cover;">` : '📝'}</div>
         <div class="name" title="${f.name}">${f.name}</div>
         <div class="meta">${formatSize(f.size)}</div>
         <button class="delete-btn" onclick="event.stopPropagation();deleteFile('${type}','${f.name}')" style="position:absolute;top:4px;right:4px;width:20px;height:20px;border:none;background:var(--error);color:white;border-radius:50%;cursor:pointer;font-size:12px;line-height:1;">×</button>
@@ -2781,8 +3442,9 @@ async function uploadFiles(files, type) {
   const paths = {books:'/books', images:'/images', maps:'/maps', flashcards:'/flashcards', notes:'/notes'};
   for (const file of files) {
     const formData = new FormData();
-    formData.append('file', file);
+    // Path must come BEFORE file for multipart parsing
     formData.append('path', paths[type]);
+    formData.append('file', file);
     try {
       await fetch('/api/files/upload', {method:'POST', body:formData});
       toast('Uploaded: ' + file.name, 'success');
@@ -2791,6 +3453,1368 @@ async function uploadFiles(files, type) {
     }
   }
   refreshFiles(type);
+}
+
+// =============================================================================
+// FULL EPUB PRE-PROCESSING SYSTEM
+// =============================================================================
+// This processes EPUBs entirely in the browser:
+// - Extracts metadata (title, author)
+// - Extracts and optimizes cover images
+// - Converts all chapters from HTML to clean plain text
+// - Uploads everything as a ready-to-read cache
+// The ESP32 never has to decompress ZIPs or parse HTML!
+
+let JSZip = null;
+
+async function loadJSZip() {
+  if (JSZip) return true;
+  
+  try {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    
+    await new Promise((resolve, reject) => {
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('CDN unreachable'));
+      document.head.appendChild(script);
+      // Timeout after 10 seconds
+      setTimeout(() => reject(new Error('Timeout')), 10000);
+    });
+    
+    JSZip = window.JSZip;
+    console.log('[PORTAL] JSZip loaded');
+    return true;
+  } catch (e) {
+    console.error('[PORTAL] Failed to load JSZip:', e);
+    // Show helpful error
+    toast('No internet access - connect your device to WiFi with internet', 'error');
+    return false;
+  }
+}
+
+function handleBookDrop(e) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('dragover');
+  uploadBooks(e.dataTransfer.files);
+}
+
+async function uploadBooks(files) {
+  if (!files || files.length === 0) return;
+  
+  const progressDiv = document.getElementById('uploadProgress');
+  const statusText = document.getElementById('uploadStatusText');
+  const detailText = document.getElementById('uploadDetailText');
+  const progressBar = document.getElementById('uploadProgressBar');
+  
+  progressDiv.style.display = 'block';
+  
+  const epubFiles = [];
+  const otherFiles = [];
+  
+  for (const file of files) {
+    if (file.name.toLowerCase().endsWith('.epub')) {
+      epubFiles.push(file);
+    } else {
+      otherFiles.push(file);
+    }
+  }
+  
+  // Upload non-EPUB files normally
+  for (const file of otherFiles) {
+    statusText.textContent = `Uploading ${file.name}...`;
+    detailText.textContent = '';
+    await uploadFileSimple(file, '/books');
+    toast('Uploaded: ' + file.name, 'success');
+  }
+  
+  // Full pre-processing for EPUBs
+  if (epubFiles.length > 0) {
+    statusText.textContent = 'Loading processor...';
+    detailText.textContent = 'Preparing to extract and optimize your books';
+    
+    const hasJSZip = await loadJSZip();
+    
+    if (!hasJSZip) {
+      toast('No internet - uploading without pre-processing (slower reading)', 'warning');
+      for (const file of epubFiles) {
+        await uploadFileSimple(file, '/books');
+      }
+    } else {
+      for (let i = 0; i < epubFiles.length; i++) {
+        const file = epubFiles[i];
+        progressBar.style.width = Math.round((i / epubFiles.length) * 100) + '%';
+        statusText.textContent = `Processing ${file.name} (${i+1}/${epubFiles.length})`;
+        
+        try {
+          await fullProcessEpub(file, (step, subProgress) => {
+            detailText.textContent = step;
+            if (subProgress !== undefined) {
+              const base = (i / epubFiles.length) * 100;
+              const chunk = (1 / epubFiles.length) * 100;
+              progressBar.style.width = (base + chunk * subProgress) + '%';
+            }
+          });
+          toast('✓ ' + file.name, 'success');
+        } catch (e) {
+          console.error('EPUB processing failed:', e);
+          toast('Error: ' + file.name, 'error');
+          // Fallback: upload raw
+          await uploadFileSimple(file, '/books');
+        }
+      }
+    }
+  }
+  
+  progressBar.style.width = '100%';
+  statusText.textContent = 'Complete!';
+  detailText.textContent = '';
+  
+  setTimeout(() => {
+    progressDiv.style.display = 'none';
+    progressBar.style.width = '0%';
+  }, 1500);
+  
+  refreshFiles('books');
+  checkBooksNeedProcessing();
+}
+
+async function uploadFileSimple(file, path) {
+  const formData = new FormData();
+  // Path must come BEFORE file for multipart parsing
+  formData.append('path', path);
+  formData.append('file', file);
+  await fetch('/api/files/upload', {method:'POST', body:formData});
+}
+
+// =============================================================================
+// FULL EPUB PROCESSOR
+// =============================================================================
+async function fullProcessEpub(file, onProgress, onCoverReady) {
+  const hash = simpleHash(file.name);
+  const cacheDir = `/.sumi/books/${hash}`;
+  
+  onProgress('Reading EPUB...', 0);
+  const arrayBuffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  
+  // Step 1: Parse OPF for metadata and spine
+  onProgress('Parsing metadata...', 0.05);
+  const { opfPath, opfContent, opfDir } = await findOPF(zip);
+  if (!opfContent) throw new Error('Invalid EPUB: No OPF found');
+  
+  const metadata = parseMetadata(opfContent);
+  const manifest = parseManifest(opfContent);
+  const spine = parseSpine(opfContent);
+  
+  console.log('[PORTAL] Metadata:', metadata);
+  console.log('[PORTAL] Spine items:', spine.length);
+  
+  // Step 2: Extract cover
+  onProgress('Extracting cover...', 0.1);
+  const coverPath = await findCoverInEpub(zip, opfContent, opfDir);
+  let thumbBlob = null, fullBlob = null;
+  
+  if (coverPath) {
+    const coverFile = zip.file(coverPath);
+    if (coverFile) {
+      const coverData = await coverFile.async('blob');
+      thumbBlob = await processImage(coverData, 120, 180, 0.75);
+      fullBlob = await processImage(coverData, 300, 450, 0.8);
+      
+      // Immediately show cover preview if callback provided
+      if (onCoverReady && thumbBlob) {
+        const coverUrl = URL.createObjectURL(thumbBlob);
+        onCoverReady(coverUrl);
+      }
+    }
+  }
+  
+  // Step 3: Extract and convert all chapters to plain text
+  onProgress('Extracting chapters...', 0.15);
+  const chapters = [];
+  let totalChars = 0;
+  let totalWords = 0;
+  
+  for (let i = 0; i < spine.length; i++) {
+    const idref = spine[i];
+    const item = manifest[idref];
+    if (!item) continue;
+    
+    const progress = 0.15 + (i / spine.length) * 0.7;
+    onProgress(`Chapter ${i+1}/${spine.length}...`, progress);
+    
+    const chapterPath = resolveHref(item.href, opfDir);
+    const chapterFile = zip.file(chapterPath);
+    
+    if (chapterFile) {
+      try {
+        const html = await chapterFile.async('string');
+        const text = htmlToPlainText(html);
+        
+        if (text.trim().length > 0) {
+          const charCount = text.length;
+          const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+          totalChars += charCount;
+          totalWords += wordCount;
+          
+          chapters.push({
+            index: chapters.length,
+            idref: idref,
+            href: item.href,
+            text: text,
+            chars: charCount,
+            words: wordCount
+          });
+        }
+      } catch (e) {
+        console.warn('[PORTAL] Failed to process chapter:', chapterPath, e);
+      }
+    }
+    
+    // Yield to UI
+    if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+  
+  console.log('[PORTAL] Extracted', chapters.length, 'chapters,', totalWords, 'words');
+  
+  // Estimate pages: ~1800 chars per e-ink page (conservative estimate for 800x480)
+  const CHARS_PER_PAGE = 1800;
+  const estimatedPages = Math.ceil(totalChars / CHARS_PER_PAGE);
+  
+  // Step 4: Build meta.json
+  const meta = {
+    version: 3,
+    hash: hash,
+    filename: file.name,
+    fileSize: file.size,
+    title: metadata.title || file.name.replace('.epub', ''),
+    author: metadata.author || 'Unknown',
+    language: metadata.language || 'en',
+    totalChapters: chapters.length,
+    totalChars: totalChars,
+    totalWords: totalWords,
+    estimatedPages: estimatedPages,
+    estimatedReadingMins: Math.ceil(totalWords / 250), // ~250 wpm average
+    processedAt: Date.now(),
+    chapters: chapters.map((c, i) => ({
+      index: i,
+      file: `ch_${String(i).padStart(3, '0')}.txt`,
+      chars: c.chars,
+      words: c.words
+    }))
+  };
+  
+  // Step 5: Upload everything
+  onProgress('Uploading...', 0.85);
+  
+  // Create cache directory
+  await ensureDirectory(cacheDir);
+  
+  // Upload meta.json
+  await uploadTextFile(cacheDir + '/meta.json', JSON.stringify(meta, null, 2));
+  
+  // Upload covers
+  if (thumbBlob) {
+    await uploadBlobFile(cacheDir + '/cover_thumb.jpg', thumbBlob);
+  }
+  if (fullBlob) {
+    await uploadBlobFile(cacheDir + '/cover_full.jpg', fullBlob);
+  }
+  
+  // Upload chapters
+  for (let i = 0; i < chapters.length; i++) {
+    const progress = 0.9 + (i / chapters.length) * 0.08;
+    onProgress(`Saving ${i+1}/${chapters.length}...`, progress);
+    
+    const filename = `ch_${String(i).padStart(3, '0')}.txt`;
+    await uploadTextFile(cacheDir + '/' + filename, chapters[i].text);
+    
+    // Give ESP32 time to process files
+    await new Promise(r => setTimeout(r, 50));
+  }
+  
+  // Upload original EPUB too (for backup/re-processing)
+  onProgress('Saving EPUB...', 0.98);
+  await uploadFileSimple(file, '/books');
+  
+  onProgress('Done!', 1);
+  
+  // Return the metadata for display
+  return meta;
+}
+
+// =============================================================================
+// EPUB PARSING HELPERS
+// =============================================================================
+async function findOPF(zip) {
+  let opfPath = null;
+  
+  // Try container.xml first
+  try {
+    const container = await zip.file('META-INF/container.xml')?.async('string');
+    if (container) {
+      const match = container.match(/full-path="([^"]+\.opf)"/i);
+      if (match) opfPath = match[1];
+    }
+  } catch (e) {}
+  
+  // Fallback: find any .opf
+  if (!opfPath) {
+    for (const path of Object.keys(zip.files)) {
+      if (path.toLowerCase().endsWith('.opf')) {
+        opfPath = path;
+        break;
+      }
+    }
+  }
+  
+  if (!opfPath) return { opfPath: null, opfContent: null, opfDir: '' };
+  
+  const opfContent = await zip.file(opfPath)?.async('string');
+  const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
+  
+  return { opfPath, opfContent, opfDir };
+}
+
+function parseMetadata(opf) {
+  const meta = {};
+  
+  // Title
+  const titleMatch = opf.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/i);
+  if (titleMatch) meta.title = decodeEntities(titleMatch[1].trim());
+  
+  // Author
+  const authorMatch = opf.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/i);
+  if (authorMatch) meta.author = decodeEntities(authorMatch[1].trim());
+  
+  // Language
+  const langMatch = opf.match(/<dc:language[^>]*>([^<]+)<\/dc:language>/i);
+  if (langMatch) meta.language = langMatch[1].trim();
+  
+  return meta;
+}
+
+function parseManifest(opf) {
+  const manifest = {};
+  const itemRegex = /<item\s+([^>]+)>/gi;
+  let match;
+  
+  while ((match = itemRegex.exec(opf)) !== null) {
+    const attrs = match[1];
+    const id = attrs.match(/id=["']([^"']+)["']/i)?.[1];
+    const href = attrs.match(/href=["']([^"']+)["']/i)?.[1];
+    const mediaType = attrs.match(/media-type=["']([^"']+)["']/i)?.[1];
+    
+    if (id && href) {
+      manifest[id] = { href: decodeURIComponent(href), mediaType };
+    }
+  }
+  
+  return manifest;
+}
+
+function parseSpine(opf) {
+  const spine = [];
+  const spineMatch = opf.match(/<spine[^>]*>([\s\S]*?)<\/spine>/i);
+  
+  if (spineMatch) {
+    const itemrefRegex = /<itemref\s+([^>]+)>/gi;
+    let match;
+    
+    while ((match = itemrefRegex.exec(spineMatch[1])) !== null) {
+      const idref = match[1].match(/idref=["']([^"']+)["']/i)?.[1];
+      if (idref) spine.push(idref);
+    }
+  }
+  
+  return spine;
+}
+
+function resolveHref(href, baseDir) {
+  if (href.startsWith('/')) return href.substring(1);
+  
+  let dir = baseDir;
+  let path = href;
+  
+  while (path.startsWith('../')) {
+    path = path.substring(3);
+    const lastSlash = dir.lastIndexOf('/', dir.length - 2);
+    dir = lastSlash >= 0 ? dir.substring(0, lastSlash + 1) : '';
+  }
+  
+  return dir + path;
+}
+
+function decodeEntities(str) {
+  const entities = {
+    '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'",
+    '&#39;': "'", '&#x27;': "'", '&nbsp;': ' '
+  };
+  return str.replace(/&[^;]+;/g, m => entities[m] || m);
+}
+
+// =============================================================================
+// HTML TO PLAIN TEXT CONVERTER
+// =============================================================================
+function htmlToPlainText(html) {
+  // Remove scripts, styles, head
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<head[\s\S]*?<\/head>/gi, '');
+  
+  // Extract body content if present
+  const bodyMatch = text.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  if (bodyMatch) text = bodyMatch[1];
+  
+  // === RICH TEXT MARKERS ===
+  
+  // Headers: convert to # prefix (before removing tags)
+  text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (m, content) => {
+    // Strip nested tags but preserve word boundaries
+    const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return '\n\n# ' + clean + '\n\n';
+  });
+  
+  // Bold: **text** (add space after to prevent concatenation)
+  text = text.replace(/<(b|strong)[^>]*>([\s\S]*?)<\/\1>/gi, (m, tag, content) => {
+    const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return '**' + clean + '** ';
+  });
+  
+  // Italic: *text* (add space after to prevent concatenation)
+  text = text.replace(/<(i|em)[^>]*>([\s\S]*?)<\/\1>/gi, (m, tag, content) => {
+    const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return '*' + clean + '* ';
+  });
+  
+  // List items: • prefix
+  text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (m, content) => {
+    const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return '\n• ' + clean;
+  });
+  
+  // Images: [Image] or [Image: alt text]
+  text = text.replace(/<img[^>]*alt=["']([^"']+)["'][^>]*>/gi, '[Image: $1]');
+  text = text.replace(/<img[^>]*>/gi, '[Image]');
+  
+  // Tables: placeholder
+  text = text.replace(/<table[\s\S]*?<\/table>/gi, '\n[Table]\n');
+  
+  // === BLOCK ELEMENTS ===
+  
+  // Convert block elements to newlines
+  text = text
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<hr[^>]*>/gi, '\n---\n');
+  
+  // Add paragraph breaks before block elements
+  text = text
+    .replace(/<p[^>]*>/gi, '\n\n')
+    .replace(/<div[^>]*>/gi, '\n');
+  
+  // Remove list containers (ul, ol) but keep content
+  text = text.replace(/<\/?[uo]l[^>]*>/gi, '\n');
+  
+  // CRITICAL: Add space after ALL closing inline tags to prevent word concatenation
+  text = text
+    .replace(/<\/span>/gi, ' ')
+    .replace(/<\/a>/gi, ' ')
+    .replace(/<\/u>/gi, ' ')
+    .replace(/<\/small>/gi, ' ')
+    .replace(/<\/sup>/gi, ' ')
+    .replace(/<\/sub>/gi, ' ');
+  
+  // Remove all remaining HTML tags
+  text = text.replace(/<[^>]+>/g, ' ');
+  
+  // Decode HTML entities (but preserve soft hyphens!)
+  text = decodeEntities(text);
+  text = text.replace(/&#(\d+);/g, (m, n) => String.fromCharCode(parseInt(n)));
+  text = text.replace(/&#x([0-9a-f]+);/gi, (m, n) => String.fromCharCode(parseInt(n, 16)));
+  // Restore soft hyphens that may have been entity-encoded
+  text = text.replace(/&shy;/gi, '\u00AD');
+  
+  // Clean up whitespace (but preserve soft hyphens and markers)
+  text = text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+/g, ' ')           // Collapse multiple spaces to one
+    .replace(/ +\n/g, '\n')            // Remove trailing spaces
+    .replace(/\n +/g, '\n')            // Remove leading spaces  
+    .replace(/\n{3,}/g, '\n\n')        // Max 2 consecutive newlines
+    .trim();
+  
+  return text;
+}
+
+// =============================================================================
+// COVER EXTRACTION
+// =============================================================================
+async function findCoverInEpub(zip, opfContent, opfDir) {
+  if (!opfContent) return null;
+  
+  let coverHref = null;
+  
+  // Method 1: meta name="cover"
+  const coverMeta = opfContent.match(/<meta[^>]+name=["']cover["'][^>]+content=["']([^"']+)["']/i) ||
+                    opfContent.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']cover["']/i);
+  
+  if (coverMeta) {
+    const coverId = coverMeta[1];
+    const itemMatch = opfContent.match(new RegExp(`<item[^>]+id=["']${coverId}["'][^>]+href=["']([^"']+)["']`, 'i')) ||
+                      opfContent.match(new RegExp(`<item[^>]+href=["']([^"']+)["'][^>]+id=["']${coverId}["']`, 'i'));
+    if (itemMatch) coverHref = itemMatch[1];
+  }
+  
+  // Method 2: properties="cover-image"
+  if (!coverHref) {
+    const propMatch = opfContent.match(/<item[^>]+properties=["'][^"']*cover-image[^"']*["'][^>]+href=["']([^"']+)["']/i) ||
+                      opfContent.match(/<item[^>]+href=["']([^"']+)["'][^>]+properties=["'][^"']*cover-image[^"']*["']/i);
+    if (propMatch) coverHref = propMatch[1];
+  }
+  
+  // Method 3: Common filenames
+  if (!coverHref) {
+    for (const path of Object.keys(zip.files)) {
+      const lower = path.toLowerCase();
+      if (lower.includes('cover') && (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png'))) {
+        return path;
+      }
+    }
+  }
+  
+  if (coverHref) {
+    return resolveHref(decodeURIComponent(coverHref), opfDir);
+  }
+  
+  return null;
+}
+
+// =============================================================================
+// IMAGE PROCESSING
+// =============================================================================
+async function processImage(blob, maxWidth, maxHeight, quality) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+      const ratio = width / height;
+      
+      if (width > maxWidth) { width = maxWidth; height = width / ratio; }
+      if (height > maxHeight) { height = maxHeight; width = height * ratio; }
+      
+      width = Math.round(width);
+      height = Math.round(height);
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // Convert to grayscale
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
+        data[i] = data[i+1] = data[i+2] = gray;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      
+      canvas.toBlob(resolve, 'image/jpeg', quality);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => { URL.revokeObjectURL(img.src); resolve(null); };
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+// =============================================================================
+// FILE UPLOAD HELPERS
+// =============================================================================
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash = hash >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+async function ensureDirectory(path) {
+  // Create directory structure on SD card
+  try {
+    // First ensure parent .sumi/books exists
+    await fetch('/api/files/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/.sumi' })
+    });
+    await fetch('/api/files/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/.sumi/books' })
+    });
+    // Then the actual target
+    const resp = await fetch('/api/files/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+    if (!resp.ok) {
+      console.log('mkdir response:', resp.status, await resp.text());
+    }
+  } catch (e) {
+    console.log('ensureDirectory error (continuing):', e);
+    // Directory might already exist, continue anyway
+  }
+}
+
+async function uploadTextFile(path, content) {
+  const blob = new Blob([content], { type: 'text/plain' });
+  const filename = path.split('/').pop();
+  const dir = path.substring(0, path.lastIndexOf('/'));
+  
+  console.log(`[UPLOAD] Text file: dir='${dir}' filename='${filename}'`);
+  
+  const formData = new FormData();
+  // IMPORTANT: path must come BEFORE file for multipart parsing
+  formData.append('path', dir);
+  formData.append('file', new File([blob], filename, { type: 'text/plain' }));
+  
+  const resp = await fetch('/api/files/upload', { method: 'POST', body: formData });
+  if (!resp.ok) {
+    console.error('[UPLOAD] Failed:', resp.status);
+  }
+}
+
+async function uploadBlobFile(path, blob) {
+  const filename = path.split('/').pop();
+  const dir = path.substring(0, path.lastIndexOf('/'));
+  
+  console.log(`[UPLOAD] Blob file: dir='${dir}' filename='${filename}'`);
+  
+  const formData = new FormData();
+  // IMPORTANT: path must come BEFORE file for multipart parsing
+  formData.append('path', dir);
+  formData.append('file', new File([blob], filename, { type: blob.type }));
+  
+  const resp = await fetch('/api/files/upload', { method: 'POST', body: formData });
+  if (!resp.ok) {
+    console.error('[UPLOAD] Failed:', resp.status);
+  }
+}
+
+// =============================================================================
+// PROCESS EXISTING BOOKS ON DEVICE
+// =============================================================================
+
+// Check if we have internet access (can reach CDN)
+async function checkInternetAccess() {
+  try {
+    // Try to fetch a tiny resource from CDN with short timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    
+    const response = await fetch('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', {
+      method: 'HEAD',
+      signal: controller.signal,
+      mode: 'no-cors'  // Won't give us status but will succeed if reachable
+    });
+    
+    clearTimeout(timeout);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function checkBooksNeedProcessing() {
+  // Don't overwrite UI while actively processing
+  if (processingState.active) {
+    return;
+  }
+  
+  const warningEl = document.getElementById('coverWarning');
+  if (!warningEl) return;
+  
+  try {
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    
+    const response = await fetch('/api/books/status', { signal: controller.signal });
+    clearTimeout(timeout);
+    
+    if (!response.ok) {
+      console.log('[PORTAL] books/status returned', response.status);
+      warningEl.style.display = 'none';
+      const tipEl = document.getElementById('processingTip');
+      if (tipEl) tipEl.style.display = 'none';
+      return;
+    }
+    
+    const data = await response.json();
+    
+    if (data.unprocessed && data.unprocessed.length > 0) {
+      const count = data.unprocessed.length;
+      
+      // Check if browser is definitely on hotspot
+      const browserHost = window.location.hostname;
+      const isDefinitelyOnHotspot = (browserHost === '192.168.4.1');
+      
+      // If at sumi.local, we need to verify internet access to know which network we're on
+      let browserHasInternet = false;
+      if (!isDefinitelyOnHotspot) {
+        // Use image load to test internet - this actually fails without connectivity
+        browserHasInternet = await new Promise((resolve) => {
+          const img = new Image();
+          const timeout = setTimeout(() => {
+            img.onload = img.onerror = null;
+            resolve(false);
+          }, 3000);
+          img.onload = () => {
+            clearTimeout(timeout);
+            resolve(true);
+          };
+          img.onerror = () => {
+            clearTimeout(timeout);
+            resolve(false);
+          };
+          // Use a tiny favicon with cache-busting
+          img.src = 'https://www.google.com/favicon.ico?t=' + Date.now();
+        });
+      }
+      
+      if (browserHasInternet) {
+        // Good to go - on home network with internet
+        warningEl.style.display = 'block';
+        warningEl.innerHTML = `
+          <div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border: 2px solid #28a745; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 32px;">✅</div>
+              <div style="flex: 1;">
+                <div style="font-weight: 700; font-size: 14px; color: #155724; margin-bottom: 4px;">
+                  Ready to Process ${count} Book${count > 1 ? 's' : ''}
+                </div>
+                <div style="font-size: 12px; color: #155724; line-height: 1.4;">
+                  Extract chapters and covers for instant book loading
+                </div>
+              </div>
+              <button class="btn" style="background: #28a745; border: none; color: white; padding: 12px 24px; font-size: 14px; font-weight: 600; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(40,167,69,0.3);" 
+                      onclick="processExistingBooks()">
+                🚀 Process Now
+              </button>
+            </div>
+          </div>
+        `;
+        
+        // Show the lightbulb tip
+        const tipEl = document.getElementById('processingTip');
+        if (tipEl) {
+          tipEl.style.display = 'block';
+          tipEl.innerHTML = `
+            <div style="background: #fff9e6; border: 1px solid #ffc107; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; display: flex; align-items: flex-start; gap: 10px;">
+              <div style="font-size: 18px;">💡</div>
+              <div style="flex: 1; font-size: 12px; color: #856404; line-height: 1.5;">
+                <strong>Tip:</strong> Processing runs in the background! Hit "Process Now" and continue exploring settings while your books are prepared.
+              </div>
+            </div>
+          `;
+        }
+      } else {
+        // On hotspot - need to switch to home network
+        // First check if SUMI is connected to home WiFi
+        try {
+          const statusResp = await fetch('/api/status', { signal: AbortSignal.timeout(3000) });
+          const status = await statusResp.json();
+          const sumiIP = status.wifi?.ip;
+          const sumiSSID = status.wifi?.ssid;
+          const sumiConnected = status.wifi?.connected && sumiIP && sumiIP !== '192.168.4.1';
+          
+          warningEl.style.display = 'block';
+          if (sumiConnected) {
+            // SUMI is on home network, user needs to switch for internet access
+            warningEl.innerHTML = `
+              <div style="background: #e7f3ff; border: 2px solid #007bff; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+                <div style="display: flex; align-items: flex-start; gap: 12px;">
+                  <div style="font-size: 28px;">📚</div>
+                  <div style="flex: 1;">
+                    <div style="font-weight: 700; font-size: 14px; color: #004085; margin-bottom: 6px;">
+                      ${count} Book${count > 1 ? 's' : ''} Ready to Process
+                    </div>
+                    <div style="font-size: 12px; color: #004085; line-height: 1.5; margin-bottom: 10px;">
+                      Processing requires internet. Switch to <strong>${sumiSSID}</strong>, then visit:
+                    </div>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                      <a href="http://sumi.local" style="background: #007bff; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 12px;">sumi.local</a>
+                      <span style="color: #666; font-size: 11px;">or</span>
+                      <a href="http://${sumiIP}" style="background: #6c757d; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 12px;">${sumiIP}</a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `;
+          } else {
+            // SUMI not connected to home WiFi yet
+            warningEl.innerHTML = `
+              <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 12px;">
+                <div style="display: flex; align-items: flex-start; gap: 10px;">
+                  <div style="font-size: 20px;">📶</div>
+                  <div style="flex: 1;">
+                    <div style="font-weight: 600; font-size: 12px; color: #856404; margin-bottom: 4px;">
+                      ${count} Book${count > 1 ? 's' : ''} Need Processing
+                    </div>
+                    <div style="font-size: 11px; color: #856404; line-height: 1.5;">
+                      First connect SUMI to your home WiFi, then connect your phone/laptop to the same network.
+                    </div>
+                    <button class="btn btn-sm" style="margin-top: 8px; background: #ffc107; border: none; color: #856404; font-weight: 600;" 
+                            onclick="showPage('wifi')">
+                      📶 Setup WiFi
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+        } catch (statusErr) {
+          console.log('[PORTAL] Status fetch failed:', statusErr);
+          warningEl.style.display = 'none';
+          const tipEl = document.getElementById('processingTip');
+          if (tipEl) tipEl.style.display = 'none';
+        }
+      }
+    } else {
+      warningEl.style.display = 'none';
+      const tipEl = document.getElementById('processingTip');
+      if (tipEl) tipEl.style.display = 'none';
+    }
+  } catch (e) {
+    // API might not exist yet, or device disconnected - hide warning
+    console.log('[PORTAL] checkBooksNeedProcessing error:', e.message);
+    warningEl.style.display = 'none';
+    const tipEl = document.getElementById('processingTip');
+    if (tipEl) tipEl.style.display = 'none';
+  }
+}
+
+async function processExistingBooks() {
+  const warningEl = document.getElementById('coverWarning');
+  
+  try {
+    // Check connection first
+    let connectionOk = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const testResp = await fetch('/api/status', { signal: controller.signal });
+        clearTimeout(timeout);
+        if (testResp.ok) {
+          connectionOk = true;
+          break;
+        }
+      } catch (e) {
+        console.log(`[PORTAL] Connection check attempt ${attempt + 1} failed`);
+        if (attempt < 2) {
+          toast(`Reconnecting... (${attempt + 1}/3)`, 'warning');
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    }
+    
+    if (!connectionOk) {
+      toast('Cannot connect to device. Check WiFi connection.', 'error');
+      return;
+    }
+    
+    // Get list of unprocessed books
+    const response = await fetch('/api/books/status');
+    const data = await response.json();
+    
+    if (!data.unprocessed || data.unprocessed.length === 0) {
+      toast('All books are already processed!', 'success');
+      return;
+    }
+    
+    const hasJSZip = await loadJSZip();
+    if (!hasJSZip) {
+      toast('Connect to WiFi with internet access first', 'error');
+      return;
+    }
+    
+    const books = data.unprocessed;
+    
+    // Set up global processing state
+    processingState.active = true;
+    processingState.total = books.length;
+    processingState.current = 0;
+    
+    // Create floating indicator (persists across page switches)
+    createFloatingIndicator(books.length);
+    
+    // Hide the lightbulb tip since we're processing
+    const tipEl = document.getElementById('processingTip');
+    if (tipEl) tipEl.style.display = 'none';
+    
+    // Create visual processing UI in the books page
+    warningEl.innerHTML = `
+      <div style="background: white; border: 2px solid #007bff; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #e9ecef;">
+          <div style="font-weight: 700; font-size: 16px; color: #007bff;">📚 Processing ${books.length} Book${books.length > 1 ? 's' : ''}</div>
+          <div id="processOverallProgress" style="font-size: 14px; font-weight: 600; color: #666;">0 / ${books.length}</div>
+        </div>
+        <div id="processBookGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px; max-height: 400px; overflow-y: auto; padding: 4px;"></div>
+      </div>
+    `;
+    
+    const bookGrid = document.getElementById('processBookGrid');
+    const overallProgress = document.getElementById('processOverallProgress');
+    
+    // Create a card for each book
+    books.forEach((book, idx) => {
+      const card = document.createElement('div');
+      card.id = `process-book-${idx}`;
+      card.style.cssText = 'background: #f8f9fa; border: 2px solid #dee2e6; border-radius: 10px; padding: 12px; text-align: center; position: relative; transition: all 0.3s;';
+      card.innerHTML = `
+        <div class="book-cover" style="width: 70px; height: 105px; margin: 0 auto 10px; background: #e9ecef; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 32px; position: relative; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+          📕
+        </div>
+        <div class="book-title" style="font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; color: #333;" title="${book.name}">
+          ${book.name.replace(/\.epub$/i, '').substring(0, 20)}${book.name.length > 25 ? '...' : ''}
+        </div>
+        <div class="book-status" style="font-size: 10px; color: #999; font-weight: 500; height: 14px;">Waiting</div>
+        <div class="book-progress" style="height: 4px; background: #dee2e6; border-radius: 2px; margin-top: 8px; overflow: hidden;">
+          <div class="book-progress-bar" style="height: 100%; width: 0%; background: #007bff; transition: width 0.2s;"></div>
+        </div>
+      `;
+      bookGrid.appendChild(card);
+    });
+    
+    // Process each book
+    let completed = 0;
+    for (let i = 0; i < books.length; i++) {
+      const book = books[i];
+      const card = document.getElementById(`process-book-${i}`);
+      const coverEl = card?.querySelector('.book-cover');
+      const statusEl = card?.querySelector('.book-status');
+      const progressBar = card?.querySelector('.book-progress-bar');
+      const titleEl = card?.querySelector('.book-title');
+      
+      // Update global state
+      processingState.current = i + 1;
+      processingState.currentBook = book.name.replace(/\.epub$/i, '');
+      updateFloatingIndicator();
+      
+      // Highlight current book
+      if (card) {
+        card.style.borderColor = '#007bff';
+        card.style.background = '#fff';
+        card.style.transform = 'scale(1.02)';
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      
+      let stuckTimeout = null;
+      
+      try {
+        // Download with retry
+        if (statusEl) statusEl.textContent = 'Downloading...';
+        if (statusEl) statusEl.style.color = '#007bff';
+        if (progressBar) progressBar.style.width = '5%';
+        
+        const downloadUrl = `/api/download?path=/books/${encodeURIComponent(book.name)}`;
+        console.log('[PORTAL] Downloading:', downloadUrl);
+        
+        let epubResponse;
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+            epubResponse = await fetch(downloadUrl, { signal: controller.signal });
+            clearTimeout(timeout);
+            if (epubResponse.ok) break;
+            throw new Error(`HTTP ${epubResponse.status}`);
+          } catch (fetchErr) {
+            retries--;
+            console.log(`[PORTAL] Download attempt failed, ${retries} retries left:`, fetchErr.message);
+            if (retries === 0) {
+              throw new Error(`Download failed: ${fetchErr.message}`);
+            }
+            if (statusEl) statusEl.textContent = `Retry (${3-retries}/3)...`;
+            await new Promise(r => setTimeout(r, 1000)); // Wait 1s before retry
+          }
+        }
+        
+        if (progressBar) progressBar.style.width = '10%';
+        if (statusEl) statusEl.textContent = 'Reading file...';
+        
+        console.log('[PORTAL] Response status:', epubResponse.status);
+        
+        if (!epubResponse.ok) throw new Error(`HTTP ${epubResponse.status}`);
+        
+        const epubBlob = await epubResponse.blob();
+        const file = new File([epubBlob], book.name, { type: 'application/epub+zip' });
+        
+        if (progressBar) progressBar.style.width = '15%';
+        
+        // Process with visual progress - add timeout for stuck detection
+        let lastProgressTime = Date.now();
+        
+        const checkStuck = () => {
+          const timeSinceProgress = Date.now() - lastProgressTime;
+          if (timeSinceProgress > 30000 && statusEl) { // 30 seconds without progress
+            statusEl.innerHTML = `<span style="color: #dc3545; cursor: pointer;" onclick="location.reload()">⚠️ Stuck - click to retry</span>`;
+          }
+        };
+        stuckTimeout = setInterval(checkStuck, 5000);
+        
+        // Process with visual progress - capture returned metadata
+        const meta = await processExistingEpub(file, (step, progress) => {
+          lastProgressTime = Date.now(); // Reset stuck timer
+          processingState.currentStep = step;
+          updateFloatingIndicator(progress); // Pass current book progress
+          if (statusEl) statusEl.textContent = step;
+          if (progress !== undefined && progressBar) {
+            progressBar.style.width = (15 + progress * 85) + '%';
+          }
+        }, (url) => {
+          // Cover callback - show cover immediately when extracted
+          if (url && coverEl) {
+            coverEl.style.background = 'white';
+            coverEl.innerHTML = `<img src="${url}" style="width: 100%; height: 100%; object-fit: cover;">`;
+          }
+        });
+        
+        clearInterval(stuckTimeout);
+        
+        // Success! Show metadata
+        if (progressBar) {
+          progressBar.style.width = '100%';
+          progressBar.style.background = '#28a745';
+        }
+        if (card) {
+          card.style.borderColor = '#28a745';
+          card.style.transform = 'scale(1)';
+        }
+        
+        // Update title with actual title from metadata
+        if (meta && meta.title && titleEl) {
+          titleEl.textContent = meta.title.substring(0, 25) + (meta.title.length > 25 ? '...' : '');
+          titleEl.title = meta.title;
+        }
+        
+        // Show metadata stats under the book
+        const metaStats = [];
+        if (meta) {
+          metaStats.push(`${meta.totalChapters} ch`);
+          metaStats.push(`~${meta.estimatedPages} pg`);
+          if (meta.estimatedReadingMins) {
+            const hrs = Math.floor(meta.estimatedReadingMins / 60);
+            const mins = meta.estimatedReadingMins % 60;
+            metaStats.push(hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m read`);
+          }
+        }
+        if (statusEl) statusEl.innerHTML = `<span style="color: #28a745; font-size: 9px;">${metaStats.join(' • ')}</span>`;
+        
+        // Add checkmark badge over cover
+        if (coverEl) {
+          const badge = document.createElement('div');
+          badge.style.cssText = 'position: absolute; top: 8px; right: 8px; background: #28a745; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);';
+          badge.textContent = '✓';
+          coverEl.appendChild(badge);
+        }
+        
+        completed++;
+        
+      } catch (e) {
+        if (stuckTimeout) clearInterval(stuckTimeout);
+        console.error('Failed to process:', book.name, e);
+        if (progressBar) {
+          progressBar.style.background = '#dc3545';
+          progressBar.style.width = '100%';
+        }
+        // Show actual error message
+        const errorMsg = e.message || 'Unknown error';
+        if (statusEl) statusEl.innerHTML = `<span style="color: #dc3545; font-size: 9px;">✗ ${errorMsg.substring(0, 30)}</span>`;
+        if (card) {
+          card.style.borderColor = '#dc3545';
+          card.style.transform = 'scale(1)';
+        }
+        
+        // Also show toast with full error
+        toast(`${book.name}: ${errorMsg}`, 'error');
+      }
+      
+      // Update overall progress
+      if (overallProgress) overallProgress.textContent = `${i + 1} / ${books.length}`;
+    }
+    
+    // All done!
+    processingState.active = false;
+    removeFloatingIndicator();
+    
+    if (overallProgress) overallProgress.innerHTML = `<span style="color: #28a745;">✅ ${completed}/${books.length} Complete</span>`;
+    
+    toast(`Processed ${completed}/${books.length} books!`, completed === books.length ? 'success' : 'warning');
+    
+    // Refresh book grid after short delay to show covers in "Your Books"
+    setTimeout(() => {
+      refreshFiles('books');
+      checkBooksNeedProcessing();
+    }, 1500);
+    
+  } catch (e) {
+    console.error('Process existing books failed:', e);
+    toast('Processing failed: ' + e.message, 'error');
+    processingState.active = false;
+    removeFloatingIndicator();
+  }
+}
+
+function createFloatingIndicator(total) {
+  // Remove any existing indicator
+  removeFloatingIndicator();
+  
+  const indicator = document.createElement('div');
+  indicator.id = 'processingIndicator';
+  indicator.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: linear-gradient(135deg, #007bff, #0056b3);
+    color: white;
+    padding: 14px 18px;
+    border-radius: 14px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.35);
+    z-index: 10000;
+    font-size: 13px;
+    min-width: 240px;
+    cursor: pointer;
+    transition: transform 0.2s;
+  `;
+  indicator.onmouseenter = () => indicator.style.transform = 'scale(1.02)';
+  indicator.onmouseleave = () => indicator.style.transform = 'scale(1)';
+  indicator.onclick = () => { showPage('files'); setTimeout(() => showFileTab('books'), 100); };
+  indicator.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px;">
+      <div style="font-size: 22px;" class="pulse">📚</div>
+      <div style="flex: 1;">
+        <div style="font-weight: 700; font-size: 14px;">Processing Books</div>
+        <div id="floatingBookName" style="font-size: 11px; opacity: 0.85; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">Starting...</div>
+      </div>
+      <div id="floatingCount" style="font-size: 12px; font-weight: 600; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 6px;">0/${total}</div>
+    </div>
+    <div id="floatingStepText" style="font-size: 10px; opacity: 0.8; margin-bottom: 6px; height: 14px;">Initializing...</div>
+    <div style="background: rgba(255,255,255,0.25); height: 6px; border-radius: 3px; overflow: hidden; position: relative;">
+      <div id="floatingProgress" style="height: 100%; width: 0%; background: rgba(255,255,255,0.9); transition: width 0.15s; border-radius: 3px;"></div>
+      <div id="floatingProgressPulse" style="position: absolute; top: 0; left: 0; height: 100%; width: 30px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent); animation: shimmer 1.5s infinite;"></div>
+    </div>
+  `;
+  
+  // Add animations
+  const style = document.createElement('style');
+  style.id = 'processingAnimStyle';
+  style.textContent = `
+    .pulse { animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+    @keyframes shimmer { 0% { left: -30px; } 100% { left: 100%; } }
+  `;
+  document.head.appendChild(style);
+  
+  document.body.appendChild(indicator);
+}
+
+function updateFloatingIndicator(bookProgress) {
+  const bookNameEl = document.getElementById('floatingBookName');
+  const countEl = document.getElementById('floatingCount');
+  const stepEl = document.getElementById('floatingStepText');
+  const progressEl = document.getElementById('floatingProgress');
+  
+  if (!processingState.active) return;
+  
+  if (bookNameEl) {
+    bookNameEl.textContent = processingState.currentBook || 'Processing...';
+    bookNameEl.title = processingState.currentBook;
+  }
+  
+  if (countEl) {
+    countEl.textContent = `${processingState.current}/${processingState.total}`;
+  }
+  
+  if (stepEl) {
+    stepEl.textContent = processingState.currentStep || 'Working...';
+  }
+  
+  if (progressEl && processingState.total > 0) {
+    // Calculate overall progress including current book's progress
+    const baseProgress = ((processingState.current - 1) / processingState.total) * 100;
+    const bookContribution = (1 / processingState.total) * 100;
+    const currentBookProgress = (bookProgress || 0) * bookContribution;
+    const totalProgress = baseProgress + currentBookProgress;
+    progressEl.style.width = totalProgress + '%';
+  }
+}
+
+function removeFloatingIndicator() {
+  const indicator = document.getElementById('processingIndicator');
+  if (indicator) indicator.remove();
+  
+  const style = document.getElementById('processingAnimStyle');
+  if (style) style.remove();
+}
+
+// Process an existing EPUB (skip re-uploading the EPUB itself)
+async function processExistingEpub(file, onProgress, onCoverReady) {
+  const hash = simpleHash(file.name);
+  const cacheDir = `/.sumi/books/${hash}`;
+  
+  onProgress('Opening...', 0);
+  await new Promise(r => setTimeout(r, 0)); // Let UI update
+  
+  const arrayBuffer = await file.arrayBuffer();
+  
+  onProgress('Unzipping...', 0.03);
+  await new Promise(r => setTimeout(r, 0));
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  
+  onProgress('Reading metadata...', 0.06);
+  await new Promise(r => setTimeout(r, 0));
+  const { opfPath, opfContent, opfDir } = await findOPF(zip);
+  if (!opfContent) throw new Error('Invalid EPUB');
+  
+  const metadata = parseMetadata(opfContent);
+  const manifest = parseManifest(opfContent);
+  const spine = parseSpine(opfContent);
+  
+  onProgress('Finding cover...', 0.09);
+  await new Promise(r => setTimeout(r, 0));
+  const coverPath = await findCoverInEpub(zip, opfContent, opfDir);
+  let thumbBlob = null, fullBlob = null;
+  
+  if (coverPath) {
+    onProgress('Processing cover...', 0.12);
+    await new Promise(r => setTimeout(r, 0));
+    const coverFile = zip.file(coverPath);
+    if (coverFile) {
+      const coverData = await coverFile.async('blob');
+      thumbBlob = await processImage(coverData, 120, 180, 0.75);
+      fullBlob = await processImage(coverData, 300, 450, 0.8);
+      
+      // Immediately show cover preview if callback provided
+      if (onCoverReady && thumbBlob) {
+        const coverUrl = URL.createObjectURL(thumbBlob);
+        onCoverReady(coverUrl);
+      }
+    }
+  }
+  
+  // Extract chapters with detailed progress
+  const chapters = [];
+  let totalChars = 0;
+  let totalWords = 0;
+  
+  for (let i = 0; i < spine.length; i++) {
+    const idref = spine[i];
+    const item = manifest[idref];
+    if (!item) continue;
+    
+    const progress = 0.15 + (i / spine.length) * 0.55;
+    onProgress(`Extract ${i+1}/${spine.length}`, progress);
+    await new Promise(r => setTimeout(r, 0)); // Let UI update every chapter
+    
+    const chapterPath = resolveHref(item.href, opfDir);
+    const chapterFile = zip.file(chapterPath);
+    
+    if (chapterFile) {
+      try {
+        const html = await chapterFile.async('string');
+        const text = htmlToPlainText(html);
+        
+        if (text.trim().length > 0) {
+          const charCount = text.length;
+          const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+          totalChars += charCount;
+          totalWords += wordCount;
+          
+          chapters.push({
+            index: chapters.length,
+            idref: idref,
+            text: text,
+            chars: charCount,
+            words: wordCount
+          });
+        }
+      } catch (e) {}
+    }
+  }
+  
+  // Estimate pages: ~1800 chars per e-ink page (conservative estimate for 800x480)
+  const CHARS_PER_PAGE = 1800;
+  const estimatedPages = Math.ceil(totalChars / CHARS_PER_PAGE);
+  
+  const meta = {
+    version: 3,
+    hash: hash,
+    filename: file.name,
+    fileSize: file.size,
+    title: metadata.title || file.name.replace('.epub', ''),
+    author: metadata.author || 'Unknown',
+    language: metadata.language || 'en',
+    totalChapters: chapters.length,
+    totalChars: totalChars,
+    totalWords: totalWords,
+    estimatedPages: estimatedPages,
+    estimatedReadingMins: Math.ceil(totalWords / 250), // ~250 wpm average
+    processedAt: Date.now(),
+    chapters: chapters.map((c, i) => ({
+      index: i,
+      file: `ch_${String(i).padStart(3, '0')}.txt`,
+      chars: c.chars,
+      words: c.words
+    }))
+  };
+  
+  onProgress('Creating dirs...', 0.72);
+  await new Promise(r => setTimeout(r, 0));
+  await ensureDirectory(cacheDir);
+  
+  onProgress('Saving meta...', 0.74);
+  await new Promise(r => setTimeout(r, 0));
+  await uploadTextFile(cacheDir + '/meta.json', JSON.stringify(meta, null, 2));
+  
+  if (thumbBlob) {
+    onProgress('Saving thumb...', 0.76);
+    await uploadBlobFile(cacheDir + '/cover_thumb.jpg', thumbBlob);
+  }
+  if (fullBlob) {
+    onProgress('Saving cover...', 0.78);
+    await uploadBlobFile(cacheDir + '/cover_full.jpg', fullBlob);
+  }
+  
+  // Upload chapters with detailed progress
+  for (let i = 0; i < chapters.length; i++) {
+    const progress = 0.8 + (i / chapters.length) * 0.19;
+    onProgress(`Upload ${i+1}/${chapters.length}`, progress);
+    
+    const filename = `ch_${String(i).padStart(3, '0')}.txt`;
+    await uploadTextFile(cacheDir + '/' + filename, chapters[i].text);
+    
+    // Give ESP32 time to process and close files
+    await new Promise(r => setTimeout(r, 50));
+  }
+  
+  onProgress('Done!', 1);
+  
+  // Return the metadata for display
+  return meta;
 }
 
 function handleDrop(e, type) {
@@ -2869,6 +4893,102 @@ function updateReaderPreview() {
     preview.style.lineHeight = (lineHeight / 100);
     preview.style.padding = scaledMargin + 'px';
     preview.style.textAlign = justify ? 'justify' : 'left';
+  }
+}
+
+// Simple toggle for switches that don't need immediate API call
+function toggleSwitchSimple(el) {
+  el.classList.toggle('on');
+}
+
+// Flashcard preview and settings
+function updateFlashcardPreview() {
+  const fontSize = parseInt(document.getElementById('fcFontSize')?.value || 1);
+  const centerText = document.getElementById('togFcCenter')?.classList.contains('on') ?? true;
+  const showProgress = document.getElementById('togFcProgress')?.classList.contains('on') ?? true;
+  const showStats = document.getElementById('togFcStats')?.classList.contains('on') ?? true;
+  
+  // Font sizes: 0=10px, 1=14px, 2=18px, 3=22px (scaled for preview)
+  const fontSizes = [10, 14, 18, 22];
+  const previewFont = fontSizes[fontSize] || 14;
+  
+  const qText = document.getElementById('fcPreviewQText');
+  const aText = document.getElementById('fcPreviewAText');
+  const progress = document.getElementById('fcPreviewProgress');
+  const stats = document.getElementById('fcPreviewStats');
+  const qArea = document.getElementById('fcPreviewQuestion');
+  const aArea = document.getElementById('fcPreviewAnswer');
+  
+  if (qText) {
+    qText.style.fontSize = previewFont + 'px';
+    qText.style.textAlign = centerText ? 'center' : 'left';
+  }
+  if (aText) {
+    aText.style.fontSize = previewFont + 'px';
+    aText.style.textAlign = centerText ? 'center' : 'left';
+  }
+  if (qArea) {
+    qArea.style.textAlign = centerText ? 'center' : 'left';
+  }
+  if (aArea) {
+    aArea.style.textAlign = centerText ? 'center' : 'left';
+  }
+  if (progress) {
+    progress.style.display = showProgress ? 'block' : 'none';
+  }
+  if (stats) {
+    stats.style.visibility = showStats ? 'visible' : 'hidden';
+  }
+}
+
+async function saveFlashcardSettings() {
+  const fontSize = parseInt(document.getElementById('fcFontSize')?.value || 1);
+  const centerText = document.getElementById('togFcCenter')?.classList.contains('on') ?? true;
+  const shuffle = document.getElementById('togFcShuffle')?.classList.contains('on') ?? true;
+  const showProgressBar = document.getElementById('togFcProgress')?.classList.contains('on') ?? true;
+  const showStats = document.getElementById('togFcStats')?.classList.contains('on') ?? true;
+  
+  try {
+    await fetch('/api/flashcards/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fontSize,
+        centerText,
+        shuffle,
+        showProgressBar,
+        showStats
+      })
+    });
+  } catch (e) {
+    console.error('Failed to save flashcard settings:', e);
+  }
+}
+
+async function loadFlashcardSettings() {
+  try {
+    const response = await fetch('/api/flashcards/settings');
+    const data = await response.json();
+    
+    if (document.getElementById('fcFontSize')) {
+      document.getElementById('fcFontSize').value = data.fontSize ?? 1;
+    }
+    if (document.getElementById('togFcCenter')) {
+      document.getElementById('togFcCenter').classList.toggle('on', data.centerText ?? true);
+    }
+    if (document.getElementById('togFcShuffle')) {
+      document.getElementById('togFcShuffle').classList.toggle('on', data.shuffle ?? true);
+    }
+    if (document.getElementById('togFcProgress')) {
+      document.getElementById('togFcProgress').classList.toggle('on', data.showProgressBar ?? true);
+    }
+    if (document.getElementById('togFcStats')) {
+      document.getElementById('togFcStats').classList.toggle('on', data.showStats ?? true);
+    }
+    
+    updateFlashcardPreview();
+  } catch (e) {
+    console.error('Failed to load flashcard settings:', e);
   }
 }
 
@@ -3133,13 +5253,22 @@ async function loadSettings() {
     if (togInvert) togInvert.classList.toggle('on', d.invertColors === true);
     if (togDeepSleep) togDeepSleep.classList.toggle('on', d.deepSleep !== false);
     
-    // Widget visibility toggles (default to on)
+    // Widget visibility toggles (default to on for book/weather, off for orient)
     const togBook = document.getElementById('togBookWidget');
     const togWeather = document.getElementById('togWeatherWidget');
     const togOrient = document.getElementById('togOrientWidget');
     if (togBook) togBook.classList.toggle('on', d.showBookWidget !== false);
     if (togWeather) togWeather.classList.toggle('on', d.showWeatherWidget !== false);
-    if (togOrient) togOrient.classList.toggle('on', d.showOrientWidget !== false);
+    if (togOrient) togOrient.classList.toggle('on', d.showOrientWidget === true);
+    
+    // Add widgets to selected set based on device flags
+    // Book and Weather default ON, Orient defaults OFF
+    if (d.showBookWidget !== false) selected.add('book');
+    else selected.delete('book');
+    if (d.showWeatherWidget !== false) selected.add('weather');
+    else selected.delete('weather');
+    if (d.showOrientWidget === true) selected.add('orient');
+    else selected.delete('orient');
   }
   
   // Save original state for change detection
@@ -3151,11 +5280,13 @@ async function loadSettings() {
     const fsEl = document.getElementById('readerFontSize');
     const lhEl = document.getElementById('readerLineHeight');
     const mgEl = document.getElementById('readerMargins');
-    const sbEl = document.getElementById('readerSceneBreak');
+    const justifyEl = document.getElementById('togJustify');
+    const reqPreEl = document.getElementById('togReqPreprocess');
     if (fsEl) { fsEl.value = r.fontSize || 18; updateSlider(fsEl, 'readerFontVal', 'px'); }
     if (lhEl) { lhEl.value = r.lineHeight || 150; updateSlider(lhEl, 'readerLineVal', '%'); }
     if (mgEl) { mgEl.value = r.margins || 20; updateSlider(mgEl, 'readerMarginVal', 'px'); }
-    if (sbEl) { sbEl.value = r.sceneBreakSpacing || 30; updateSlider(sbEl, 'readerSceneVal', 'px'); }
+    if (justifyEl) { justifyEl.classList.toggle('on', r.textAlign === 1 || r.textAlign === undefined); }
+    if (reqPreEl) { reqPreEl.classList.toggle('on', r.requirePreprocessed !== false); }  // Default true
   }
   
   // Update all UI elements to match loaded state
@@ -3459,13 +5590,52 @@ async function uploadRestore(input) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  await loadStatus();
+  await loadStatus();  // This will update the connection banner properly
   await applyFeatureFlags();
   await loadSettings();
   renderPlugins();
   updateReaderPreview();
+  
+  // Check if browser has internet - if so, default to Files tab
+  const browserHost = window.location.hostname;
+  const isDefinitelyOnHotspot = (browserHost === '192.168.4.1');
+  
+  if (!isDefinitelyOnHotspot) {
+    // Check for internet access
+    const hasInternet = await new Promise((resolve) => {
+      const img = new Image();
+      const timeout = setTimeout(() => {
+        img.onload = img.onerror = null;
+        resolve(false);
+      }, 3000);
+      img.onload = () => {
+        clearTimeout(timeout);
+        resolve(true);
+      };
+      img.onerror = () => {
+        clearTimeout(timeout);
+        resolve(false);
+      };
+      img.src = 'https://www.google.com/favicon.ico?t=' + Date.now();
+    });
+    
+    if (hasInternet) {
+      // On home network - show Files tab and books subtab
+      showPage('files');
+      setTimeout(() => showFileTab('books'), 100);
+    } else {
+      // No internet - show WiFi tab
+      loadWifiStatus();
+    }
+  } else {
+    // On hotspot - WiFi is default page
+    loadWifiStatus();
+  }
+  
   setInterval(loadStatus, 30000);
 });
+
+// Connection banner is updated in loadStatus() based on actual WiFi state
 
 // Handle Enter key in WiFi password
 document.getElementById('wifiPassword')?.addEventListener('keypress', e => {

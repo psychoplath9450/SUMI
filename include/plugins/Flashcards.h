@@ -1,7 +1,7 @@
 /**
  * @file Flashcards.h
  * @brief Flashcard app with multi-format support and partial refresh
- * @version 2.1.25
+ * @version 1.3.0
  * 
  * Supported formats:
  * - TXT: Alternating lines (question\nanswer\n) or Q;A per line
@@ -132,15 +132,20 @@ private:
     void drawDeckList();
     void drawCard(bool showAnswer);
     void drawWrappedText(const char* text, int x, int y, int maxWidth, int maxLines);
+    void drawCenteredText(const char* text, int x, int y, int width, int height);
+    void drawWrappedTextCentered(const char* text, int x, int y, int maxWidth, int maxLines);
     void drawDone();
     void drawSettings();
     void drawProgressBar(int x, int y, int w, int h, int current, int total);
+    
+    // Image support for ASL and other visual flashcards
+    bool isImagePath(const char* text);
+    bool drawFlashcardImage(const char* path, int x, int y, int maxW, int maxH);
     
     // Font helper
     const GFXfont* getCardFont();
 };
 
-extern FlashcardsApp flashcardsApp;
 
 #endif // FEATURE_FLASHCARDS
 #endif // SUMI_PLUGIN_FLASHCARDS_H

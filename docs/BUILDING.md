@@ -26,6 +26,14 @@ cd sumi
 
 ### Build it
 
+First, build the web portal (packages HTML/CSS/JS into firmware):
+```bash
+cd portal
+python build.py
+cd ..
+```
+
+Then build the firmware:
 ```bash
 pio run
 ```
@@ -88,13 +96,16 @@ Double-check your wiring. The pin assignments in `config.h` need to match your a
 After flashing, set up your SD card (FAT32). The SD card is for user content only:
 
 ```
-/books/       ← EPUBs, PDFs, and TXT files
+/books/       ← EPUBs and TXT files
 /flashcards/  ← JSON study decks (or import Anki .apkg)
-/images/      ← BMP, PNG, JPG pictures
-/maps/        ← Map images or OSM tile folders
+/images/      ← BMP and JPEG pictures
+/maps/        ← Map images (placeholder)
 /notes/       ← Text notes (.txt, .md)
-/.config/     ← Auto-created by Sumi for settings/state
+/.config/     ← Auto-created for settings
+/.sumi/       ← Auto-created for processed books and reading data
 ```
+
+**Note:** EPUBs must be processed through the web portal before reading. Upload your EPUB, click "Process Now", and it will be ready to read.
 
 The web portal is embedded in the firmware - no need to copy anything to the SD card for it to work.
 

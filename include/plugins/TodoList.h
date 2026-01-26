@@ -1,7 +1,7 @@
 /**
  * @file TodoList.h
  * @brief Simple to-do list plugin
- * @version 2.1.26
+ * @version 1.3.0
  */
 
 #ifndef SUMI_PLUGIN_TODO_H
@@ -41,7 +41,6 @@ private:
     void toggleCurrent();
 };
 
-extern TodoApp todoApp;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_TODO_H

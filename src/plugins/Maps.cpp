@@ -1,7 +1,7 @@
 /**
  * @file Maps.cpp
  * @brief Offline tile-based map viewer implementation
- * @version 2.1.29
+ * @version 1.3.0
  */
 
 #include "plugins/Maps.h"
@@ -12,7 +12,6 @@
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 
-MapsApp mapsApp;
 
 // =============================================================================
 // Constructor & Init

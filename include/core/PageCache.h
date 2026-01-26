@@ -1,7 +1,7 @@
 /**
  * @file PageCache.h
  * @brief Page Caching System for Sumi E-Reader
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Key Features:
  * - Pre-computed word positions stored to SD
@@ -35,19 +35,19 @@
 // =============================================================================
 
 // Maximum word length (longer words get truncated)
-#define CACHE_MAX_WORD_LEN      24
+#define CACHE_MAX_WORD_LEN      20
 
-// Maximum words per line  
-#define CACHE_MAX_WORDS_LINE    12
+// Maximum words per line
+#define CACHE_MAX_WORDS_LINE    10
 
-// Maximum lines per page (24 lines fits most displays)
-#define CACHE_MAX_LINES_PAGE    24
+// Maximum lines per page
+#define CACHE_MAX_LINES_PAGE    20
 
 // Cache file magic number (for validation)
 #define CACHE_MAGIC             0x53554D49  // "SUMI"
 
 // Cache version (increment when format changes)
-#define CACHE_VERSION           4
+#define CACHE_VERSION           5
 
 // =============================================================================
 // Cache Key - Determines when cache is valid
@@ -477,6 +477,6 @@ private:
 };
 
 // Global instance
-extern PageCache pageCache;
+extern PageCache* pageCache;
 
 #endif // SUMI_PAGE_CACHE_H

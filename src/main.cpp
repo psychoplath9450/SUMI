@@ -1,7 +1,7 @@
 /**
  * @file main.cpp
  * @brief Sumi Firmware - Open source e-reader for ESP32-C3
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Main entry point for Sumi firmware. Handles initialization, display setup,
  * button input processing, and the main event loop.
@@ -249,16 +249,16 @@ void setup() {
     if (setup_mode) {
         Serial.println("[SUMI] First boot - entering setup mode");
         
-        // Play animation (ends with setup screen displayed)
-        playDeployAnimation();
-        
-        // Start WiFi AP for portal
+        // Start WiFi AP immediately so it's ready when user sees setup screen
         wifiManager.startAP();
         portal_active = true;
         
         #if FEATURE_WEBSERVER
         webServer.begin();
         #endif
+        
+        // Play animation (ends with setup screen displayed)
+        playDeployAnimation();
     } else {
         Serial.println("[SUMI] Normal boot - loading home screen");
         
@@ -273,33 +273,38 @@ void setup() {
             if (SD.exists("/.sumi/lastbook.bin")) {
                 Serial.println("[SUMI] Boot to last book enabled - launching reader");
                 #if FEATURE_READER
-                extern LibraryApp libraryApp;
-                libraryApp.init(display.width(), display.height());
-                libraryApp.resumeLastBook();  // This will load and display the last book
-                
-                // Enter reader loop
-                bool reading = true;
-                while (reading) {
-                    Button btn = readButton();
-                    if (btn != BTN_NONE) {
-                        powerManager.resetActivityTimer();
-                        if (btn == BTN_POWER) {
+                LibraryApp* libraryApp = new LibraryApp();
+                if (libraryApp) {
+                    libraryApp->init(display.width(), display.height());
+                    libraryApp->resumeLastBook();  // This will load and display the last book
+                    
+                    // Enter reader loop
+                    bool reading = true;
+                    while (reading) {
+                        Button btn = readButton();
+                        if (btn != BTN_NONE) {
+                            powerManager.resetActivityTimer();
+                            if (btn == BTN_POWER) {
+                                delete libraryApp;
+                                powerManager.enterDeepSleep();
+                            }
+                            reading = libraryApp->handleInput(btn);
+                            if (reading) {
+                                libraryApp->draw();
+                            }
+                        }
+                        
+                        // Check auto-sleep
+                        uint8_t sleepMins = settingsManager.display.sleepMinutes;
+                        if (sleepMins > 0 && powerManager.getIdleTime() >= sleepMins * 60000UL) {
+                            delete libraryApp;
                             powerManager.enterDeepSleep();
                         }
-                        reading = libraryApp.handleInput(btn);
-                        if (reading) {
-                            libraryApp.draw();
-                        }
+                        delay(20);
                     }
-                    
-                    // Check auto-sleep
-                    uint8_t sleepMins = settingsManager.display.sleepMinutes;
-                    if (sleepMins > 0 && powerManager.getIdleTime() >= sleepMins * 60000UL) {
-                        powerManager.enterDeepSleep();
-                    }
-                    delay(20);
+                    delete libraryApp;
+                    bootedToBook = true;
                 }
-                bootedToBook = true;
                 #endif
             }
         }
@@ -398,16 +403,23 @@ void loop() {
     if (g_wifiJustConnected) {
         g_wifiJustConnected = false;
         Serial.println("[SUMI] WiFi connected via portal");
+        // Refresh setup screen to show new connection status
+        if (setup_mode) {
+            showSetupScreen();
+        }
         // Time sync is handled by WebServer with proper timezone - don't override here
     }
     
     if (g_settingsDeployed) {
         g_settingsDeployed = false;
-        Serial.println("[SUMI] Settings deployed - shutting down portal");
+        Serial.println("[SUMI] Settings deployed - starting background loading");
         
-        // Show deployed screen
+        // Show deployed screen FIRST (user sees "Press any button to continue")
         showDeployedScreen();
-        waitForButtonPress();
+        
+        // NOW do all the heavy lifting while screen is displayed
+        // User can press button anytime - we'll check after loading
+        Serial.println("[SUMI] Loading in background while screen displays...");
         
         // Clean up portal resources to free memory
         cleanupPortalResources();
@@ -427,16 +439,31 @@ void loop() {
         settingsManager.load();
         setup_mode = false;
         
-        // Build home screen
+        // Build home screen (this is the slow part)
         bool isHorizontal = (settingsManager.display.orientation == 0);
         display.setRotation(isHorizontal ? 0 : 3);
         setButtonOrientation(isHorizontal);
         
         buildHomeScreenItems();
         updateGridLayout();
+        
+        Serial.println("[SUMI] Background loading complete - ready for input");
+        printMemoryReport();
+        
+        // Check if button was already pressed during loading
+        Button btn = readButton();
+        if (btn == BTN_NONE) {
+            // No button pressed yet - wait for one
+            waitForButtonPress();
+        } else {
+            Serial.println("[SUMI] Button already pressed during loading - continuing immediately");
+        }
+        
+        // Now show home screen
+        currentScreen = SCREEN_HOME;  // Reset screen state
+        settingsInit();  // Reset settings state so next visit starts fresh
         showHomeScreen();
         
-        printMemoryReport();
         Serial.println("[SUMI] Portal fully shut down, WiFi off");
     }
     #endif

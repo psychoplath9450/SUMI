@@ -1,7 +1,7 @@
 /**
  * @file PluginRegistry.h
  * @brief Plugin registration system for Sumi firmware
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Allows plugins to be registered with a single macro, reducing the number
  * of files that need to be modified when adding new plugins.
@@ -128,7 +128,7 @@ public:
     virtual const char* version() const { return "1.0.0"; }
     
     /** @brief Minimum firmware version required */
-    virtual const char* minFirmware() const { return "2.0.0"; }
+    virtual const char* minFirmware() const { return "1.0.0"; }
     
     /** @brief Runner type for this plugin */
     virtual PluginRunnerType runnerType() const { return RUNNER_SIMPLE; }

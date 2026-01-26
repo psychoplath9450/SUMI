@@ -1,7 +1,7 @@
 /**
  * @file Maps.h
  * @brief Offline tile-based map viewer for Sumi e-reader
- * @version 2.1.29
+ * @version 1.3.0
  * 
  * Features:
  * - OpenStreetMap tile format support (z/x/y.png)
@@ -119,7 +119,6 @@ private:
     bool tileExists(int z, int x, int y);
 };
 
-extern MapsApp mapsApp;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_MAPS_H

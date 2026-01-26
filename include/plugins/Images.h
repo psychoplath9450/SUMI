@@ -1,7 +1,7 @@
 /**
  * @file Images.h
  * @brief Image viewer for Sumi e-reader
- * @version 2.1.30
+ * @version 1.3.0
  * 
  * Supports BMP and RAW images (1-bit preferred for e-ink)
  */
@@ -48,7 +48,6 @@ private:
     void drawRAW(const char* path);
 };
 
-extern ImagesApp imagesApp;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_IMAGES_H

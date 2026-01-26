@@ -7,10 +7,10 @@
 /**
  * @file HomeItems.h
  * @brief Home screen item definitions and configuration
- * @version 2.2.0
+ * @version 1.3.0
  *
  * Defines the apps available on the home screen.
- * Added: Demo plugin for development testing and visual demos.
+ * Demo plugin for development testing and visual demos.
  */
 
 // =============================================================================
@@ -28,7 +28,7 @@
 #define HOME_ITEM_SUDOKU        5
 #define HOME_ITEM_MINESWEEPER   6
 #define HOME_ITEM_SOLITAIRE     7
-#define HOME_ITEM_CUBE3D        8   // NEW: 3D Animation Demo
+#define HOME_ITEM_CUBE3D        8   // 3D Animation Demo
 
 // Productivity (9)
 #define HOME_ITEM_TODO          9
@@ -139,11 +139,11 @@ inline void getDefaultHomeItems(uint8_t* bitmap) {
     bitmap[HOME_ITEM_WEATHER / 8] |= (1 << (HOME_ITEM_WEATHER % 8));
     #endif
     
-    // Games including Demo
+    // Games (no Demo by default)
     #if FEATURE_GAMES
     bitmap[HOME_ITEM_CHESS / 8] |= (1 << (HOME_ITEM_CHESS % 8));
     bitmap[HOME_ITEM_SUDOKU / 8] |= (1 << (HOME_ITEM_SUDOKU % 8));
-    bitmap[HOME_ITEM_CUBE3D / 8] |= (1 << (HOME_ITEM_CUBE3D % 8));
+    // Demo (cube3d) not enabled by default
     #endif
 }
 

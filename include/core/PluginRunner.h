@@ -4,9 +4,9 @@
 /**
  * @file PluginRunner.h
  * @brief Template functions for running plugins
- * @version 2.1.16
+ * @version 1.3.0
  * 
- * Refactored to eliminate code duplication in display refresh handling.
+ * Centralized display refresh handling for plugins.
  * Provides three plugin runner modes:
  * - runPluginSimple: Standard plugins with managed refresh
  * - runPluginSelfRefresh: Plugins that handle their own partial updates
@@ -363,6 +363,316 @@ void runPluginAnimation(T& plugin, const char* title) {
     
     // Animation ended (isRunning() returned false)
     Serial.println("[PLUGIN] Animation ended, returning to home");
+    PluginDisplay::exitToHome();
+}
+
+// =============================================================================
+// On-Demand Allocated Plugin Runners (saves RAM when plugin not in use)
+// =============================================================================
+
+/**
+ * Run a simple plugin with on-demand allocation
+ * Plugin is created on entry, destroyed on exit - saves RAM
+ */
+template<typename T>
+void runPluginAllocSimple(const char* title) {
+    Serial.printf("[PLUGIN] Allocating: %s\n", title);
+    Serial.printf("[PLUGIN] Free heap before: %d\n", ESP.getFreeHeap());
+    
+    T* plugin = new T();
+    if (!plugin) {
+        Serial.println("[PLUGIN] Allocation failed!");
+        showHomeScreen();
+        return;
+    }
+    
+    Serial.printf("[PLUGIN] Free heap after alloc: %d\n", ESP.getFreeHeap());
+    Serial.printf("[PLUGIN] Starting: %s\n", title);
+    
+    plugin->init(display.width(), display.height());
+    refreshManager.reset();
+    
+    // Initial full draw
+    display.setFullWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSansBold9pt7b);
+        plugin->draw();
+    } while (display.nextPage());
+    refreshManager.recordFullRefresh();
+    
+    Button lastBtn = BTN_NONE;
+    
+    while (true) {
+        Button btn = readButton();
+        
+        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
+            powerManager.resetActivityTimer();
+            
+            if (btn == BTN_POWER) {
+                delete plugin;
+                powerManager.enterDeepSleep();
+                return;
+            }
+            
+            if (btn == BTN_BACK) {
+                bool consumed = plugin->handleInput(btn);
+                if (!consumed) {
+                    break;  // Exit loop to cleanup
+                }
+            } else {
+                plugin->handleInput(btn);
+            }
+            
+            // Smart refresh
+            if (refreshManager.mustFullRefresh() && refreshManager.canFullRefresh()) {
+                display.setFullWindow();
+                display.firstPage();
+                do {
+                    display.fillScreen(GxEPD_WHITE);
+                    display.setTextColor(GxEPD_BLACK);
+                    display.setFont(&FreeSansBold9pt7b);
+                    plugin->draw();
+                } while (display.nextPage());
+                refreshManager.recordFullRefresh();
+            } else {
+                display.setPartialWindow(0, 0, display.width(), display.height());
+                display.firstPage();
+                do {
+                    display.fillScreen(GxEPD_WHITE);
+                    display.setTextColor(GxEPD_BLACK);
+                    display.setFont(&FreeSansBold9pt7b);
+                    plugin->draw();
+                } while (display.nextPage());
+                refreshManager.recordPartialRefresh();
+            }
+        }
+        lastBtn = btn;
+        delay(30);
+    }
+    
+    // Cleanup
+    Serial.printf("[PLUGIN] Freeing: %s\n", title);
+    delete plugin;
+    Serial.printf("[PLUGIN] Free heap after free: %d\n", ESP.getFreeHeap());
+    
+    refreshManager.reset();
+    showHomeScreen();
+}
+
+/**
+ * Run a self-refresh plugin with on-demand allocation
+ */
+template<typename T>
+void runPluginAllocSelfRefresh(const char* title) {
+    Serial.printf("[PLUGIN] Allocating: %s\n", title);
+    Serial.printf("[PLUGIN] Free heap before: %d\n", ESP.getFreeHeap());
+    
+    T* plugin = new T();
+    if (!plugin) {
+        Serial.println("[PLUGIN] Allocation failed!");
+        showHomeScreen();
+        return;
+    }
+    
+    Serial.printf("[PLUGIN] Free heap after alloc: %d\n", ESP.getFreeHeap());
+    Serial.printf("[PLUGIN] Starting (self-refresh): %s\n", title);
+    
+    plugin->init(display.width(), display.height());
+    plugin->needsFullRedraw = true;
+    plugin->draw();
+    
+    Button lastBtn = BTN_NONE;
+    int partialCount = 0;
+    const int FULL_REFRESH_INTERVAL = 15;
+    
+    while (true) {
+        Button btn = readButton();
+        
+        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
+            powerManager.resetActivityTimer();
+            
+            if (btn == BTN_POWER) {
+                delete plugin;
+                powerManager.enterDeepSleep();
+                return;
+            }
+            
+            if (btn == BTN_BACK) {
+                bool consumed = plugin->handleInput(btn);
+                if (!consumed) {
+                    break;  // Exit loop to cleanup
+                }
+            } else {
+                plugin->handleInput(btn);
+            }
+            
+            if (++partialCount >= FULL_REFRESH_INTERVAL) {
+                plugin->needsFullRedraw = true;
+                partialCount = 0;
+            }
+            
+            if (plugin->needsFullRedraw) {
+                plugin->draw();
+            } else {
+                plugin->drawPartial();
+            }
+        }
+        
+        if (plugin->update()) {
+            if (plugin->needsFullRedraw) {
+                plugin->draw();
+            } else {
+                plugin->drawPartial();
+            }
+        }
+        
+        lastBtn = btn;
+        delay(30);
+    }
+    
+    // Cleanup
+    Serial.printf("[PLUGIN] Freeing: %s\n", title);
+    delete plugin;
+    Serial.printf("[PLUGIN] Free heap after free: %d\n", ESP.getFreeHeap());
+    
+    display.setFullWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
+    } while (display.nextPage());
+    showHomeScreen();
+}
+
+/**
+ * Run a plugin that handles ALL its own display refresh
+ * Plugin's draw() methods must include their own firstPage/nextPage loops
+ * Used for complex plugins like Library that need fine-grained control
+ */
+template<typename T>
+void runPluginAllocDirect(const char* title) {
+    Serial.printf("[PLUGIN] Allocating: %s\n", title);
+    Serial.printf("[PLUGIN] Free heap before: %d\n", ESP.getFreeHeap());
+    
+    T* plugin = new T();
+    if (!plugin) {
+        Serial.println("[PLUGIN] Allocation failed!");
+        showHomeScreen();
+        return;
+    }
+    
+    Serial.printf("[PLUGIN] Free heap after alloc: %d\n", ESP.getFreeHeap());
+    Serial.printf("[PLUGIN] Starting (direct): %s\n", title);
+    
+    plugin->init(display.width(), display.height());
+    
+    // Initial draw - plugin handles its own display refresh
+    plugin->draw();
+    
+    Button lastBtn = BTN_NONE;
+    
+    while (true) {
+        Button btn = readButton();
+        
+        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
+            Serial.printf("[PLUGIN] Button: %d\n", btn);
+            powerManager.resetActivityTimer();
+            
+            if (btn == BTN_POWER) {
+                delete plugin;
+                powerManager.enterDeepSleep();
+                return;
+            }
+            
+            if (btn == BTN_BACK) {
+                bool consumed = plugin->handleInput(btn);
+                if (!consumed) {
+                    break;  // Exit loop to cleanup
+                }
+            } else {
+                plugin->handleInput(btn);
+            }
+            
+            // Plugin handles its own refresh
+            plugin->draw();
+        }
+        
+        lastBtn = btn;
+        delay(30);
+    }
+    
+    // Cleanup
+    Serial.printf("[PLUGIN] Freeing: %s\n", title);
+    delete plugin;
+    Serial.printf("[PLUGIN] Free heap after free: %d\n", ESP.getFreeHeap());
+    
+    display.setFullWindow();
+    display.firstPage();
+    do {
+        display.fillScreen(GxEPD_WHITE);
+    } while (display.nextPage());
+    showHomeScreen();
+}
+
+/**
+ * Run an animation plugin with on-demand allocation
+ */
+template<typename T>
+void runPluginAllocAnimation(const char* title) {
+    Serial.printf("[PLUGIN] Allocating: %s\n", title);
+    Serial.printf("[PLUGIN] Free heap before: %d\n", ESP.getFreeHeap());
+    
+    T* plugin = new T();
+    if (!plugin) {
+        Serial.println("[PLUGIN] Allocation failed!");
+        showHomeScreen();
+        return;
+    }
+    
+    Serial.printf("[PLUGIN] Free heap after alloc: %d\n", ESP.getFreeHeap());
+    Serial.printf("[PLUGIN] Starting (animation): %s\n", title);
+    
+    plugin->init(display.width(), display.height());
+    plugin->drawFullScreen();
+    
+    Button lastBtn = BTN_NONE;
+    unsigned long lastFrameTime = 0;
+    const unsigned long FRAME_INTERVAL = 50;
+    
+    while (plugin->isRunning()) {
+        Button btn = readButton();
+        
+        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
+            powerManager.resetActivityTimer();
+            
+            if (btn == BTN_POWER) {
+                delete plugin;
+                powerManager.enterDeepSleep();
+                return;
+            }
+            
+            bool consumed = plugin->handleInput(btn);
+            if (!consumed && btn == BTN_BACK) {
+                break;  // Exit loop to cleanup
+            }
+        }
+        lastBtn = btn;
+        
+        if (millis() - lastFrameTime >= FRAME_INTERVAL) {
+            plugin->draw();
+            lastFrameTime = millis();
+        }
+        
+        delay(10);
+    }
+    
+    // Cleanup
+    Serial.printf("[PLUGIN] Freeing: %s\n", title);
+    delete plugin;
+    Serial.printf("[PLUGIN] Free heap after free: %d\n", ESP.getFreeHeap());
+    
     PluginDisplay::exitToHome();
 }
 

@@ -1,7 +1,7 @@
 /**
  * @file Solitaire.h
  * @brief Klondike Solitaire for Sumi e-reader
- * @version 2.1.26
+ * @version 1.3.0
  */
 
 #ifndef SUMI_PLUGIN_SOLITAIRE_H
@@ -55,7 +55,6 @@ private:
     void drawEmptyPile(int x, int y);
 };
 
-extern SolitaireGame solitaireGame;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_SOLITAIRE_H

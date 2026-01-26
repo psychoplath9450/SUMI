@@ -17,8 +17,7 @@ enum SettingsScreen {
 
 // Main menu items
 enum SettingsMainItem {
-    MAIN_CONNECT_WIFI = 0,    // "Connect to WiFi" - opens WiFi screen
-    MAIN_OPEN_PORTAL,         // "Open Portal" - starts hotspot + shows QR
+    MAIN_OPEN_PORTAL = 0,     // "Open Portal" - shows connection options + starts portal
     MAIN_DISPLAY,             // "Display" - opens display submenu
     MAIN_ABOUT,               // "About" - system info
     MAIN_REBOOT,              // "Reboot Device"
@@ -37,6 +36,13 @@ enum SettingsDisplayItem {
     DISP_ITEM_COUNT
 };
 
+// Portal mode options
+enum PortalMode {
+    PORTAL_MODE_HOTSPOT = 0,   // Create SUMI hotspot
+    PORTAL_MODE_HOME_WIFI,     // Use existing WiFi
+    PORTAL_MODE_COUNT
+};
+
 // =============================================================================
 // Settings State
 // =============================================================================
@@ -49,6 +55,7 @@ struct SettingsState {
     bool wifiConnecting;        // WiFi connection in progress
     bool shouldExit;            // Exit back to home
     unsigned long lastUpdate;   // For connection status updates
+    int portalModeSelection;    // 0 = hotspot, 1 = home wifi
 };
 
 // =============================================================================

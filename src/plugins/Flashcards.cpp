@@ -1,7 +1,7 @@
 /**
  * @file Flashcards.cpp
  * @brief Flashcard app with partial refresh and multi-format support
- * @version 2.1.25
+ * @version 1.3.0
  * 
  * Features:
  * - Partial refresh when flipping cards (fast!)
@@ -15,10 +15,12 @@
 #include <new>
 #include "plugins/Flashcards.h"
 #include "core/ZipReader.h"  // For freeing ZIP buffers
+#include "core/SettingsManager.h"
 
 #if FEATURE_FLASHCARDS
 
-FlashcardsApp flashcardsApp;
+extern SettingsManager settingsManager;
+
 
 // Layout constants
 static const int CARD_MARGIN = 20;
@@ -58,8 +60,7 @@ void FlashcardsApp::init(int screenW, int screenH) {
     _needsFullRedraw = true;
     closeDeck();
     
-    // Load settings
-    _settings.load();
+    // Settings are loaded from SettingsManager
     
     scanDecks();
 }
@@ -87,7 +88,7 @@ bool FlashcardsApp::handleInput(Button btn) {
                 if (_deckCount > 0) {
                     loadDeck();
                     if (_cardCount > 0) {
-                        if (_settings.shuffleOnLoad) {
+                        if (settingsManager.flashcards.shuffle) {
                             shuffleCards();
                         }
                         _mode = MODE_QUESTION;
@@ -116,7 +117,7 @@ bool FlashcardsApp::handleInput(Button btn) {
                 }
                 return true;
             case BTN_DOWN:
-                if (_settingsCursor < 3) {  // 4 settings items (0-3)
+                if (_settingsCursor < 4) {  // 5 settings items (0-4)
                     _settingsCursor++;
                     _needsFullRedraw = true;
                 }
@@ -126,20 +127,23 @@ bool FlashcardsApp::handleInput(Button btn) {
             case BTN_RIGHT:
                 // Toggle/cycle setting
                 switch (_settingsCursor) {
-                    case 0:  // Font size
-                        _settings.fontSize = (FontSizeSetting)(((int)_settings.fontSize + 1) % 3);
+                    case 0:  // Font size (0-3)
+                        settingsManager.flashcards.fontSize = (settingsManager.flashcards.fontSize + 1) % 4;
                         break;
-                    case 1:  // Shuffle on load
-                        _settings.shuffleOnLoad = !_settings.shuffleOnLoad;
+                    case 1:  // Center text
+                        settingsManager.flashcards.centerText = !settingsManager.flashcards.centerText;
                         break;
-                    case 2:  // Show progress bar
-                        _settings.showProgressBar = !_settings.showProgressBar;
+                    case 2:  // Shuffle on load
+                        settingsManager.flashcards.shuffle = !settingsManager.flashcards.shuffle;
                         break;
-                    case 3:  // Show stats
-                        _settings.showStats = !_settings.showStats;
+                    case 3:  // Show progress bar
+                        settingsManager.flashcards.showProgressBar = !settingsManager.flashcards.showProgressBar;
+                        break;
+                    case 4:  // Show stats
+                        settingsManager.flashcards.showStats = !settingsManager.flashcards.showStats;
                         break;
                 }
-                _settings.save();
+                settingsManager.save();
                 _needsFullRedraw = true;
                 return true;
             case BTN_BACK:
@@ -787,6 +791,105 @@ void FlashcardsApp::drawDeckList() {
 }
 
 // =============================================================================
+// Image Support for Visual Flashcards (ASL, etc.)
+// =============================================================================
+
+bool FlashcardsApp::isImagePath(const char* text) {
+    if (!text || strlen(text) < 5) return false;
+    
+    // Check if it ends with .bmp (case insensitive)
+    int len = strlen(text);
+    if (len < 4) return false;
+    
+    const char* ext = text + len - 4;
+    return (strcasecmp(ext, ".bmp") == 0);
+}
+
+bool FlashcardsApp::drawFlashcardImage(const char* path, int x, int y, int maxW, int maxH) {
+    // Open the BMP file
+    File file = SD.open(path, FILE_READ);
+    if (!file) {
+        // Draw error placeholder
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(x + maxW/2 - 40, y + maxH/2);
+        display.print("[Image not found]");
+        return false;
+    }
+    
+    // Read BMP header
+    uint8_t header[54];
+    if (file.read(header, 54) != 54) {
+        file.close();
+        display.setCursor(x + maxW/2 - 40, y + maxH/2);
+        display.print("[Invalid BMP]");
+        return false;
+    }
+    
+    // Verify BMP signature
+    if (header[0] != 'B' || header[1] != 'M') {
+        file.close();
+        return false;
+    }
+    
+    // Extract dimensions (little-endian)
+    int32_t imgW = header[18] | (header[19] << 8) | (header[20] << 16) | (header[21] << 24);
+    int32_t imgH = header[22] | (header[23] << 8) | (header[24] << 16) | (header[25] << 24);
+    uint16_t bitsPerPixel = header[28] | (header[29] << 8);
+    uint32_t dataOffset = header[10] | (header[11] << 8) | (header[12] << 16) | (header[13] << 24);
+    
+    // Handle negative height (top-down DIB)
+    bool topDown = false;
+    if (imgH < 0) {
+        imgH = -imgH;
+        topDown = true;
+    }
+    
+    // Only support 1-bit (monochrome) for now - perfect for e-ink
+    if (bitsPerPixel != 1) {
+        file.close();
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(x + maxW/2 - 60, y + maxH/2);
+        display.print("[Use 1-bit BMP]");
+        return false;
+    }
+    
+    // Calculate position to center image in area
+    int drawX = x + (maxW - imgW) / 2;
+    int drawY = y + (maxH - imgH) / 2;
+    if (drawX < x) drawX = x;
+    if (drawY < y) drawY = y;
+    
+    // Seek to pixel data
+    file.seek(dataOffset);
+    
+    // BMP rows are padded to 4-byte boundaries
+    int rowSize = ((imgW + 31) / 32) * 4;
+    uint8_t rowBuf[100];  // Max ~800px wide
+    if (rowSize > 100) rowSize = 100;
+    
+    // Draw the image
+    for (int row = 0; row < imgH && row < maxH; row++) {
+        int srcRow = topDown ? row : (imgH - 1 - row);
+        file.seek(dataOffset + srcRow * rowSize);
+        file.read(rowBuf, rowSize);
+        
+        for (int col = 0; col < imgW && col < maxW; col++) {
+            int byteIdx = col / 8;
+            int bitIdx = 7 - (col % 8);
+            bool pixel = (rowBuf[byteIdx] >> bitIdx) & 1;
+            
+            // In 1-bit BMP: 1 = white, 0 = black (usually)
+            if (!pixel) {
+                display.drawPixel(drawX + col, drawY + row, GxEPD_BLACK);
+            }
+        }
+    }
+    
+    file.close();
+    return true;
+}
+
+// =============================================================================
 // Drawing - Card View
 // =============================================================================
 
@@ -795,8 +898,13 @@ void FlashcardsApp::drawCard(bool showAnswer) {
     
     Card& card = _cards[_cardIdx];
     
+    // Get settings from SettingsManager
+    bool showProgressBar = settingsManager.flashcards.showProgressBar;
+    bool showStats = settingsManager.flashcards.showStats;
+    bool centerText = settingsManager.flashcards.centerText;
+    
     // Progress bar at top (if enabled)
-    if (_settings.showProgressBar) {
+    if (showProgressBar) {
         drawProgressBar(CARD_MARGIN, 12, _screenW - 2*CARD_MARGIN, PROGRESS_H, 
                         _cardIdx + 1, _cardCount);
     }
@@ -807,42 +915,109 @@ void FlashcardsApp::drawCard(bool showAnswer) {
     
     char progress[32];
     snprintf(progress, sizeof(progress), "Card %d of %d", _cardIdx + 1, _cardCount);
-    display.setCursor(CARD_MARGIN, _settings.showProgressBar ? 42 : 25);
+    display.setCursor(CARD_MARGIN, showProgressBar ? 42 : 25);
     display.print(progress);
     
     // Divider
-    int dividerY = _settings.showProgressBar ? 50 : 33;
+    int dividerY = showProgressBar ? 50 : 33;
     display.drawLine(0, dividerY, _screenW, dividerY, GxEPD_BLACK);
     
-    // Question section
-    int qY = dividerY + 20;
+    // Calculate areas
+    int footerY = _screenH - 45;
+    int midDividerY = showAnswer ? (_screenH / 2 - 10) : footerY;
+    
+    // Question area: from dividerY to midDividerY (or footerY if no answer)
+    int qAreaTop = dividerY + 5;
+    int qAreaBottom = showAnswer ? midDividerY - 5 : footerY - 5;
+    int qAreaHeight = qAreaBottom - qAreaTop;
+    
+    // Draw question label
     display.setFont(&FreeSans9pt7b);
-    display.setCursor(CARD_MARGIN, qY);
+    int labelHeight = 18;
+    
+    if (centerText) {
+        int16_t tx, ty;
+        uint16_t tw, th;
+        display.getTextBounds("Question:", 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((_screenW - tw) / 2, qAreaTop + labelHeight);
+    } else {
+        display.setCursor(CARD_MARGIN, qAreaTop + labelHeight);
+    }
     display.print("Question:");
     
-    display.setFont(getCardFont());
-    drawWrappedText(card.front, CARD_MARGIN, qY + 30, _screenW - 2*CARD_MARGIN, 4);
+    // Draw question text or image - centered in remaining area
+    int qTextTop = qAreaTop + labelHeight + 10;
+    int qTextHeight = qAreaBottom - qTextTop;
+    
+    // Check if question is an image path
+    if (isImagePath(card.front)) {
+        drawFlashcardImage(card.front, CARD_MARGIN, qTextTop, 
+                          _screenW - 2*CARD_MARGIN, qTextHeight);
+    } else {
+        display.setFont(getCardFont());
+        int textSize = (settingsManager.flashcards.fontSize == 3) ? 2 : 1;
+        display.setTextSize(textSize);
+        
+        if (centerText) {
+            drawCenteredText(card.front, CARD_MARGIN, qTextTop, 
+                            _screenW - 2*CARD_MARGIN, qTextHeight);
+        } else {
+            drawWrappedText(card.front, CARD_MARGIN, qTextTop + 20, 
+                           _screenW - 2*CARD_MARGIN, 4);
+        }
+        display.setTextSize(1);
+    };
     
     if (showAnswer) {
         // Divider line
-        int divY = _screenH / 2 - 10;
-        display.drawLine(CARD_MARGIN, divY, _screenW - CARD_MARGIN, divY, GxEPD_BLACK);
+        display.drawLine(CARD_MARGIN, midDividerY, _screenW - CARD_MARGIN, midDividerY, GxEPD_BLACK);
         
-        // Answer section
-        int aY = divY + 20;
+        // Answer area: from midDividerY to footerY
+        int aAreaTop = midDividerY + 5;
+        int aAreaBottom = footerY - 5;
+        int aAreaHeight = aAreaBottom - aAreaTop;
+        
+        // Draw answer label
         display.setFont(&FreeSans9pt7b);
-        display.setCursor(CARD_MARGIN, aY);
+        if (centerText) {
+            int16_t tx, ty;
+            uint16_t tw, th;
+            display.getTextBounds("Answer:", 0, 0, &tx, &ty, &tw, &th);
+            display.setCursor((_screenW - tw) / 2, aAreaTop + labelHeight);
+        } else {
+            display.setCursor(CARD_MARGIN, aAreaTop + labelHeight);
+        }
         display.print("Answer:");
         
-        display.setFont(getCardFont());
-        drawWrappedText(card.back, CARD_MARGIN, aY + 30, _screenW - 2*CARD_MARGIN, 4);
+        // Draw answer text or image - centered in remaining area
+        int aTextTop = aAreaTop + labelHeight + 10;
+        int aTextHeight = aAreaBottom - aTextTop;
+        
+        // Check if answer is an image path
+        if (isImagePath(card.back)) {
+            drawFlashcardImage(card.back, CARD_MARGIN, aTextTop,
+                              _screenW - 2*CARD_MARGIN, aTextHeight);
+        } else {
+            display.setFont(getCardFont());
+            int textSize = (settingsManager.flashcards.fontSize == 3) ? 2 : 1;
+            display.setTextSize(textSize);
+            
+            if (centerText) {
+                drawCenteredText(card.back, CARD_MARGIN, aTextTop,
+                                _screenW - 2*CARD_MARGIN, aTextHeight);
+            } else {
+                drawWrappedText(card.back, CARD_MARGIN, aTextTop + 20,
+                               _screenW - 2*CARD_MARGIN, 4);
+            }
+            display.setTextSize(1);
+        }
         
         // Bottom controls
         display.setFont(&FreeSans9pt7b);
-        display.drawLine(0, _screenH - 45, _screenW, _screenH - 45, GxEPD_BLACK);
+        display.drawLine(0, footerY, _screenW, footerY, GxEPD_BLACK);
         
         // Stats (if enabled)
-        if (_settings.showStats) {
+        if (showStats) {
             char stats[32];
             snprintf(stats, sizeof(stats), "%d/%d", _correct, _incorrect);
             display.setCursor(CARD_MARGIN, _screenH - 25);
@@ -858,13 +1033,129 @@ void FlashcardsApp::drawCard(bool showAnswer) {
     } else {
         // Footer for question mode
         display.setFont(&FreeSans9pt7b);
-        display.drawLine(0, _screenH - 45, _screenW, _screenH - 45, GxEPD_BLACK);
+        display.drawLine(0, footerY, _screenW, footerY, GxEPD_BLACK);
         
         display.setCursor(CARD_MARGIN, _screenH - 25);
         display.print("<Shuffle");
         
         display.setCursor(_screenW / 2 - 40, _screenH - 25);
         display.print("OK: Reveal");
+    }
+}
+
+// Draw text centered both horizontally and vertically in the given area
+void FlashcardsApp::drawCenteredText(const char* text, int x, int y, int width, int height) {
+    int16_t tx, ty;
+    uint16_t tw, th;
+    display.getTextBounds(text, 0, 0, &tx, &ty, &tw, &th);
+    
+    // If text fits on one line, center it
+    if ((int)tw <= width) {
+        int cx = x + (width - tw) / 2;
+        int cy = y + (height + th) / 2;
+        display.setCursor(cx, cy);
+        display.print(text);
+    } else {
+        // Multi-line - use wrapped text but start it centered vertically
+        int lineHeight = th + 8;
+        int estLines = (tw / width) + 1;
+        int totalTextHeight = estLines * lineHeight;
+        int startY = y + (height - totalTextHeight) / 2 + th;
+        if (startY < y + th) startY = y + th;
+        
+        // Draw wrapped but centered horizontally for each line
+        drawWrappedTextCentered(text, x, startY, width, 4);
+    }
+}
+
+// Draw wrapped text with each line centered
+void FlashcardsApp::drawWrappedTextCentered(const char* text, int x, int y, int maxWidth, int maxLines) {
+    int curY = y;
+    int lineHeight = 28;
+    int lineCount = 0;
+    int centerX = x + maxWidth / 2;
+    
+    // Build lines first, then draw centered
+    char line[100];
+    int lineLen = 0;
+    char word[50];
+    int wordLen = 0;
+    int lineWidth = 0;
+    
+    const char* p = text;
+    while (*p && lineCount < maxLines) {
+        if (*p == ' ' || *p == '\n' || *(p + 1) == '\0') {
+            if (*(p + 1) == '\0' && *p != ' ' && *p != '\n') {
+                if (wordLen < 49) word[wordLen++] = *p;
+            }
+            word[wordLen] = '\0';
+            
+            if (wordLen > 0) {
+                int16_t x1, y1;
+                uint16_t w, h;
+                display.getTextBounds(word, 0, 0, &x1, &y1, &w, &h);
+                
+                // Check if word fits on current line
+                int spaceW = (lineLen > 0) ? 8 : 0;
+                if (lineWidth + spaceW + (int)w > maxWidth) {
+                    // Draw current line centered
+                    if (lineLen > 0) {
+                        line[lineLen] = '\0';
+                        int16_t lx, ly;
+                        uint16_t lw, lh;
+                        display.getTextBounds(line, 0, 0, &lx, &ly, &lw, &lh);
+                        display.setCursor(centerX - lw/2, curY);
+                        display.print(line);
+                        curY += lineHeight;
+                        lineCount++;
+                        if (lineCount >= maxLines) break;
+                    }
+                    // Start new line with this word
+                    strcpy(line, word);
+                    lineLen = wordLen;
+                    lineWidth = w;
+                } else {
+                    // Add word to line
+                    if (lineLen > 0) {
+                        line[lineLen++] = ' ';
+                    }
+                    strcpy(line + lineLen, word);
+                    lineLen += wordLen;
+                    lineWidth += spaceW + w;
+                }
+            }
+            
+            if (*p == '\n') {
+                // Draw current line and start new
+                if (lineLen > 0) {
+                    line[lineLen] = '\0';
+                    int16_t lx, ly;
+                    uint16_t lw, lh;
+                    display.getTextBounds(line, 0, 0, &lx, &ly, &lw, &lh);
+                    display.setCursor(centerX - lw/2, curY);
+                    display.print(line);
+                    curY += lineHeight;
+                    lineCount++;
+                }
+                lineLen = 0;
+                lineWidth = 0;
+            }
+            
+            wordLen = 0;
+        } else {
+            if (wordLen < 49) word[wordLen++] = *p;
+        }
+        p++;
+    }
+    
+    // Draw remaining line
+    if (lineLen > 0 && lineCount < maxLines) {
+        line[lineLen] = '\0';
+        int16_t lx, ly;
+        uint16_t lw, lh;
+        display.getTextBounds(line, 0, 0, &lx, &ly, &lw, &lh);
+        display.setCursor(centerX - lw/2, curY);
+        display.print(line);
     }
 }
 
@@ -1024,11 +1315,14 @@ void FlashcardsApp::FlashcardSettings::save() {
 // =============================================================================
 
 const GFXfont* FlashcardsApp::getCardFont() {
-    switch (_settings.fontSize) {
-        case FONT_SMALL:  return &FreeSans9pt7b;
-        case FONT_MEDIUM: return &FreeSansBold12pt7b;
-        case FONT_LARGE:  return &FreeSansBold12pt7b;  // Could add 18pt if available
-        default:          return &FreeSansBold12pt7b;
+    // Font sizes: 0=Small (9pt), 1=Medium (12pt), 2=Large (12pt bold), 3=XLarge (12pt x2)
+    // Note: For XLarge, we use 12pt with setTextSize(2) in the caller
+    switch (settingsManager.flashcards.fontSize) {
+        case 0:  return &FreeSans9pt7b;         // Small
+        case 1:  return &FreeSansBold12pt7b;    // Medium
+        case 2:  return &FreeSansBold12pt7b;    // Large
+        case 3:  return &FreeSansBold12pt7b;    // XLarge (doubled by setTextSize)
+        default: return &FreeSansBold12pt7b;
     }
 }
 
@@ -1051,26 +1345,29 @@ void FlashcardsApp::drawSettings() {
     display.drawLine(0, 50, _screenW, 50, GxEPD_BLACK);
     
     // Settings items
-    int startY = 80;
-    int itemH = 50;
+    int startY = 70;
+    int itemH = 44;
     int margin = 25;
-    int valueBoxW = 100;
+    int valueBoxW = 110;
     
     struct SettingItem {
         const char* label;
         const char* value;
     };
     
-    // Get current values
-    const char* fontSizeNames[] = {"Small", "Medium", "Large"};
+    // Get current values from settingsManager
+    const char* fontSizeNames[] = {"Small", "Medium", "Large", "Extra Large"};
+    uint8_t fontSize = settingsManager.flashcards.fontSize;
+    if (fontSize > 3) fontSize = 1;
     
     SettingItem items[] = {
-        {"Font Size", fontSizeNames[(int)_settings.fontSize]},
-        {"Shuffle on Load", _settings.shuffleOnLoad ? "Yes" : "No"},
-        {"Show Progress Bar", _settings.showProgressBar ? "Yes" : "No"},
-        {"Show Stats", _settings.showStats ? "Yes" : "No"}
+        {"Font Size", fontSizeNames[fontSize]},
+        {"Center Text", settingsManager.flashcards.centerText ? "Yes" : "No"},
+        {"Shuffle on Load", settingsManager.flashcards.shuffle ? "Yes" : "No"},
+        {"Show Progress Bar", settingsManager.flashcards.showProgressBar ? "Yes" : "No"},
+        {"Show Stats", settingsManager.flashcards.showStats ? "Yes" : "No"}
     };
-    int numItems = 4;
+    int numItems = 5;
     
     display.setFont(&FreeSans9pt7b);
     

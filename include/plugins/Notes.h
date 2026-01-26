@@ -1,7 +1,7 @@
 /**
  * @file Notes.h
  * @brief Text editor with Bluetooth keyboard support for Sumi e-reader
- * @version 2.1.26
+ * @version 1.3.0
  */
 
 #ifndef SUMI_PLUGIN_NOTES_H
@@ -42,6 +42,7 @@ public:
     };
     
     NotesApp();
+    ~NotesApp();
     void init(int screenW, int screenH);
     bool handleInput(Button btn);
     void draw();
@@ -97,7 +98,6 @@ private:
     #endif
 };
 
-extern NotesApp notesApp;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_NOTES_H

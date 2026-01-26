@@ -286,12 +286,8 @@ void ExpatHtmlParser::handleEndTag(const char* name) {
     }
     lowerName[i] = '\0';
     
-    // Flush word buffer on significant tag closures
-    bool shouldFlush = isBlockTag(lowerName) || isHeaderTag(lowerName) || 
-                       isBoldTag(lowerName) || isItalicTag(lowerName) || 
-                       _depth == 1;
-    
-    if (shouldFlush && _wordBufferIndex > 0) {
+    // ALWAYS flush word buffer on ANY closing tag
+    if (_wordBufferIndex > 0) {
         flushWordBuffer();
     }
     
@@ -343,10 +339,7 @@ void ExpatHtmlParser::handleCharacter(char c) {
         if (_wordBufferIndex > 0) {
             flushWordBuffer();
         }
-        // Add single space if needed
-        if (!_lastWasSpace && _currentText.length() > 0) {
-            _currentText += ' ';
-        }
+        // Mark that we've seen whitespace (flushWordBuffer will add space if needed)
         _lastWasSpace = true;
     } else {
         // Check if word buffer is full
@@ -367,11 +360,40 @@ void ExpatHtmlParser::flushWordBuffer() {
     if (_wordBufferIndex > 0) {
         _wordBuffer[_wordBufferIndex] = '\0';
         
+        // ALWAYS ensure space before word if text exists
+        if (_currentText.length() > 0) {
+            char lastChar = _currentText.charAt(_currentText.length() - 1);
+            if (lastChar != ' ' && lastChar != '\n' && lastChar != '\t' && 
+                lastChar != '*') {  // Don't add space after opening marker
+                _currentText += ' ';
+            }
+        }
+        
         // Decode entities in word
         String word = replaceHtmlEntities(_wordBuffer);
-        _currentText += word;
+        
+        // Check if we're in bold or italic - wrap word with markers
+        bool inBold = (_boldUntilDepth < INT_MAX);
+        bool inItalic = (_italicUntilDepth < INT_MAX);
+        
+        if (inBold && inItalic) {
+            _currentText += "***";
+            _currentText += word;
+            _currentText += "*** ";
+        } else if (inBold) {
+            _currentText += "**";
+            _currentText += word;
+            _currentText += "** ";
+        } else if (inItalic) {
+            _currentText += "*";
+            _currentText += word;
+            _currentText += "* ";
+        } else {
+            _currentText += word;
+        }
         
         _wordBufferIndex = 0;
+        _lastWasSpace = false;
     }
 }
 
@@ -379,8 +401,17 @@ void ExpatHtmlParser::flushParagraph(bool isHeader) {
     _currentText.trim();
     
     if (_currentText.length() > 0) {
+        // Add header marker if this is a header
+        String output;
+        if (isHeader) {
+            output = "# ";
+            output += _currentText;
+        } else {
+            output = _currentText;
+        }
+        
         if (_callback) {
-            _callback(_currentText, isHeader);
+            _callback(output, isHeader);
         }
         _paragraphCount++;
     }

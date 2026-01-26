@@ -1,7 +1,7 @@
 /**
  * @file Weather.h
  * @brief Weather display widget for Sumi e-reader
- * @version 2.1.26
+ * @version 1.3.0
  * 
  * Features:
  * - 7-day forecast with LEFT/RIGHT navigation
@@ -100,7 +100,6 @@ private:
     void drawDaySelector();
 };
 
-extern WeatherApp weatherApp;
 
 #endif // FEATURE_WEATHER
 #endif // SUMI_PLUGIN_WEATHER_H

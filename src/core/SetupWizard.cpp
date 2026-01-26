@@ -1,7 +1,7 @@
 /**
  * @file SetupWizard.cpp
  * @brief Setup screens and animations implementation
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #include "core/SetupWizard.h"
@@ -11,136 +11,12 @@
 extern GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display;
 
 // =============================================================================
-// Deploy Animation - Sequential appearance, no movement
+// Deploy Animation - Now just shows setup screen directly
 // =============================================================================
 void playDeployAnimation() {
     display.setRotation(3);
-    
-    int w = display.width();
-    int h = display.height();
-    int centerX = w / 2;
-    int margin = 30;
-    
-    int16_t x1, y1;
-    uint16_t tw, th;
-    
-    // Frame 1: Clear screen, show S
-    display.setFullWindow();
-    display.firstPage();
-    do {
-        display.fillScreen(GxEPD_WHITE);
-        display.setFont(&FreeSansBold12pt7b);
-        display.setTextSize(3);
-        display.setTextColor(GxEPD_BLACK);
-        display.getTextBounds("S", 0, 0, &x1, &y1, &tw, &th);
-        display.setCursor(centerX - tw/2, 120);
-        display.print("S");
-    } while (display.nextPage());
-    delay(150);
-    
-    // Frame 2-4: SU, SUM, SUMI
-    const char* letters[] = {"SU", "SUM", "SUMI"};
-    for (int i = 0; i < 3; i++) {
-        display.setPartialWindow(0, 40, w, 120);
-        display.firstPage();
-        do {
-            display.fillRect(0, 40, w, 120, GxEPD_WHITE);
-            display.setFont(&FreeSansBold12pt7b);
-            display.setTextSize(3);
-            display.setTextColor(GxEPD_BLACK);
-            display.getTextBounds(letters[i], 0, 0, &x1, &y1, &tw, &th);
-            display.setCursor(centerX - tw/2, 120);
-            display.print(letters[i]);
-        } while (display.nextPage());
-        delay(120);
-    }
-    delay(200);
-    
-    // Frame 5: INK,
-    display.setPartialWindow(0, 140, w, 50);
-    display.firstPage();
-    do {
-        display.fillRect(0, 140, w, 50, GxEPD_WHITE);
-        display.setFont(&FreeSansBold9pt7b);
-        display.setTextSize(1);
-        display.setTextColor(GxEPD_BLACK);
-        display.getTextBounds("INK,", 0, 0, &x1, &y1, &tw, &th);
-        display.setCursor(centerX - tw/2 - 40, 170);
-        display.print("INK,");
-    } while (display.nextPage());
-    delay(300);
-    
-    // Frame 6: INK, SIMPLIFIED
-    display.setPartialWindow(0, 140, w, 50);
-    display.firstPage();
-    do {
-        display.fillRect(0, 140, w, 50, GxEPD_WHITE);
-        display.setFont(&FreeSansBold9pt7b);
-        display.setTextSize(1);
-        display.setTextColor(GxEPD_BLACK);
-        display.getTextBounds("INK, SIMPLIFIED", 0, 0, &x1, &y1, &tw, &th);
-        display.setCursor(centerX - tw/2, 170);
-        display.print("INK, SIMPLIFIED");
-    } while (display.nextPage());
-    delay(400);
-    
-    // Frame 7: WiFi card appears
-    int y = 205;
-    int cardHeight = 130;
-    display.setPartialWindow(0, 200, w, cardHeight + 10);
-    display.firstPage();
-    do {
-        display.fillRect(0, 200, w, cardHeight + 10, GxEPD_WHITE);
-        display.fillRoundRect(margin, y, w - margin*2, cardHeight, 14, GxEPD_BLACK);
-        
-        display.setFont(&FreeSansBold9pt7b);
-        display.setTextColor(GxEPD_WHITE);
-        display.setCursor(margin + 25, y + 45);
-        display.print("CONNECT TO WIFI");
-        
-        display.setFont(&FreeSansBold12pt7b);
-        String apName = wifiManager.getAPName();
-        display.setCursor(margin + 25, y + 95);
-        display.print(apName);
-    } while (display.nextPage());
-    delay(250);
-    
-    // Frame 8: Browser card appears
-    y += cardHeight + 25;
-    cardHeight = 170;
-    display.setPartialWindow(0, y - 5, w, cardHeight + 10);
-    display.firstPage();
-    do {
-        display.fillRect(0, y - 5, w, cardHeight + 10, GxEPD_WHITE);
-        display.setTextColor(GxEPD_BLACK);
-        display.drawRoundRect(margin, y, w - margin*2, cardHeight, 14, GxEPD_BLACK);
-        
-        display.setFont(&FreeSansBold9pt7b);
-        display.setCursor(margin + 25, y + 45);
-        display.print("OPEN IN BROWSER");
-        
-        display.setFont(&FreeSansBold12pt7b);
-        display.setCursor(margin + 25, y + 95);
-        display.print("sumi.local");
-        
-        display.setFont(&FreeSansBold9pt7b);
-        display.setCursor(margin + 25, y + 135);
-        display.print("or 192.168.4.1");
-    } while (display.nextPage());
-    delay(250);
-    
-    // Frame 9: No password required
-    int footerY = h - 75;
-    display.setPartialWindow(0, footerY - 10, w, 50);
-    display.firstPage();
-    do {
-        display.fillRect(0, footerY - 10, w, 50, GxEPD_WHITE);
-        display.setTextColor(GxEPD_BLACK);
-        display.setFont(&FreeSansBold12pt7b);
-        display.getTextBounds("No password required", 0, 0, &x1, &y1, &tw, &th);
-        display.setCursor(centerX - tw/2, footerY);
-        display.print("No password required");
-    } while (display.nextPage());
+    // Skip animation, just show the setup screen
+    showSetupScreen();
 }
 
 // =============================================================================
@@ -202,9 +78,9 @@ void showDeployedScreen() {
         
         const char* steps[] = {
             "Open Settings from home",
-            "Select Portal",
-            "Select Start Portal",
-            "Connect & visit sumi.local"
+            "Select Open Portal",
+            "Choose: Home WiFi or Hotspot",
+            "Visit sumi.local in browser"
         };
         
         for (int i = 0; i < 4; i++) {
@@ -241,15 +117,21 @@ void showSetupScreen() {
     int w = display.width();
     int h = display.height();
     int centerX = w / 2;
-    int margin = 30;
+    int margin = 20;
+    
+    // Check current connection state
+    bool wifiConnected = wifiManager.isConnected();
+    String connectedIP = wifiConnected ? wifiManager.getIP() : "";
+    String connectedSSID = wifiConnected ? wifiManager.getSSID() : "";
     
     display.setFullWindow();
     display.firstPage();
     do {
         display.fillScreen(GxEPD_WHITE);
         
-        int y = 90;
+        int y = 50;
         
+        // Title
         display.setFont(&FreeSansBold12pt7b);
         display.setTextSize(2);
         display.setTextColor(GxEPD_BLACK);
@@ -259,53 +141,131 @@ void showSetupScreen() {
         display.setCursor(centerX - tw/2, y);
         display.print("SUMI");
         display.setTextSize(1);
-        y += 45;
+        y += 28;
         
         display.setFont(&FreeSansBold9pt7b);
-        display.getTextBounds("INK, SIMPLIFIED", 0, 0, &x1, &y1, &tw, &th);
+        display.getTextBounds("SETUP", 0, 0, &x1, &y1, &tw, &th);
         display.setCursor(centerX - tw/2, y);
-        display.print("INK, SIMPLIFIED");
-        y += 70;
+        display.print("SETUP");
+        y += 25;
         
-        int cardHeight = 130;
-        display.fillRoundRect(margin, y, w - margin*2, cardHeight, 14, GxEPD_BLACK);
+        // Card dimensions - larger to fill screen
+        int cardWidth = w - margin * 2;
+        int cardHeight = 115;
+        int cardSpacing = 10;
         
-        display.setFont(&FreeSansBold9pt7b);
+        // Card 1: Connect to hotspot (black filled)
+        display.fillRoundRect(margin, y, cardWidth, cardHeight, 12, GxEPD_BLACK);
         display.setTextColor(GxEPD_WHITE);
-        display.setCursor(margin + 25, y + 45);
-        display.print("CONNECT TO WIFI");
+        
+        // Number circle (white on black)
+        display.fillCircle(margin + 40, y + cardHeight/2, 26, GxEPD_WHITE);
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSansBold12pt7b);
+        display.setTextSize(1);
+        display.setCursor(margin + 32, y + cardHeight/2 + 9);
+        display.print("1");
+        
+        // Text - larger fonts
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold12pt7b);
+        display.setCursor(margin + 80, y + 38);
+        display.print("Connect to WiFi:");
         
         display.setFont(&FreeSansBold12pt7b);
         display.setTextSize(1);
         String apName = wifiManager.getAPName();
-        display.setCursor(margin + 25, y + 95);
+        display.setCursor(margin + 80, y + 70);
         display.print(apName);
         
-        y += cardHeight + 25;
+        display.setFont(&FreeSansBold12pt7b);
+        display.setCursor(margin + 80, y + 100);
+        display.print("(no password)");
         
-        cardHeight = 170;
-        display.drawRoundRect(margin, y, w - margin*2, cardHeight, 14, GxEPD_BLACK);
+        y += cardHeight + cardSpacing;
+        
+        // Card 2: Open browser (outlined)
+        display.drawRoundRect(margin, y, cardWidth, cardHeight, 12, GxEPD_BLACK);
         display.setTextColor(GxEPD_BLACK);
         
-        display.setFont(&FreeSansBold9pt7b);
-        display.setCursor(margin + 25, y + 45);
-        display.print("OPEN IN BROWSER");
+        // Number circle
+        display.fillCircle(margin + 40, y + cardHeight/2, 26, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold12pt7b);
+        display.setCursor(margin + 31, y + cardHeight/2 + 9);
+        display.print("2");
+        
+        // Text - larger fonts
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSansBold12pt7b);
+        display.setCursor(margin + 80, y + 38);
+        display.print("Open browser:");
         
         display.setFont(&FreeSansBold12pt7b);
         display.setTextSize(1);
-        display.setCursor(margin + 25, y + 95);
+        display.setCursor(margin + 80, y + 70);
         display.print("sumi.local");
         
-        display.setFont(&FreeSansBold9pt7b);
-        display.setCursor(margin + 25, y + 135);
+        display.setFont(&FreeSansBold12pt7b);
+        display.setCursor(margin + 80, y + 100);
         display.print("or 192.168.4.1");
         
-        y += cardHeight + 45;
+        y += cardHeight + cardSpacing;
         
+        // Card 3: Connect SUMI to home WiFi (outlined)
+        display.drawRoundRect(margin, y, cardWidth, cardHeight, 12, GxEPD_BLACK);
+        display.setTextColor(GxEPD_BLACK);
+        
+        // Number circle
+        display.fillCircle(margin + 40, y + cardHeight/2, 26, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
         display.setFont(&FreeSansBold12pt7b);
-        display.getTextBounds("No password required", 0, 0, &x1, &y1, &tw, &th);
-        display.setCursor(centerX - tw/2, y);
-        display.print("No password required");
+        display.setCursor(margin + 31, y + cardHeight/2 + 9);
+        display.print("3");
+        
+        // Text - larger fonts
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSansBold12pt7b);
+        display.setCursor(margin + 80, y + 38);
+        display.print("Connect SUMI to WiFi");
+        
+        display.setCursor(margin + 80, y + 70);
+        display.print("Then switch your phone");
+        
+        display.setCursor(margin + 80, y + 100);
+        display.print("to the same network");
+        
+        y += cardHeight + cardSpacing;
+        
+        // Status bar at bottom showing connection mode
+        int statusHeight = 70;
+        int statusY = h - statusHeight - 8;
+        
+        if (wifiConnected) {
+            // Connected to home WiFi - show filled box
+            display.fillRoundRect(margin, statusY, cardWidth, statusHeight, 10, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+            
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(margin + 15, statusY + 30);
+            display.print("CONNECTED: ");
+            display.print(connectedSSID);
+            
+            display.setCursor(margin + 15, statusY + 58);
+            display.print("Portal: http://");
+            display.print(connectedIP);
+        } else {
+            // Hotspot mode - show outlined box
+            display.drawRoundRect(margin, statusY, cardWidth, statusHeight, 10, GxEPD_BLACK);
+            display.setTextColor(GxEPD_BLACK);
+            
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(margin + 15, statusY + 30);
+            display.print("MODE: Hotspot");
+            
+            display.setCursor(margin + 15, statusY + 58);
+            display.print("Waiting for WiFi setup...");
+        }
         
     } while (display.nextPage());
     

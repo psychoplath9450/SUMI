@@ -10,7 +10,7 @@ The ESP32 runs a web server on port 80. All POST requests expect JSON.
 
 ```json
 {
-  "version": "2.1.26",
+  "version": "1.4.2",
   "variant": "lite",
   "setupComplete": true,
   "battery": {
@@ -47,8 +47,9 @@ Saves settings. Send the full settings object (or just the parts you want to cha
     "sleepMinutes": 5
   },
   "reader": {
-    "fontSize": 18,
-    "margins": 20
+    "fontSize": 1,
+    "screenMargin": 5,
+    "lineSpacing": 1
   },
   "homeItems": [0, 1, 3, 5, 9, 12]
 }
@@ -97,16 +98,75 @@ Response:
 }
 ```
 
+### GET /api/download?path=/books/book.epub
+
+Downloads a file from the SD card. Returns the raw file content with appropriate Content-Type header.
+
+Used by the portal to fetch EPUBs for browser-side processing.
+
 ### POST /api/files/upload
 
 Multipart form upload. Fields:
 - `file`: the file
-- `path`: target directory (optional)
+- `path`: target directory (optional, defaults to root)
+
+The handler auto-creates parent directories if they don't exist.
+
+### POST /api/files/mkdir
+
+Creates a directory on the SD card.
+
+```json
+{ "path": "/.sumi/books/abc123" }
+```
+
+Response:
+```json
+{ "status": "created" }
+```
+
+Or if already exists:
+```json
+{ "status": "exists" }
+```
 
 ### POST /api/files/delete
 
 ```json
 { "path": "/books/old.epub" }
+```
+
+## Books
+
+### GET /api/books/status
+
+Returns information about books on the device, split into processed and unprocessed.
+
+```json
+{
+  "processed": [
+    {
+      "name": "Alice's Adventures in Wonderland.epub",
+      "hash": "a1b2c3d4",
+      "title": "Alice's Adventures in Wonderland",
+      "author": "Lewis Carroll",
+      "totalChapters": 12,
+      "totalWords": 26432,
+      "estimatedPages": 80,
+      "estimatedReadingMins": 106,
+      "processedAt": 1706198400,
+      "currentChapter": 3,
+      "currentPage": 5,
+      "lastRead": 1706284800
+    }
+  ],
+  "unprocessed": [
+    {
+      "name": "New Book.epub",
+      "size": 524288
+    }
+  ]
+}
 ```
 
 ## System
@@ -203,18 +263,21 @@ Tests connection to sync server.
 
 ```json
 {
-  "fontSize": 18,
-  "lineHeight": 150,
-  "margins": 20,
-  "paraSpacing": 10,
-  "sceneBreakSpacing": 30,
-  "textAlign": 1,
-  "hyphenation": false,
-  "showProgress": true,
-  "showChapter": true,
-  "showPages": true
+  "fontSize": 1,
+  "lineSpacing": 1,
+  "screenMargin": 5,
+  "textAlign": 0,
+  "extraParagraphSpacing": false,
+  "refreshFrequency": 15,
+  "requirePreprocessed": true
 }
 ```
+
+Field values:
+- `fontSize`: 0=SMALL (22px), 1=MEDIUM (26px), 2=LARGE (30px), 3=EXTRA_LARGE (34px)
+- `lineSpacing`: 0=TIGHT (0.95x), 1=NORMAL (1.0x), 2=WIDE (1.1x)
+- `screenMargin`: 0, 5, 10, 15, or 20 pixels
+- `textAlign`: 0=JUSTIFIED, 1=LEFT, 2=CENTER, 3=RIGHT
 
 ### POST /api/reader/settings
 

@@ -4,7 +4,7 @@
 /**
  * @file PowerManager.h
  * @brief Power management - sleep, wake, activity tracking
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #include <Arduino.h>

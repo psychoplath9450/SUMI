@@ -1,7 +1,7 @@
 /**
  * @file Sudoku.cpp
  * @brief Sudoku puzzle game with inline number cycling
- * @version 2.2.1
+ * @version 1.3.0
  * 
  * Features:
  * - Navigate with D-pad, press OK to enter edit mode
@@ -14,7 +14,6 @@
 
 #if FEATURE_GAMES
 
-SudokuGame sudokuGame;
 
 // =============================================================================
 // Constructor

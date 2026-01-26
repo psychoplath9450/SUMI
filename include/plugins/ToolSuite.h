@@ -1,7 +1,7 @@
 /**
  * @file ToolSuite.h
  * @brief Utility tools for Sumi e-reader
- * @version 2.1.17
+ * @version 1.3.0
  * 
  * Tools: Calculator, Timer, Stopwatch
  * Full-screen layouts with proper button handling
@@ -98,7 +98,6 @@ private:
     void drawStopwatchPartial();
 };
 
-extern ToolSuiteApp toolSuiteApp;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_TOOLSUITE_H

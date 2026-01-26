@@ -1,7 +1,7 @@
 /**
  * @file Minesweeper.h
  * @brief Minesweeper game for Sumi e-reader
- * @version 2.1.26
+ * @version 1.3.0
  */
 
 #ifndef SUMI_PLUGIN_MINESWEEPER_H
@@ -50,7 +50,6 @@ private:
     void checkWin();
 };
 
-extern MinesweeperGame minesweeperGame;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_MINESWEEPER_H

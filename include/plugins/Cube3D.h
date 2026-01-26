@@ -4,7 +4,7 @@
 /**
  * @file Cube3D.h
  * @brief Demo/Development Testing Plugin
- * @version 2.4.1
+ * @version 1.4.0
  *
  * A collection of visual demos and development tests for e-paper display.
  * Menu-based with multiple demo modes:
@@ -708,7 +708,6 @@ private:
     }
 };
 
-extern Cube3DApp cube3DApp;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_CUBE3D_H

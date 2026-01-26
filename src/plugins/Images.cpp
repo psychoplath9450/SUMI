@@ -1,7 +1,7 @@
 /**
  * @file Images.cpp
  * @brief Image viewer implementation
- * @version 2.1.30
+ * @version 1.3.0
  * 
  * Optimized with raw button handling
  * Fixed: Only lists file formats that are actually supported (.bmp, .raw)
@@ -12,7 +12,6 @@
 
 #if FEATURE_GAMES
 
-ImagesApp imagesApp;
 
 ImagesApp::ImagesApp() { 
     reset(); 

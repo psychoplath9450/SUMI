@@ -4,7 +4,7 @@
 /**
  * @file AppLauncher.h
  * @brief App launching and plugin runner integration
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #include <Arduino.h>

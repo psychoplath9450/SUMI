@@ -17,6 +17,9 @@
 #include "core/WebServer.h"
 #endif
 
+// External portal state
+extern bool portal_active;
+
 // =============================================================================
 // State
 // =============================================================================
@@ -28,7 +31,8 @@ static SettingsState state = {
     .portalJustStarted = false,
     .wifiConnecting = false,
     .shouldExit = false,
-    .lastUpdate = 0
+    .lastUpdate = 0,
+    .portalModeSelection = 0
 };
 
 // =============================================================================
@@ -54,6 +58,16 @@ SettingsState& settingsGetState() {
 // =============================================================================
 void settingsUp() {
     state.prevSelection = state.selection;
+    
+    // Special handling for portal mode selection
+    if (state.screen == SETTINGS_SCREEN_PORTAL && !portal_active) {
+        if (state.portalModeSelection > 0) {
+            state.portalModeSelection--;
+            state.needsFullRefresh = true;
+        }
+        return;
+    }
+    
     int maxItems = settingsGetItemCount();
     if (state.selection > 0) {
         state.selection--;
@@ -62,6 +76,16 @@ void settingsUp() {
 
 void settingsDown() {
     state.prevSelection = state.selection;
+    
+    // Special handling for portal mode selection
+    if (state.screen == SETTINGS_SCREEN_PORTAL && !portal_active) {
+        if (state.portalModeSelection < PORTAL_MODE_COUNT - 1) {
+            state.portalModeSelection++;
+            state.needsFullRefresh = true;
+        }
+        return;
+    }
+    
     int maxItems = settingsGetItemCount();
     if (state.selection < maxItems - 1) {
         state.selection++;
@@ -72,42 +96,12 @@ void settingsSelect() {
     switch (state.screen) {
         case SETTINGS_SCREEN_MAIN:
             switch (state.selection) {
-                case MAIN_CONNECT_WIFI:
-                    // Open WiFi screen immediately
-                    state.screen = SETTINGS_SCREEN_WIFI;
-                    state.selection = 0;
-                    state.needsFullRefresh = true;
-                    
-                    // Start connecting if credentials available
-                    if (wifiManager.hasCredentials() && !wifiManager.isConnected()) {
-                        Serial.println("[SETTINGS] Connecting to saved WiFi...");
-                        state.wifiConnecting = true;
-                        wifiManager.connectSaved();
-                    }
-                    break;
-                    
                 case MAIN_OPEN_PORTAL:
-                    // Open Portal screen and start AP immediately
+                    // Open Portal screen to show connection options
                     state.screen = SETTINGS_SCREEN_PORTAL;
                     state.selection = 0;
+                    state.portalModeSelection = 0;  // Default to hotspot
                     state.needsFullRefresh = true;
-                    
-                    if (!wifiManager.isAPMode()) {
-                        Serial.println("[SETTINGS] Starting Portal...");
-                        
-                        // Free ZIP buffers to reclaim ~43KB for portal
-                        Serial.println("[SETTINGS] Freeing ZIP buffers for portal...");
-                        ZipReader_freeBuffers();
-                        
-                        wifiManager.startAP();
-                        #if FEATURE_WEBSERVER
-                        extern SumiWebServer webServer;
-                        webServer.begin();
-                        extern bool portal_active;
-                        portal_active = true;
-                        #endif
-                        state.portalJustStarted = true;
-                    }
                     break;
                     
                 case MAIN_DISPLAY:
@@ -144,17 +138,15 @@ void settingsSelect() {
             break;
             
         case SETTINGS_SCREEN_PORTAL:
-            // On Portal screen, SELECT toggles portal
-            if (wifiManager.isAPMode()) {
+            if (portal_active) {
+                // Portal is running - SELECT stops it
                 Serial.println("[SETTINGS] Stopping Portal...");
                 #if FEATURE_WEBSERVER
                 extern SumiWebServer webServer;
                 webServer.stop();
-                extern bool portal_active;
                 portal_active = false;
                 #endif
                 wifiManager.stopAP();
-                // Also disconnect STA and turn WiFi off completely
                 if (WiFi.status() == WL_CONNECTED) {
                     WiFi.disconnect();
                 }
@@ -163,22 +155,50 @@ void settingsSelect() {
                 // Reallocate ZIP buffers now that portal is closed
                 Serial.println("[SETTINGS] Reallocating ZIP buffers...");
                 ZipReader_preallocateBuffer();
-                
                 Serial.println("[SETTINGS] Portal and WiFi fully stopped");
             } else {
+                // Portal not running - start based on selection
                 Serial.println("[SETTINGS] Starting Portal...");
                 
                 // Free ZIP buffers to reclaim ~43KB for portal
                 Serial.println("[SETTINGS] Freeing ZIP buffers for portal...");
                 ZipReader_freeBuffers();
                 
-                wifiManager.startAP();
+                if (state.portalModeSelection == PORTAL_MODE_HOTSPOT) {
+                    // Start in hotspot mode
+                    Serial.println("[SETTINGS] Using Hotspot mode");
+                    wifiManager.startAP();
+                } else {
+                    // Start in home WiFi mode (STA+AP or just STA with portal)
+                    Serial.println("[SETTINGS] Using Home WiFi mode");
+                    if (wifiManager.hasCredentials()) {
+                        // Connect to saved WiFi first
+                        wifiManager.connectSaved();
+                        // Wait for connection (with timeout)
+                        int timeout = 50; // 5 seconds
+                        while (!wifiManager.isConnected() && timeout > 0) {
+                            delay(100);
+                            timeout--;
+                        }
+                        if (wifiManager.isConnected()) {
+                            Serial.printf("[SETTINGS] Connected to %s\n", wifiManager.getSSID().c_str());
+                        } else {
+                            Serial.println("[SETTINGS] Failed to connect, falling back to hotspot");
+                            wifiManager.startAP();
+                        }
+                    } else {
+                        // No credentials, fall back to hotspot
+                        Serial.println("[SETTINGS] No saved WiFi, using hotspot");
+                        wifiManager.startAP();
+                    }
+                }
+                
                 #if FEATURE_WEBSERVER
                 extern SumiWebServer webServer;
                 webServer.begin();
-                extern bool portal_active;
                 portal_active = true;
                 #endif
+                state.portalJustStarted = true;
             }
             state.needsFullRefresh = true;
             break;
@@ -293,17 +313,8 @@ bool settingsShouldExit() {
 // =============================================================================
 String settingsGetMainLabel(int index) {
     switch (index) {
-        case MAIN_CONNECT_WIFI:
-            if (wifiManager.isConnected()) {
-                return "WiFi: " + wifiManager.getSSID();
-            } else if (wifiManager.hasCredentials()) {
-                return "Connect to WiFi";
-            } else {
-                return "WiFi (no saved network)";
-            }
-            
         case MAIN_OPEN_PORTAL:
-            if (wifiManager.isAPMode()) {
+            if (portal_active) {
                 return "Portal Active";
             }
             return "Open Portal";
@@ -408,7 +419,6 @@ void settingsOnDeployed() {
     #if FEATURE_WEBSERVER
     extern SumiWebServer webServer;
     webServer.stop();
-    extern bool portal_active;
     portal_active = false;
     #endif
     

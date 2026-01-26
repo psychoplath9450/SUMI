@@ -1,7 +1,7 @@
 /**
  * @file SettingsScreen.cpp
  * @brief Settings menu UI implementation
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #include "core/SettingsScreen.h"
@@ -183,69 +183,124 @@ void drawPortalScreen() {
     int w = display.width();
     int h = display.height();
     int centerX = w / 2;
+    SettingsState& state = settingsGetState();
     
     display.fillScreen(GxEPD_WHITE);
-    drawSettingsHeader("Portal");
+    drawSettingsHeader("Open Portal");
     
-    int y = 110;
+    int y = 100;
     display.setFont(&FreeSansBold12pt7b);
     display.setTextColor(GxEPD_BLACK);
     
-    if (wifiManager.isAPMode()) {
-        // Portal is active
+    if (portal_active) {
+        // Portal is active - show connection info
         display.setCursor(centerX - 80, y);
         display.print("Portal Active!");
-        y += 45;
+        y += 50;
         
-        display.setFont(&FreeSansBold12pt7b);
-        display.setCursor(settingsLayout.margin, y);
-        display.print("1. Connect to WiFi:");
-        y += 35;
-        display.setFont(&FreeSansBold12pt7b);
-        display.setCursor(settingsLayout.margin + 20, y);
-        display.print(wifiManager.getAPName());  // Use actual AP name
-        y += 40;
-        
-        display.setFont(&FreeSansBold12pt7b);
-        display.setCursor(settingsLayout.margin, y);
-        display.print("2. Open browser to:");
-        y += 35;
-        display.setFont(&FreeSansBold12pt7b);
-        display.setCursor(settingsLayout.margin + 20, y);
-        display.print("http://");
-        display.print(settingsGetPortalIP());
-        
-        y += 60;
+        // Show connection mode
         display.setFont(&FreeSans9pt7b);
-        display.setCursor(centerX - 100, y);
-        display.print("Press OK to stop portal");
+        if (wifiManager.isConnected()) {
+            // Home WiFi mode
+            display.setCursor(settingsLayout.margin, y);
+            display.print("Connected via Home WiFi:");
+            y += 30;
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(settingsLayout.margin + 20, y);
+            display.print(wifiManager.getSSID());
+            y += 40;
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(settingsLayout.margin, y);
+            display.print("Open browser to:");
+            y += 30;
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(settingsLayout.margin + 20, y);
+            display.print("http://");
+            display.print(wifiManager.getIP());
+            y += 25;
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(settingsLayout.margin + 20, y);
+            display.print("or http://sumi.local");
+        } else {
+            // Hotspot mode
+            display.setCursor(settingsLayout.margin, y);
+            display.print("1. Connect your phone to WiFi:");
+            y += 30;
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(settingsLayout.margin + 20, y);
+            display.print(wifiManager.getAPName());
+            y += 45;
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(settingsLayout.margin, y);
+            display.print("2. Open browser to:");
+            y += 30;
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(settingsLayout.margin + 20, y);
+            display.print("http://sumi.local");
+            y += 25;
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(settingsLayout.margin + 20, y);
+            display.print("or http://");
+            display.print(settingsGetPortalIP());
+        }
         
-        // Draw large stop button
-        y += 30;
+        // Stop button
+        y += 70;
         display.fillRoundRect(settingsLayout.margin, y, w - settingsLayout.margin*2, 55, 10, GxEPD_BLACK);
         display.setTextColor(GxEPD_WHITE);
         display.setFont(&FreeSansBold12pt7b);
         display.setCursor(centerX - 60, y + 36);
         display.print("Stop Portal");
     } else {
-        // Portal not active
-        display.setCursor(centerX - 100, y);
-        display.print("Portal Inactive");
+        // Portal not active - show mode selection
+        display.setCursor(centerX - 120, y);
+        display.print("Choose connection:");
         y += 50;
         
-        display.setFont(&FreeSans9pt7b);
-        display.setCursor(settingsLayout.margin, y);
-        display.print("Start portal to customize your");
-        y += 25;
-        display.setCursor(settingsLayout.margin, y);
-        display.print("device from a web browser.");
-        
-        y += 60;
-        display.fillRoundRect(settingsLayout.margin, y, w - settingsLayout.margin*2, 60, 10, GxEPD_BLACK);
-        display.setTextColor(GxEPD_WHITE);
+        // Option 1: Hotspot
+        bool hotspotSelected = (state.portalModeSelection == PORTAL_MODE_HOTSPOT);
+        if (hotspotSelected) {
+            display.fillRoundRect(settingsLayout.margin, y, w - settingsLayout.margin*2, 80, 10, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+        } else {
+            display.drawRoundRect(settingsLayout.margin, y, w - settingsLayout.margin*2, 80, 10, GxEPD_BLACK);
+            display.setTextColor(GxEPD_BLACK);
+        }
         display.setFont(&FreeSansBold12pt7b);
-        display.setCursor(centerX - 60, y + 38);
-        display.print("Start Portal");
+        display.setCursor(settingsLayout.margin + 20, y + 35);
+        display.print("Create Hotspot");
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(settingsLayout.margin + 20, y + 60);
+        display.print("Phone connects to SUMI");
+        
+        y += 95;
+        
+        // Option 2: Home WiFi
+        bool homeSelected = (state.portalModeSelection == PORTAL_MODE_HOME_WIFI);
+        if (homeSelected) {
+            display.fillRoundRect(settingsLayout.margin, y, w - settingsLayout.margin*2, 80, 10, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+        } else {
+            display.drawRoundRect(settingsLayout.margin, y, w - settingsLayout.margin*2, 80, 10, GxEPD_BLACK);
+            display.setTextColor(GxEPD_BLACK);
+        }
+        display.setFont(&FreeSansBold12pt7b);
+        display.setCursor(settingsLayout.margin + 20, y + 35);
+        display.print("Use Home WiFi");
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(settingsLayout.margin + 20, y + 60);
+        if (wifiManager.hasCredentials()) {
+            String ssidInfo = "Connect via " + wifiManager.getSavedSSID();
+            display.print(ssidInfo.substring(0, 30));
+        } else {
+            display.print("No saved network");
+        }
+        
+        y += 110;
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(centerX - 80, y);
+        display.print("Press OK to start");
     }
     
     drawSettingsFooter();

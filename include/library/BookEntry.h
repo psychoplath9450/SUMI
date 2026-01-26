@@ -1,7 +1,7 @@
 /**
  * @file BookEntry.h
  * @brief Book data structures for the Library plugin
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #ifndef SUMI_LIBRARY_BOOK_ENTRY_H
@@ -58,13 +58,19 @@ struct BookEntry {
     bool isRegularDir;      // True for non-book directories
     BookType bookType;      // Type of book
     bool hasCover;          // True if cover image is available
+    bool hasCache;          // True if pre-processed cache exists
     int lastChapter;        // Last read chapter
     int lastPage;           // Last read page in chapter
+    int totalChapters;      // Total chapters in book (from meta.json)
     float progress;         // Reading progress 0.0 - 1.0
     
     BookEntry() {
         memset(this, 0, sizeof(BookEntry));
     }
+    
+    void clear();
+    void serialize(File& f) const;
+    bool deserialize(File& f);
     
     bool isBook() const {
         return bookType == BookType::TXT || 

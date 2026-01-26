@@ -4,7 +4,7 @@
 /**
  * @file RefreshManager.h
  * @brief E-ink display refresh rate management
- * @version 2.1.16
+ * @version 1.3.0
  * 
  * Enforces minimum refresh intervals to prevent:
  * - Ghosting from too-frequent partial refreshes

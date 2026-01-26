@@ -1,7 +1,7 @@
 /**
  * @file test_main.cpp
  * @brief Unit tests for Sumi Firmware
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Run tests with: pio test -e esp32-c3-devkitm-1
  *

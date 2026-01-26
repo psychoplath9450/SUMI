@@ -1,7 +1,7 @@
 /**
  * @file ButtonCalibration.cpp
  * @brief Button calibration system implementation
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #include "core/ButtonCalibration.h"

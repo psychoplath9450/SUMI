@@ -1,5 +1,9 @@
 #include "core/SettingsManager.h"
+#include "core/ReaderSettings.h"
 #include <SD.h>
+
+// External reader settings manager (used by Library)
+extern ReaderSettingsManager readerSettings;
 
 SettingsManager settingsManager;
 
@@ -85,19 +89,19 @@ void SettingsManager::loadDefaults() {
     display.fontSize = 12;
     display.sleepRefresh = false;
     display.wakeButton = 0;  // Any button
-    display.bootToLastBook = false;  // NEW: Default to showing home screen
+    display.bootToLastBook = false;  // Default to showing home screen
     
-    // Widget visibility defaults - all enabled by default
+    // Widget visibility defaults - book and weather enabled, orient disabled
     display.showBookWidget = true;
     display.showWeatherWidget = true;
-    display.showOrientWidget = true;
+    display.showOrientWidget = false;
     
     // Reader defaults
     reader.fontSize = 18;
     reader.lineHeight = 150;
     reader.margins = 20;
     reader.paraSpacing = 10;
-    reader.sceneBreakSpacing = 30;  // NEW: Extra spacing for scene breaks/hr tags
+    reader.sceneBreakSpacing = 30;  // Extra spacing for scene breaks
     reader.textAlign = 1;
     reader.hyphenation = true;
     reader.showProgress = true;
@@ -105,6 +109,7 @@ void SettingsManager::loadDefaults() {
     reader.showPages = true;
     reader.pageTurn = 0;
     reader.tapZones = 0;
+    reader.requirePreprocessed = true;  // Only open pre-processed books by default
     
     // Flashcard defaults
     flashcards.newPerDay = 20;
@@ -114,6 +119,10 @@ void SettingsManager::loadDefaults() {
     flashcards.showTimer = false;
     flashcards.autoFlip = false;
     flashcards.shuffle = true;
+    flashcards.fontSize = 1;          // Medium
+    flashcards.centerText = true;     // Center by default
+    flashcards.showProgressBar = true;
+    flashcards.showStats = true;
     
     // Weather defaults
     weather.latitude = 0;
@@ -246,6 +255,7 @@ void SettingsManager::save() {
     _prefs.putBool("r_pgs", reader.showPages);
     _prefs.putUChar("r_pt", reader.pageTurn);
     _prefs.putUChar("r_tap", reader.tapZones);
+    _prefs.putBool("r_reqpp", reader.requirePreprocessed);
     
     // Flashcards
     _prefs.putUChar("fc_new", flashcards.newPerDay);
@@ -255,6 +265,10 @@ void SettingsManager::save() {
     _prefs.putBool("fc_tim", flashcards.showTimer);
     _prefs.putBool("fc_af", flashcards.autoFlip);
     _prefs.putBool("fc_sh", flashcards.shuffle);
+    _prefs.putUChar("fc_fsize", flashcards.fontSize);
+    _prefs.putBool("fc_cen", flashcards.centerText);
+    _prefs.putBool("fc_prog", flashcards.showProgressBar);
+    _prefs.putBool("fc_stat", flashcards.showStats);
     
     // Weather
     _prefs.putFloat("w_lat", weather.latitude);
@@ -407,7 +421,7 @@ void SettingsManager::load() {
     // Widget visibility (default all on)
     display.showBookWidget = _prefs.getBool("d_wbook", true);
     display.showWeatherWidget = _prefs.getBool("d_wwth", true);
-    display.showOrientWidget = _prefs.getBool("d_wori", true);
+    display.showOrientWidget = _prefs.getBool("d_wori", false);
     
     // Reader
     reader.fontSize = _prefs.getUChar("r_fs", 18);
@@ -421,6 +435,7 @@ void SettingsManager::load() {
     reader.showPages = _prefs.getBool("r_pgs", true);
     reader.pageTurn = _prefs.getUChar("r_pt", 0);
     reader.tapZones = _prefs.getUChar("r_tap", 0);
+    reader.requirePreprocessed = _prefs.getBool("r_reqpp", true);
     
     // Flashcards
     flashcards.newPerDay = _prefs.getUChar("fc_new", 20);
@@ -430,6 +445,10 @@ void SettingsManager::load() {
     flashcards.showTimer = _prefs.getBool("fc_tim", false);
     flashcards.autoFlip = _prefs.getBool("fc_af", false);
     flashcards.shuffle = _prefs.getBool("fc_sh", true);
+    flashcards.fontSize = _prefs.getUChar("fc_fsize", 1);
+    flashcards.centerText = _prefs.getBool("fc_cen", true);
+    flashcards.showProgressBar = _prefs.getBool("fc_prog", true);
+    flashcards.showStats = _prefs.getBool("fc_stat", true);
     
     // Weather
     weather.latitude = _prefs.getFloat("w_lat", 0);
@@ -759,6 +778,7 @@ void SettingsManager::toJSON(JsonObject doc) {
     rd["showPages"] = reader.showPages;
     rd["pageTurn"] = reader.pageTurn;
     rd["tapZones"] = reader.tapZones;
+    rd["requirePreprocessed"] = reader.requirePreprocessed;
     
     // Flashcards
     JsonObject fc = doc["flashcards"].to<JsonObject>();
@@ -816,6 +836,58 @@ void SettingsManager::toJSON(JsonObject doc) {
             net["rssi"] = wifi.networks[i].lastRSSI;
         }
     }
+}
+
+// =============================================================================
+// Sync Portal Reader Settings to Library's Internal Format
+// =============================================================================
+void SettingsManager::syncReaderSettings() {
+    Serial.println("[SETTINGS] Syncing portal reader settings to Library...");
+    
+    // Load current library settings
+    readerSettings.load();
+    LibReaderSettings& libSettings = readerSettings.get();
+    
+    // Map portal fontSize (12-32 pixels) to Library FontSize enum
+    if (reader.fontSize <= 16) {
+        libSettings.fontSize = FontSize::SMALL;
+    } else if (reader.fontSize <= 20) {
+        libSettings.fontSize = FontSize::MEDIUM;
+    } else if (reader.fontSize <= 26) {
+        libSettings.fontSize = FontSize::LARGE;
+    } else {
+        libSettings.fontSize = FontSize::EXTRA_LARGE;
+    }
+    
+    // Map portal lineHeight (100-200%) to Library LineSpacing enum
+    if (reader.lineHeight <= 120) {
+        libSettings.lineSpacing = LineSpacing::TIGHT;
+    } else if (reader.lineHeight <= 160) {
+        libSettings.lineSpacing = LineSpacing::NORMAL;
+    } else {
+        libSettings.lineSpacing = LineSpacing::WIDE;
+    }
+    
+    // Map portal textAlign (0=left, 1=justify) to Library TextAlign enum
+    // Note: Library uses opposite mapping (0=justified, 1=left)
+    libSettings.textAlign = (reader.textAlign == 1) ? TextAlign::JUSTIFIED : TextAlign::LEFT;
+    
+    // Map portal margins (5-40) to library screenMargin (0-20)
+    // Portal margins are total, library adds to viewable margins
+    int adjustedMargin = (reader.margins > 10) ? (reader.margins - 10) : 0;
+    if (adjustedMargin > 20) adjustedMargin = 20;
+    libSettings.screenMargin = (uint8_t)adjustedMargin;
+    
+    // Sync display options
+    libSettings.showPageNumbers = reader.showPages;
+    libSettings.showChapterTitle = reader.showChapter;
+    
+    // Save updated library settings
+    readerSettings.save();
+    
+    Serial.printf("[SETTINGS] Synced: fontSize=%d, lineSpacing=%d, textAlign=%d, margin=%d\n",
+                  (int)libSettings.fontSize, (int)libSettings.lineSpacing, 
+                  (int)libSettings.textAlign, libSettings.screenMargin);
 }
 
 // =============================================================================
@@ -896,6 +968,10 @@ bool SettingsManager::fromJSON(JsonObjectConst doc) {
         if (r["showPages"].is<bool>()) reader.showPages = r["showPages"];
         if (r["pageTurn"].is<int>()) reader.pageTurn = clampValue((int)r["pageTurn"], 0, 1);
         if (r["tapZones"].is<int>()) reader.tapZones = clampValue((int)r["tapZones"], 0, 2);
+        if (r["requirePreprocessed"].is<bool>()) reader.requirePreprocessed = r["requirePreprocessed"];
+        
+        // Sync portal reader settings to Library's internal settings file
+        syncReaderSettings();
     }
     
     if (doc["flashcards"].is<JsonObjectConst>()) {

@@ -1,7 +1,7 @@
 /**
  * @file PowerManager.cpp
  * @brief Power management implementation
- * @version 2.1.29
+ * @version 1.3.0
  * 
  * Fixed: Added BMP loading support for sleep screen images
  */

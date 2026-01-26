@@ -16,6 +16,8 @@
 #include "core/WebServer.h"
 #include "core/WiFiManager.h"
 #include <pgmspace.h>
+#include <memory>
+#include <algorithm>
 
 // Embedded portal HTML - no SD card needed
 #include "core/portal_html.h"
@@ -154,6 +156,71 @@ void SumiWebServer::setupAPIRoutes() {
             handleFileUpload(r, fn, idx, d, len, fin);
         });
     
+    // Test endpoint
+    _server.on("/api/files/test", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        Serial.println("[WEB] Test endpoint hit");
+        sendSuccess(r, "test_ok");
+    });
+    
+    // File download API - serve files from SD card
+    // Uses a global file handle to avoid memory leaks
+    static File downloadFile;
+    static size_t downloadSize = 0;
+    
+    _server.on("/api/download", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        // Close any previous file first
+        if (downloadFile) {
+            downloadFile.close();
+        }
+        
+        if (!r->hasParam("path")) {
+            sendError(r, "Path required");
+            return;
+        }
+        
+        String path = r->getParam("path")->value();
+        
+        if (path.indexOf("..") >= 0) {
+            r->send(403, "text/plain", "Forbidden");
+            return;
+        }
+        
+        if (!SD.exists(path)) {
+            r->send(404, "text/plain", "Not found");
+            return;
+        }
+        
+        downloadFile = SD.open(path, FILE_READ);
+        if (!downloadFile || downloadFile.isDirectory()) {
+            r->send(404, "text/plain", "Cannot open");
+            if (downloadFile) downloadFile.close();
+            return;
+        }
+        
+        downloadSize = downloadFile.size();
+        
+        String contentType = "application/octet-stream";
+        if (path.endsWith(".epub")) contentType = "application/epub+zip";
+        else if (path.endsWith(".txt")) contentType = "text/plain";
+        else if (path.endsWith(".json")) contentType = "application/json";
+        
+        AsyncWebServerResponse *response = r->beginResponse(
+            contentType,
+            downloadSize,
+            [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+                if (!downloadFile || index >= downloadSize) {
+                    if (downloadFile) {
+                        downloadFile.close();
+                    }
+                    return 0;
+                }
+                return downloadFile.read(buffer, maxLen);
+            }
+        );
+        
+        r->send(response);
+    });
+    
     // System
     _server.on("/api/reboot", HTTP_POST, [this](AsyncWebServerRequest* r) { handleReboot(r); });
     
@@ -234,6 +301,149 @@ void SumiWebServer::setupAPIRoutes() {
                       ",\"minFreeHeap\":" + String(ESP.getMinFreeHeap()) + "}";
         r->send(200, "application/json", json);
     });
+    
+    // =========================================================================
+    // Book Processing Status API
+    // =========================================================================
+    
+    // GET /api/books/status - List books and their processing status
+    _server.on("/api/books/status", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        Serial.println("[WEB] Book status requested");
+        
+        JsonDocument doc;
+        JsonArray processed = doc["processed"].to<JsonArray>();
+        JsonArray unprocessed = doc["unprocessed"].to<JsonArray>();
+        
+        File booksDir = SD.open("/books");
+        if (booksDir && booksDir.isDirectory()) {
+            File entry = booksDir.openNextFile();
+            while (entry) {
+                if (!entry.isDirectory()) {
+                    String name = entry.name();
+                    if (name.endsWith(".epub") || name.endsWith(".EPUB")) {
+                        // Check if processed cache exists
+                        // Hash the filename to find cache dir
+                        uint32_t hash = 0;
+                        for (int i = 0; i < name.length(); i++) {
+                            hash = ((hash << 5) - hash) + (uint8_t)name.charAt(i);
+                        }
+                        
+                        char metaPath[64];
+                        snprintf(metaPath, sizeof(metaPath), "/.sumi/books/%08x/meta.json", hash);
+                        
+                        JsonObject book;
+                        if (SD.exists(metaPath)) {
+                            book = processed.add<JsonObject>();
+                            book["name"] = name;
+                            book["size"] = entry.size();
+                            book["hash"] = String(hash, HEX);
+                            
+                            // Read meta.json for detailed info
+                            File metaFile = SD.open(metaPath);
+                            if (metaFile) {
+                                JsonDocument metaDoc;
+                                if (!deserializeJson(metaDoc, metaFile)) {
+                                    book["title"] = metaDoc["title"] | name.c_str();
+                                    book["author"] = metaDoc["author"] | "Unknown";
+                                    book["totalChapters"] = metaDoc["totalChapters"] | 0;
+                                    book["totalWords"] = metaDoc["totalWords"] | 0;
+                                    book["estimatedPages"] = metaDoc["estimatedPages"] | 0;
+                                    book["estimatedReadingMins"] = metaDoc["estimatedReadingMins"] | 0;
+                                    book["processedAt"] = metaDoc["processedAt"] | 0;
+                                }
+                                metaFile.close();
+                            }
+                            
+                            // Check for reading progress
+                            char progressPath[64];
+                            snprintf(progressPath, sizeof(progressPath), "/.sumi/books/%08x/progress.json", hash);
+                            if (SD.exists(progressPath)) {
+                                File progressFile = SD.open(progressPath);
+                                if (progressFile) {
+                                    JsonDocument progressDoc;
+                                    if (!deserializeJson(progressDoc, progressFile)) {
+                                        book["currentChapter"] = progressDoc["chapter"] | 0;
+                                        book["currentPage"] = progressDoc["page"] | 0;
+                                        book["lastRead"] = progressDoc["timestamp"] | 0;
+                                    }
+                                    progressFile.close();
+                                }
+                            }
+                        } else {
+                            book = unprocessed.add<JsonObject>();
+                            book["name"] = name;
+                            book["size"] = entry.size();
+                        }
+                    }
+                }
+                entry.close();
+                entry = booksDir.openNextFile();
+            }
+            booksDir.close();
+        }
+        
+        String response;
+        serializeJson(doc, response);
+        
+        AsyncWebServerResponse* resp = r->beginResponse(200, "application/json", response);
+        addCORSHeaders(resp);
+        r->send(resp);
+    });
+    
+    // POST /api/files/mkdir - Create directory
+    _server.on("/api/files/mkdir", HTTP_POST, 
+        [this](AsyncWebServerRequest* r){ 
+            // This runs after body handler
+            Serial.println("[WEB] mkdir response handler");
+        }, 
+        NULL,
+        [this](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t, size_t) {
+            Serial.printf("[WEB] mkdir body: %u bytes\n", len);
+            
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, data, len);
+            if (err) {
+                Serial.printf("[WEB] mkdir JSON error: %s\n", err.c_str());
+                sendError(r, "Invalid JSON");
+                return;
+            }
+            
+            const char* path = doc["path"];
+            if (!path || strlen(path) == 0) {
+                Serial.println("[WEB] mkdir: no path");
+                sendError(r, "Path required");
+                return;
+            }
+            
+            Serial.printf("[WEB] mkdir request: %s\n", path);
+            
+            // Security check
+            if (strstr(path, "..") != nullptr) {
+                sendError(r, "Invalid path");
+                return;
+            }
+            
+            // Create parent directories first
+            String pathStr = path;
+            int lastSlash = pathStr.lastIndexOf('/');
+            if (lastSlash > 0) {
+                String parent = pathStr.substring(0, lastSlash);
+                if (!SD.exists(parent)) {
+                    SD.mkdir(parent);
+                }
+            }
+            
+            // Create directory
+            if (SD.mkdir(path)) {
+                Serial.printf("[WEB] Created: %s\n", path);
+                sendSuccess(r, "created");
+            } else if (SD.exists(path)) {
+                sendSuccess(r, "exists");
+            } else {
+                Serial.printf("[WEB] mkdir failed: %s\n", path);
+                sendError(r, "Failed");
+            }
+        });
     
     // =========================================================================
     // Backup/Restore Settings API
@@ -516,6 +726,10 @@ void SumiWebServer::setupAPIRoutes() {
         doc["showTimer"] = settingsManager.flashcards.showTimer;
         doc["autoFlip"] = settingsManager.flashcards.autoFlip;
         doc["shuffle"] = settingsManager.flashcards.shuffle;
+        doc["fontSize"] = settingsManager.flashcards.fontSize;
+        doc["centerText"] = settingsManager.flashcards.centerText;
+        doc["showProgressBar"] = settingsManager.flashcards.showProgressBar;
+        doc["showStats"] = settingsManager.flashcards.showStats;
         
         String response;
         serializeJson(doc, response);
@@ -539,6 +753,10 @@ void SumiWebServer::setupAPIRoutes() {
             if (doc["showTimer"].is<bool>()) settingsManager.flashcards.showTimer = doc["showTimer"];
             if (doc["autoFlip"].is<bool>()) settingsManager.flashcards.autoFlip = doc["autoFlip"];
             if (doc["shuffle"].is<bool>()) settingsManager.flashcards.shuffle = doc["shuffle"];
+            if (doc["fontSize"].is<int>()) settingsManager.flashcards.fontSize = doc["fontSize"];
+            if (doc["centerText"].is<bool>()) settingsManager.flashcards.centerText = doc["centerText"];
+            if (doc["showProgressBar"].is<bool>()) settingsManager.flashcards.showProgressBar = doc["showProgressBar"];
+            if (doc["showStats"].is<bool>()) settingsManager.flashcards.showStats = doc["showStats"];
             
             settingsManager.save();
             Serial.println("[WEB] Flashcard settings saved");
@@ -1211,17 +1429,46 @@ void SumiWebServer::handleFileList(AsyncWebServerRequest* request) {
 void SumiWebServer::handleFileUpload(AsyncWebServerRequest* request, const String& filename,
                                       size_t index, uint8_t* data, size_t len, bool final) {
     static File uploadFile;
-    String path = "/";
-    
-    if (request->hasParam("path", true)) {
-        path = request->getParam("path", true)->value();
-    }
-    
-    String fullPath = path + "/" + filename;
+    static String currentPath;
     
     if (index == 0) {
-        Serial.printf("[WEB] Upload start: %s\n", fullPath.c_str());
-        uploadFile = SD.open(fullPath, FILE_WRITE);
+        // Get path from form data
+        String path = "";
+        if (request->hasParam("path", true)) {
+            path = request->getParam("path", true)->value();
+        }
+        
+        // Ensure path doesn't have double slashes
+        if (path.length() == 0 || path == "/") {
+            path = "";  // Will save to root
+        }
+        
+        // Build full path - avoid double slashes
+        if (path.length() > 0 && !path.endsWith("/")) {
+            currentPath = path + "/" + filename;
+        } else if (path.length() > 0) {
+            currentPath = path + filename;
+        } else {
+            currentPath = "/" + filename;
+        }
+        
+        Serial.printf("[WEB] Upload: path='%s' file='%s' -> '%s'\n", 
+            path.c_str(), filename.c_str(), currentPath.c_str());
+        
+        // Create parent directories if needed
+        int lastSlash = currentPath.lastIndexOf('/');
+        if (lastSlash > 0) {
+            String dir = currentPath.substring(0, lastSlash);
+            if (!SD.exists(dir)) {
+                Serial.printf("[WEB] Creating dir: %s\n", dir.c_str());
+                SD.mkdir(dir);
+            }
+        }
+        
+        uploadFile = SD.open(currentPath, FILE_WRITE);
+        if (!uploadFile) {
+            Serial.printf("[WEB] Failed to open for write: %s\n", currentPath.c_str());
+        }
     }
     
     if (uploadFile) {
@@ -1232,7 +1479,7 @@ void SumiWebServer::handleFileUpload(AsyncWebServerRequest* request, const Strin
         if (uploadFile) {
             uploadFile.close();
         }
-        Serial.printf("[WEB] Upload complete: %d bytes\n", index + len);
+        Serial.printf("[WEB] Upload done: %d bytes -> %s\n", index + len, currentPath.c_str());
     }
 }
 

@@ -1,6 +1,6 @@
 # Home Screen Widgets
 
-*Last updated: January 22, 2026*
+*Last updated: January 23, 2026*
 
 Widgets are small information displays on the home screen that show data at a glance without opening an app.
 

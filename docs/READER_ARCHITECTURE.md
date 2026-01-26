@@ -1,14 +1,112 @@
 # SUMI E-Reader Architecture
 
-*Last updated: January 22, 2026*
+*Last updated: January 25, 2026*
 
 Technical documentation for SUMI's e-reader implementation.
 
 ## Overview
 
-SUMI's e-reader is designed for the ESP32-C3's memory constraints (384KB RAM) while supporting arbitrarily large EPUB files. The key insight is **streaming parsing** combined with **aggressive SD card caching**.
+SUMI's e-reader is designed for the ESP32-C3's memory constraints (384KB RAM) while supporting arbitrarily large EPUB files.
 
-## Rendering Pipeline
+### Pre-Processing Mode (Default)
+
+As of v1.4.2, SUMI uses **browser-based pre-processing** by default. EPUBs are processed in the portal (on your phone/computer) before they can be read. This approach was adopted because on-device ZIP decompression and XML parsing was consuming too much memory and causing reliability issues on the ESP32-C3.
+
+**How it works:**
+1. Upload EPUB to portal
+2. Portal extracts text chapters using JSZip (in browser)
+3. Rich text files saved to SD: `/.sumi/books/{hash}/ch_000.txt`, etc.
+4. Device reads text and applies formatting - no ZIP or XML parsing needed
+
+**Rich Text Markers (v1.4.3+):**
+The portal preprocessor outputs formatting markers that the device interprets:
+- `**bold text**` - Bold formatting (`<b>`, `<strong>`)
+- `*italic text*` - Italic formatting (`<i>`, `<em>`)
+- `# Header text` - Headers (`<h1>` - `<h6>`) - rendered centered and bold
+- `• item` - List bullets (`<li>`)
+- `[Image]` or `[Image: alt text]` - Image placeholders
+- `[Table]` - Table placeholders
+- Soft hyphens (U+00AD) are preserved for better line breaking
+
+**Benefits:**
+- Much faster chapter loading (~200ms vs 2-5 seconds)
+- More reliable - no memory allocation failures
+- Simpler device code - just read text files
+- Better text quality - browser has full HTML parser
+- Rich text formatting preserved (bold, italic, headers)
+
+### Legacy Mode (Optional)
+
+On-device EPUB parsing can be re-enabled in Reader Settings by turning off "Require Pre-processing". This also outputs rich text markers and uses the same `addRichText()` rendering path, but is less reliable on complex EPUBs.
+
+## Pre-Processed Cache Structure
+
+```
+/.sumi/books/{hash}/
+├── meta.json          # Book metadata, chapter list
+├── cover_full.jpg     # Full-size cover (300px wide)
+├── cover_thumb.jpg    # Thumbnail cover (80px wide)
+├── ch_000.txt         # Chapter 0 rich text (with markers)
+├── ch_001.txt         # Chapter 1 rich text
+└── ...
+```
+
+The hash is computed from the EPUB filename using a simple string hash function (must match between portal and device).
+
+## Text Layout System (v1.4.3+)
+
+The `TextLayout` class handles pagination with proper typography:
+
+### Margin System
+```
+┌──────────────────────────────────┐
+│ ← Viewable Top (9px)             │  Panel edge compensation
+├──────────────────────────────────┤
+│ ← Screen Margin (user setting)   │  0-20px configurable
+├──────────────────────────────────┤
+│                                  │
+│    Content Area                  │  Where text renders
+│                                  │
+├──────────────────────────────────┤
+│ ← Screen Margin (user setting)   │
+├──────────────────────────────────┤
+│ ← Status Bar Area (22px)         │  Chapter / page display
+├──────────────────────────────────┤
+│ ← Viewable Bottom (3px)          │  Panel edge compensation
+└──────────────────────────────────┘
+```
+
+**Viewable Margins** (hardcoded, compensate for e-ink panel edges):
+- Top: 9px, Right: 3px, Bottom: 3px, Left: 3px
+
+**Screen Margin** (user configurable): 0px, 5px, 10px, 15px, or 20px
+
+### Line Height Compression
+Line spacing uses a multiplier on the font's natural height:
+- **Tight**: 0.95x (more text per page)
+- **Normal**: 1.0x (default)
+- **Wide**: 1.1x (easier reading)
+
+### Font Sizes
+- **Small**: 22px base height
+- **Medium**: 26px base height  
+- **Large**: 30px base height
+- **Extra Large**: 34px base height
+
+### Rich Text Rendering
+The `addRichText()` method parses markers and applies styling:
+```cpp
+// Parsing state machine:
+// - "**" toggles bold
+// - "*" toggles italic (when not preceded by *)
+// - "# " at line start = header (centered, bold)
+// - "• " at line start = bullet point
+// - "[Image]" = italic placeholder
+```
+
+Font variants are set via `setFont()`, `setBoldFont()`, `setItalicFont()`, `setBoldItalicFont()`.
+
+## Legacy Rendering Pipeline (when pre-processing disabled)
 
 ```
 User Opens Book
@@ -74,20 +172,28 @@ User Opens Book
 
 ## Memory Management
 
+Reader subsystems (TextLayout, PageCache, EpubParser) are allocated when the Library app opens and freed when it closes. They don't exist on the home screen or in other apps.
+
 ```
-HEAP ALLOCATION MAP (384KB total, ~200KB usable)
-├── Static allocations (~40KB)
-│   ├── WiFi stack: 24KB
-│   ├── Display buffer: 8KB (partial)
-│   └── Global objects: 8KB
-│
-├── Book reading (~50KB peak)
-│   ├── CachedPage: 14KB (heap allocated, freed after render)
-│   ├── Expat parser: 8KB (only during indexing)
-│   ├── TextLayout: 4KB buffers
-│   └── Page cache metadata: 2KB
-│
-└── Available for features: ~110KB
+HEAP USAGE BY CONTEXT:
+
+Home Screen (~5KB active)
+├── Core systems only
+├── Widgets read from cache files (no plugins needed)
+└── ~150KB+ free for other operations
+
+Library Open (~20KB active)
+├── LibraryApp: ~5KB
+├── TextLayout: ~4KB (allocated by LibraryApp)
+├── PageCache: ~2KB (allocated by LibraryApp)
+├── EpubParser: ~2KB (allocated by LibraryApp)
+├── CachedPage: ~5KB (temporary, freed after render)
+└── ~130KB free
+
+Other Plugin Open (~varies)
+├── Only that plugin allocated
+├── Reader subsystems NOT loaded
+└── Maximum RAM available for the plugin
 ```
 
 **Key Memory Optimizations:**
@@ -117,23 +223,23 @@ HEAP ALLOCATION MAP (384KB total, ~200KB usable)
 ### CachedPage Binary Format
 
 ```cpp
-struct CachedWord {           // 28 bytes each
+struct CachedWord {           // 24 bytes each
     uint16_t xPos;            // X position (0-800)
     uint8_t style;            // 0=normal, 1=bold, 2=italic
     uint8_t length;           // Text length
-    char text[24];            // Word text (truncated if longer)
+    char text[20];            // Word text (truncated if longer)
 };
 
-struct CachedLine {           // 340 bytes each (12 words max)
+struct CachedLine {           // ~244 bytes each (10 words max)
     uint16_t yPos;            // Y baseline position
-    uint8_t wordCount;        // Words on this line (0-12)
+    uint8_t wordCount;        // Words on this line (0-10)
     uint8_t flags;            // isLastInPara, isImage
-    CachedWord words[12];     // Or ImageInfo if isImage
+    CachedWord words[10];     // Or ImageInfo if isImage
 };
 
-struct CachedPage {           // ~8.2KB each (24 lines max)
+struct CachedPage {           // ~4.9KB each (20 lines max)
     uint8_t lineCount;
-    CachedLine lines[24];
+    CachedLine lines[20];
 };
 ```
 
@@ -178,10 +284,11 @@ Page Turn
 ## Features
 
 ### Font Settings
-- **Font Size**: Small (9pt), Medium (12pt), Large (12pt with wider spacing)
-- **Line Spacing**: Compact, Normal, Relaxed
-- **Margins**: Narrow (5px), Normal (10px), Wide (20px)
+- **Font Size**: Small (22px), Medium (26px), Large (30px), Extra Large (34px)
+- **Line Spacing**: Tight (0.95x), Normal (1.0x), Wide (1.1x)
+- **Margins**: 0px, 5px, 10px, 15px, 20px (plus viewable edge compensation)
 - **Justification**: Left-aligned or Justified text
+- **Extra Paragraph Spacing**: Optional half-line-height spacing between paragraphs
 - All settings configurable via reader menu or web portal
 - Settings changes invalidate cache (pages re-flow)
 

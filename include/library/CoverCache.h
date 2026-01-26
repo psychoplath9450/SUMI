@@ -1,7 +1,7 @@
 /**
  * @file CoverCache.h
  * @brief Cover image caching for the Library plugin
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #ifndef SUMI_LIBRARY_COVER_CACHE_H

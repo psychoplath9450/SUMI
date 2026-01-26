@@ -25,7 +25,7 @@ struct DisplaySettings {
     uint8_t clockStyle;         // 0=digital, 1=analog, 2=minimal
     uint8_t homeLayout;         // 0=grid, 1=list
     bool invertColors;          // Dark mode
-    bool bootToLastBook;        // NEW: Skip home screen, open last book
+    bool bootToLastBook;        // Skip home screen, open last book
     
     // === Widget Visibility Settings ===
     bool showBookWidget;        // Show book cover widget
@@ -38,7 +38,7 @@ struct DisplaySettings {
     bool showBatteryLock;       // Show battery on lock screen
     bool showWeatherLock;       // Show weather on lock screen
     
-    // === NEW: Portal Customization Options ===
+    // Portal Customization Options
     uint8_t orientation;        // 0=horizontal, 1=vertical
     uint8_t buttonShape;        // 0=rounded, 1=circle, 2=square
     uint8_t fontStyle;          // 0=sans, 1=serif, 2=mono
@@ -68,18 +68,22 @@ struct DisplaySettings {
 };
 
 struct ReaderSettings {
-    uint8_t fontSize;           // 12-32
-    uint8_t lineHeight;         // 100-200 (stored as percentage, 150 = 1.5x)
-    uint8_t margins;            // 5-40 pixels
-    uint8_t paraSpacing;        // 0-30 pixels
-    uint8_t sceneBreakSpacing;  // NEW: Extra spacing for scene breaks (0-60 pixels)
-    uint8_t textAlign;          // 0=left, 1=justify
-    bool hyphenation;
-    bool showProgress;          // Progress bar at bottom
-    bool showChapter;           // Chapter title in header
-    bool showPages;             // Page X of Y
-    uint8_t pageTurn;           // 0=normal, 1=swapped
-    uint8_t tapZones;           // 0=left/right, 1=top/bottom, 2=off
+    // === PORTAL-EXPOSED SETTINGS (all connected and working) ===
+    uint8_t fontSize;           // 12-32 → syncs to LibReaderSettings.fontSize enum
+    uint8_t lineHeight;         // 100-200% → syncs to LibReaderSettings.lineSpacing enum
+    uint8_t margins;            // 5-40 pixels → syncs to LibReaderSettings.screenMargin
+    uint8_t textAlign;          // 0=left, 1=justify → syncs to LibReaderSettings.textAlign
+    bool requirePreprocessed;   // Only open books processed via portal (default true)
+    
+    // === LEGACY/UNUSED SETTINGS (kept for compatibility, not exposed in portal) ===
+    uint8_t paraSpacing;        // Not synced - LibReaderSettings has own extraParagraphSpacing bool
+    uint8_t sceneBreakSpacing;  // Never implemented
+    bool hyphenation;           // Never implemented in TextLayout
+    bool showProgress;          // Status bar always shows progress
+    bool showChapter;           // Synced but LibReaderSettings.showChapterTitle not read
+    bool showPages;             // Synced but LibReaderSettings.showPageNumbers not read
+    uint8_t pageTurn;           // Device has fixed button mapping
+    uint8_t tapZones;           // Device has buttons, not touch screen
 };
 
 struct FlashcardSettings {
@@ -90,6 +94,10 @@ struct FlashcardSettings {
     bool showTimer;             // Time spent on card
     bool autoFlip;              // Auto show answer
     bool shuffle;               // Shuffle new cards
+    uint8_t fontSize;           // 0=Small, 1=Medium, 2=Large, 3=Extra Large
+    bool centerText;            // Center question/answer in their areas
+    bool showProgressBar;       // Show progress bar at top
+    bool showStats;             // Show correct/incorrect count
 };
 
 struct WeatherSettings {
@@ -271,6 +279,7 @@ public:
     // JSON export/import (for backup/restore)
     void toJSON(JsonObject doc);
     bool fromJSON(JsonObjectConst doc);
+    void syncReaderSettings();  // Sync portal settings to Library's internal format
     
     // SD card backup
     bool backupToSD(const char* path = "/.config/settings.json");

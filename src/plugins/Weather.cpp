@@ -1,7 +1,7 @@
 /**
  * @file Weather.cpp
  * @brief Weather widget implementation - Improved UI
- * @version 2.1.28
+ * @version 1.3.0
  * 
  * Features:
  * - 7-day forecast with day navigation
@@ -16,7 +16,6 @@
 
 #if FEATURE_WEATHER
 
-WeatherApp weatherApp;
 
 WeatherApp::WeatherApp() { 
     reset(); 

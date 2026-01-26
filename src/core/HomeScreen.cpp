@@ -1,7 +1,7 @@
 /**
  * @file HomeScreen.cpp
  * @brief Home screen display and navigation implementation
- * @version 2.2.0
+ * @version 1.3.0
  * 
  * Community-inspired features:
  * - Continue Reading widget showing current book with cover
@@ -43,12 +43,12 @@ static bool _widgetCoverCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, u
     int clipRight = _widgetBoundsX + _widgetCoverMaxW;
     int clipBottom = _widgetBoundsY + _widgetCoverMaxH;
     
-    // Ordered dither matrix 4x4
-    static const uint8_t dither[4][4] = {
-        {  16, 144,  48, 176 },
-        { 208,  80, 240, 112 },
-        {  64, 192,  32, 160 },
-        { 255, 128, 224,  96 }
+    // Bayer 4x4 dithering matrix (values 0-255)
+    static const uint8_t bayer[4][4] = {
+        {  15, 135,  45, 165 },
+        { 195,  75, 225, 105 },
+        {  60, 180,  30, 150 },
+        { 240, 120, 210,  90 }
     };
     
     // Apply software scaling
@@ -56,16 +56,6 @@ static bool _widgetCoverCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, u
     
     for (uint16_t j = 0; j < h; j++) {
         for (uint16_t i = 0; i < w; i++) {
-            // Calculate output position with software scale
-            int px = _widgetCoverX + (int)((x + i) * scale);
-            int py = _widgetCoverY + (int)((y + j) * scale);
-            
-            // Skip if out of WIDGET bounds (clip to widget area)
-            if (px < clipLeft || py < clipTop || px >= clipRight || py >= clipBottom) continue;
-            
-            // Also skip if out of screen bounds
-            if (px < 0 || py < 0 || px >= display.width() || py >= display.height()) continue;
-            
             // Get RGB565 pixel and convert to grayscale
             uint16_t pixel = bitmap[j * w + i];
             uint8_t r = ((pixel >> 11) & 0x1F) << 3;
@@ -73,23 +63,57 @@ static bool _widgetCoverCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, u
             uint8_t b = (pixel & 0x1F) << 3;
             uint8_t gray = (r * 77 + g * 150 + b * 29) >> 8;
             
-            // Apply gamma correction for better midtones
-            gray = (gray * gray) >> 8;
+            // Calculate output rectangle for this source pixel
+            int px1 = _widgetCoverX + (int)((x + i) * scale);
+            int py1 = _widgetCoverY + (int)((y + j) * scale);
+            int px2 = _widgetCoverX + (int)((x + i + 1) * scale);
+            int py2 = _widgetCoverY + (int)((y + j + 1) * scale);
             
-            // Dither with improved thresholds
-            display.drawPixel(px, py, (gray > dither[py & 3][px & 3]) ? GxEPD_WHITE : GxEPD_BLACK);
+            // Ensure at least 1 pixel is drawn
+            if (px2 <= px1) px2 = px1 + 1;
+            if (py2 <= py1) py2 = py1 + 1;
+            
+            // Fill the entire scaled pixel area
+            for (int fy = py1; fy < py2 && fy < clipBottom; fy++) {
+                if (fy < clipTop) continue;
+                for (int fx = px1; fx < px2 && fx < clipRight; fx++) {
+                    if (fx < clipLeft) continue;
+                    if (fx < 0 || fy < 0 || fx >= display.width() || fy >= display.height()) continue;
+                    
+                    // Use position-based dithering
+                    uint8_t threshold = bayer[fy & 3][fx & 3];
+                    display.drawPixel(fx, fy, (gray > threshold) ? GxEPD_WHITE : GxEPD_BLACK);
+                }
+            }
         }
     }
     return true;
 }
 
 // Draw cover in widget area - scales to FIT exactly within widget bounds
+// Global flag to track cover decode state across paged drawing
+static bool _coverDecodedThisRefresh = false;
+static String _lastDecodedCoverPath = "";
+
+static void resetCoverDecodeFlag() {
+    _coverDecodedThisRefresh = false;
+}
+
 static bool drawWidgetCover(const char* coverPath, int x, int y, int maxW, int maxH) {
+    // Check if this is a different cover
+    if (_lastDecodedCoverPath != coverPath) {
+        _lastDecodedCoverPath = coverPath;
+    }
+    
     if (!coverPath || strlen(coverPath) < 5) return false;
-    if (!SD.exists(coverPath)) {
+    
+    // Check if file exists by trying to open it
+    File testFile = SD.open(coverPath);
+    if (!testFile) {
         Serial.printf("[HOME] Cover not found: %s\n", coverPath);
         return false;
     }
+    testFile.close();;
     
     // Store widget bounds for clipping in callback
     _widgetBoundsX = x;
@@ -102,8 +126,7 @@ static bool drawWidgetCover(const char* coverPath, int x, int y, int maxW, int m
     // Get image size
     uint16_t jpgW, jpgH;
     if (TJpgDec.getFsJpgSize(&jpgW, &jpgH, coverPath, SD) != JDR_OK) {
-        Serial.println("[HOME] Failed to get cover size");
-        return false;
+        return false;  // Cover doesn't exist or can't be read
     }
     
     // Calculate exact scale to FIT image in widget (maintain aspect ratio)
@@ -134,11 +157,18 @@ static bool drawWidgetCover(const char* coverPath, int x, int y, int maxW, int m
     _widgetCoverX = x + (maxW - finalW) / 2;
     _widgetCoverY = y + (maxH - finalH) / 2;
     
-    Serial.printf("[HOME] Cover: %dx%d -> %dx%d (jpg 1/%d * %.3f) at (%d,%d) [widget %dx%d]\n", 
-                  jpgW, jpgH, finalW, finalH, jpgScale, _coverScaleFactor, 
-                  _widgetCoverX, _widgetCoverY, maxW, maxH);
+    // Only log once per refresh cycle
+    if (!_coverDecodedThisRefresh) {
+        Serial.printf("[HOME] Cover: %dx%d -> %dx%d at (%d,%d)\n", 
+                      jpgW, jpgH, finalW, finalH, _widgetCoverX, _widgetCoverY);
+    }
     
     JRESULT result = TJpgDec.drawFsJpg(0, 0, coverPath, SD);
+    
+    if (result == JDR_OK) {
+        _coverDecodedThisRefresh = true;  // Mark for logging control
+    }
+    
     return (result == JDR_OK);
 }
 
@@ -202,24 +232,123 @@ static bool hasWeather = false;
 void loadLastBookWidget() {
     hasLastBook = false;
     
-    if (!SD.exists(LAST_BOOK_PATH)) {
-        return;
+    // Try loading saved last book first
+    if (SD.exists(LAST_BOOK_PATH)) {
+        File file = SD.open(LAST_BOOK_PATH, FILE_READ);
+        if (file) {
+            size_t read = file.read((uint8_t*)&lastBookWidget, sizeof(LastBookWidget));
+            file.close();
+            
+            if (read == sizeof(LastBookWidget) && lastBookWidget.magic == 0x4C415354) {
+                hasLastBook = true;
+                Serial.printf("[HOME] Last book loaded: %s\n", lastBookWidget.title);
+                
+                // Verify cover exists, or try to find portal-uploaded cover
+                if (lastBookWidget.coverPath[0] == '\0' || !SD.exists(lastBookWidget.coverPath)) {
+                    // Try to find portal cover using book path filename
+                    const char* bookPath = lastBookWidget.bookPath;
+                    const char* justFilename = strrchr(bookPath, '/');
+                    if (justFilename) justFilename++; else justFilename = bookPath;
+                    
+                    uint32_t hash = 0;
+                    for (const char* p = justFilename; *p; p++) {
+                        uint32_t charCode = (uint8_t)*p;
+                        hash = ((hash << 5) - hash) + charCode;
+                    }
+                    hash = hash & 0xFFFFFFFF;
+                    
+                    // Portal saves covers to /.sumi/books/{hash}/cover_full.jpg
+                    char coverPath[96];
+                    snprintf(coverPath, sizeof(coverPath), "/.sumi/books/%08x/cover_full.jpg", hash);
+                    File coverFile = SD.open(coverPath);
+                    if (coverFile) {
+                        coverFile.close();
+                        strncpy(lastBookWidget.coverPath, coverPath, sizeof(lastBookWidget.coverPath) - 1);
+                        Serial.printf("[HOME] Found portal cover: %s\n", coverPath);
+                    } else {
+                        lastBookWidget.coverPath[0] = '\0';
+                    }
+                }
+                return;
+            }
+        }
     }
     
-    File file = SD.open(LAST_BOOK_PATH, FILE_READ);
-    if (!file) {
-        return;
-    }
-    
-    size_t read = file.read((uint8_t*)&lastBookWidget, sizeof(LastBookWidget));
-    file.close();
-    
-    if (read == sizeof(LastBookWidget) && lastBookWidget.magic == 0x4C415354) {
-        hasLastBook = true;
-        Serial.printf("[HOME] Last book loaded: %s\n", lastBookWidget.title);
-        Serial.printf("[HOME] Cover path: %s\n", lastBookWidget.coverPath);
-        if (lastBookWidget.coverPath[0] != '\0') {
-            Serial.printf("[HOME] Cover exists: %s\n", SD.exists(lastBookWidget.coverPath) ? "YES" : "NO");
+    // No last book - try to find first book in library as fallback
+    if (!hasLastBook && settingsManager.display.showBookWidget) {
+        File booksDir = SD.open("/books");
+        if (booksDir && booksDir.isDirectory()) {
+            File entry = booksDir.openNextFile();
+            while (entry) {
+                if (!entry.isDirectory()) {
+                    String name = entry.name();
+                    if (name.endsWith(".epub") || name.endsWith(".EPUB")) {
+                        // Found a book - use it as placeholder
+                        memset(&lastBookWidget, 0, sizeof(lastBookWidget));
+                        lastBookWidget.magic = 0x4C415354;
+                        
+                        // Extract title from filename (remove .epub and path)
+                        int lastSlash = name.lastIndexOf('/');
+                        String filename = (lastSlash >= 0) ? name.substring(lastSlash + 1) : name;
+                        filename = filename.substring(0, filename.length() - 5); // Remove .epub
+                        
+                        // Try to make title nicer (remove " - Author" part)
+                        int dashPos = filename.lastIndexOf(" - ");
+                        if (dashPos > 0) {
+                            filename = filename.substring(0, dashPos);
+                        }
+                        
+                        strncpy(lastBookWidget.title, filename.c_str(), sizeof(lastBookWidget.title) - 1);
+                        snprintf(lastBookWidget.bookPath, sizeof(lastBookWidget.bookPath), 
+                                 "/books/%s", entry.name());
+                        
+                        // Check for cached cover (hash filename only, matching portal)
+                        const char* justFilename = entry.name();
+                        // entry.name() may include path prefix, strip it
+                        const char* slashPtr = strrchr(justFilename, '/');
+                        if (slashPtr) justFilename = slashPtr + 1;
+                        
+                        uint32_t hash = 0;
+                        for (const char* p = justFilename; *p; p++) {
+                            uint32_t charCode = (uint8_t)*p;
+                            hash = ((hash << 5) - hash) + charCode;
+                        }
+                        hash = hash & 0xFFFFFFFF;
+                        char coverPath[96];
+                        // Portal saves covers to /.sumi/books/{hash}/cover_full.jpg
+                        snprintf(coverPath, sizeof(coverPath), "/.sumi/books/%08x/cover_full.jpg", hash);
+                        Serial.printf("[HOME] Looking for cover: %s (hash=%08x from '%s')\n", coverPath, hash, justFilename);
+                        
+                        // Use file open instead of SD.exists() - more reliable
+                        File coverFile = SD.open(coverPath);
+                        if (coverFile) {
+                            coverFile.close();
+                            strncpy(lastBookWidget.coverPath, coverPath, sizeof(lastBookWidget.coverPath) - 1);
+                            Serial.printf("[HOME] Found cover: %s\n", coverPath);
+                        } else {
+                            // Also try without leading slash
+                            snprintf(coverPath, sizeof(coverPath), ".sumi/books/%08x/cover_full.jpg", hash);
+                            coverFile = SD.open(coverPath);
+                            if (coverFile) {
+                                coverFile.close();
+                                strncpy(lastBookWidget.coverPath, coverPath, sizeof(lastBookWidget.coverPath) - 1);
+                                Serial.printf("[HOME] Found cover (alt path): %s\n", coverPath);
+                            } else {
+                                Serial.printf("[HOME] Cover not found at: /.sumi/books/%08x/cover_full.jpg\n", hash);
+                            }
+                        }
+                        
+                        hasLastBook = true;
+                        Serial.printf("[HOME] Using first book: %s\n", lastBookWidget.title);
+                        entry.close();
+                        booksDir.close();
+                        return;
+                    }
+                }
+                entry.close();
+                entry = booksDir.openNextFile();
+            }
+            booksDir.close();
         }
     }
 }
@@ -243,9 +372,16 @@ void loadWeatherWidget() {
             file.close();
             
             if (read == sizeof(WeatherWidget) && weatherWidget.magic == 0x57545852) {
-                // Check if data is still fresh (less than 2 hours old)
-                uint32_t age = (millis() / 1000) - weatherWidget.timestamp;
-                if (age < 7200 || weatherWidget.timestamp == 0) {
+                // Check if data is still fresh
+                // Use timestamp=0 to mean "valid until refresh requested"
+                // Otherwise, timestamp is seconds since boot when cached
+                // After reboot, millis resets, so just accept cache if it has valid data
+                uint32_t uptimeSec = millis() / 1000;
+                uint32_t age = (uptimeSec > weatherWidget.timestamp) ? 
+                               (uptimeSec - weatherWidget.timestamp) : 0;
+                
+                // Accept cache if: timestamp is 0, age < 2 hours, or we just rebooted (uptime < 60s)
+                if (weatherWidget.timestamp == 0 || age < 7200 || uptimeSec < 60) {
                     hasWeather = true;
                     Serial.printf("[HOME] Weather loaded: %.1f° at %s\n", 
                                   weatherWidget.temperature, weatherWidget.location);
@@ -613,17 +749,20 @@ void calculateCellGeometry(CellGeometry& geo) {
             optimalCols = 4; optimalRows = 2;
         }
     } else {
-        // Portrait: prefer tall grid
+        // Portrait: always 2 columns, rows expand to fit
+        // This matches the portal preview layout
+        optimalCols = 2;
         if (itemsOnPage <= 2) {
-            optimalCols = 2; optimalRows = 1;
+            optimalRows = 1;
         } else if (itemsOnPage <= 4) {
-            optimalCols = 2; optimalRows = 2;
+            optimalRows = 2;
         } else if (itemsOnPage <= 6) {
-            optimalCols = 3; optimalRows = 2;
+            optimalRows = 3;
         } else if (itemsOnPage <= 8) {
-            optimalCols = 2; optimalRows = 4;
+            optimalRows = 4;
         } else {
-            optimalCols = 3; optimalRows = 3;
+            optimalCols = 3;  // Only go to 3 cols if more than 8
+            optimalRows = 3;
         }
     }
     
@@ -650,7 +789,8 @@ void calculateCellGeometry(CellGeometry& geo) {
     geo.cellHeight = (gridHeight - geo.cellGap * (geo.rows - 1)) / geo.rows;
     
     // Cap cell height to reasonable maximum for usability
-    int maxCellHeight = isHorizontal ? 200 : 150;
+    // Portrait can have taller cells since we're stacking vertically
+    int maxCellHeight = isHorizontal ? 200 : 180;
     if (geo.cellHeight > maxCellHeight) {
         geo.cellHeight = maxCellHeight;
     }
@@ -759,10 +899,16 @@ void drawWidgets(const CellGeometry& geo) {
     int widgetCount = getWidgetCount();
     if (widgetCount == 0) return;
     
-    Serial.printf("[HOME] drawWidgets: count=%d, selection=%d, hasBook=%d, hasWeather=%d, showBook=%d, showWeather=%d, showOrient=%d\n",
-                  widgetCount, widgetSelection, hasLastBook, hasWeather,
-                  settingsManager.display.showBookWidget, settingsManager.display.showWeatherWidget,
-                  settingsManager.display.showOrientWidget);
+    // Only log once per refresh, not every paged iteration
+    static bool _widgetLoggedThisRefresh = false;
+    if (!_coverDecodedThisRefresh && !_widgetLoggedThisRefresh) {
+        Serial.printf("[HOME] drawWidgets: count=%d, hasBook=%d, hasWeather=%d\n",
+                      widgetCount, hasLastBook, hasWeather);
+        _widgetLoggedThisRefresh = true;
+    }
+    if (_coverDecodedThisRefresh) {
+        _widgetLoggedThisRefresh = false;  // Reset for next refresh
+    }
     
     int w = display.width();
     int h = display.height();
@@ -1231,6 +1377,9 @@ void showHomeScreenPartial(bool partialRefresh) {
     } else {
         display.setFullWindow();
     }
+    
+    // Reset cover decode flag for new refresh cycle
+    resetCoverDecodeFlag();
     
     display.firstPage();
     do {

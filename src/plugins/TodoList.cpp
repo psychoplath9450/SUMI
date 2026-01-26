@@ -1,7 +1,7 @@
 /**
  * @file TodoList.cpp
  * @brief Simple to-do list plugin implementation
- * @version 2.1.26
+ * @version 1.3.0
  * 
  * Optimized with raw button handling
  */
@@ -11,7 +11,6 @@
 
 #if FEATURE_GAMES
 
-TodoApp todoApp;
 
 TodoApp::TodoApp() 
     : _cursor(0), _count(0), _screenW(800), _screenH(480), 

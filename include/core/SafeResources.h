@@ -1,7 +1,7 @@
 /**
  * @file SafeResources.h
  * @brief RAII wrappers for safe resource management
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Provides RAII (Resource Acquisition Is Initialization) wrappers
  * to ensure resources are properly cleaned up even when errors occur.

@@ -1,7 +1,7 @@
 /**
  * @file PluginHelpers.h
  * @brief Standardized helpers for all Sumi plugins
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Provides:
  * - Orientation-aware button mapping

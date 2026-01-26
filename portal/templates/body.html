@@ -14,13 +14,16 @@
     </div>
   </header>
   
+  <!-- Connection Mode Banner -->
+  <div id="connectionBanner" style="display: none;"></div>
+  
   <div class="main">
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
         <div class="nav-section-title">Setup</div>
-        <div class="nav-item active" data-page="home"><span class="nav-icon">🏠</span>Dashboard</div>
+        <div class="nav-item" data-page="summary"><span class="nav-icon">📋</span>My SUMI</div>
         <div class="nav-item" data-page="builder"><span class="nav-icon">🎨</span>Customize</div>
-        <div class="nav-item" data-page="wifi"><span class="nav-icon">📶</span>WiFi</div>
+        <div class="nav-item active" data-page="wifi"><span class="nav-icon">📶</span>WiFi</div>
       </div>
       <div class="nav-section">
         <div class="nav-section-title">Content</div>
@@ -37,64 +40,159 @@
     </nav>
     
     <main class="content">
-      <!-- ==================== HOME PAGE ==================== -->
-      <div class="page active" id="page-home">
+      <!-- ==================== MY SUMI SUMMARY PAGE ==================== -->
+      <div class="page" id="page-summary">
         <div class="page-header">
-          <h1 class="page-title">Welcome to Sumi</h1>
-          <p class="page-desc">Your e-ink companion is ready to be configured</p>
+          <h1 class="page-title">My SUMI</h1>
+          <p class="page-desc">Your device configuration at a glance</p>
         </div>
         
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-icon">🔋</div>
-            <div class="stat-value" id="statBattery">--%</div>
-            <div class="stat-label">Battery</div>
+        <!-- Device Status -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #e3f2fd 0%, #bbdefb 100%);">
+            <span class="card-title">📟 Device Status</span>
           </div>
-          <div class="stat-card">
-            <div class="stat-icon">💾</div>
-            <div class="stat-value" id="statStorage">--</div>
-            <div class="stat-label">Storage</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon">📶</div>
-            <div class="stat-value" id="statWifi">--</div>
-            <div class="stat-label">WiFi</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon">⏱️</div>
-            <div class="stat-value" id="statUptime">--</div>
-            <div class="stat-label">Uptime</div>
-          </div>
-        </div>
-        
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Quick Setup</span>
-          </div>
-          <div class="card-body">
-            <p class="text-muted mb-8">Get started with these essential steps:</p>
-            <div class="btn-group" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
-              <button class="btn btn-primary" onclick="showPage('wifi')">📶 Connect WiFi</button>
-              <button class="btn btn-secondary" onclick="showPage('builder')">🎨 Customize</button>
-              <button class="btn btn-secondary" onclick="showPage('files')">📁 Manage Files</button>
-              <button class="btn btn-secondary" onclick="showPage('bluetooth')">⌨️ Pair Keyboard</button>
+          <div class="card-body" id="summaryDevice">
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: center;">
+              <div><div style="font-size: 24px;">🔋</div><div style="font-weight: 600;" id="sumBattery">--%</div><div style="font-size: 11px; color: #666;">Battery</div></div>
+              <div><div style="font-size: 24px;">💾</div><div style="font-weight: 600;" id="sumStorage">--</div><div style="font-size: 11px; color: #666;">Storage</div></div>
+              <div><div style="font-size: 24px;">🧠</div><div style="font-weight: 600;" id="sumMemory">--</div><div style="font-size: 11px; color: #666;">Free RAM</div></div>
+              <div><div style="font-size: 24px;">⏱️</div><div style="font-weight: 600;" id="sumUptime">--</div><div style="font-size: 11px; color: #666;">Uptime</div></div>
             </div>
           </div>
         </div>
         
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Device Info</span>
+        <!-- Connection & Location -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #e8f5e9 0%, #c8e6c9 100%);">
+            <span class="card-title">🌐 Connection & Location</span>
           </div>
-          <div class="card-body">
-            <table style="width:100%;font-size:11px;">
-              <tr><td class="text-muted" style="padding:6px 0">Firmware</td><td style="text-align:right" id="infoFirmware">--</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0">Display</td><td style="text-align:right">4.26" 800×480 E-Ink</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0">IP Address</td><td style="text-align:right" id="infoIP">--</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0">Free Memory</td><td style="text-align:right" id="infoMem">--</td></tr>
+          <div class="card-body" id="summaryConnection">
+            <table style="width: 100%; font-size: 12px;">
+              <tr><td style="padding: 6px 0; color: #666;">WiFi Network</td><td style="text-align: right; font-weight: 500;" id="sumWifiSSID">Not connected</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">IP Address</td><td style="text-align: right; font-weight: 500;" id="sumWifiIP">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Weather Location</td><td style="text-align: right; font-weight: 500;" id="sumLocation">Not set</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Timezone</td><td style="text-align: right; font-weight: 500;" id="sumTimezone">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Current Time</td><td style="text-align: right; font-weight: 500;" id="sumTime">--</td></tr>
             </table>
           </div>
         </div>
+        
+        <!-- SD Card Contents -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #fff3e0 0%, #ffe0b2 100%);">
+            <span class="card-title">💾 SD Card Contents</span>
+          </div>
+          <div class="card-body" id="summaryContent">
+            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; text-align: center; margin-bottom: 12px;">
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">📚</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumBooks">0</div>
+                <div style="font-size: 10px; color: #666;">Books</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">🖼️</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumImages">0</div>
+                <div style="font-size: 10px; color: #666;">Images</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">🗺️</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumMaps">0</div>
+                <div style="font-size: 10px; color: #666;">Maps</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">🎴</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumCards">0</div>
+                <div style="font-size: 10px; color: #666;">Flashcards</div>
+              </div>
+              <div style="background: #f8f9fa; padding: 12px 8px; border-radius: 8px;">
+                <div style="font-size: 20px;">📝</div>
+                <div style="font-weight: 700; font-size: 18px;" id="sumNotes">0</div>
+                <div style="font-size: 10px; color: #666;">Notes</div>
+              </div>
+            </div>
+            <div id="sumBooksStatus" style="background: #e8f5e9; border-radius: 6px; padding: 8px 12px; font-size: 11px; display: none;">
+              <span style="color: #2e7d32;">✓ All books processed and ready</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Home Screen Customization -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #f3e5f5 0%, #e1bee7 100%);">
+            <span class="card-title">🎨 Home Screen</span>
+          </div>
+          <div class="card-body" id="summaryHomeScreen">
+            <table style="width: 100%; font-size: 12px;">
+              <tr><td style="padding: 6px 0; color: #666;">Theme</td><td style="text-align: right; font-weight: 500;" id="sumTheme">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Icon Style</td><td style="text-align: right; font-weight: 500;" id="sumIconStyle">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Orientation</td><td style="text-align: right; font-weight: 500;" id="sumOrientation">--</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Status Bar</td><td style="text-align: right; font-weight: 500;" id="sumStatusBar">--</td></tr>
+            </table>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
+              <div style="font-size: 11px; color: #666; margin-bottom: 8px;">Enabled Apps:</div>
+              <div id="sumApps" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Display & Power Settings -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header" style="background: linear-gradient(90deg, #e0f7fa 0%, #b2ebf2 100%);">
+            <span class="card-title">⚙️ Settings</span>
+          </div>
+          <div class="card-body" id="summarySettings">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Display</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">Boot to Last Book</td><td style="text-align: right;" id="sumBootBook">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Invert Colors</td><td style="text-align: right;" id="sumInvert">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Sleep Timer</td><td style="text-align: right;" id="sumSleepTimer">--</td></tr>
+                </table>
+              </div>
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Reader</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">Font Size</td><td style="text-align: right;" id="sumFontSize">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Line Height</td><td style="text-align: right;" id="sumLineHeight">--</td></tr>
+                  <tr><td style="padding: 4px 0; color: #888;">Justify Text</td><td style="text-align: right;" id="sumJustify">--</td></tr>
+                </table>
+              </div>
+            </div>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Sync</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">KOSync</td><td style="text-align: right;" id="sumKosync">--</td></tr>
+                </table>
+              </div>
+              <div>
+                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Keyboard</div>
+                <table style="width: 100%; font-size: 11px;">
+                  <tr><td style="padding: 4px 0; color: #888;">Bluetooth</td><td style="text-align: right;" id="sumBluetooth">--</td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Last Updated -->
+        <div style="text-align: center; font-size: 11px; color: #999; margin-top: 16px;">
+          <span id="sumLastUpdated">Last updated: --</span>
+          <button class="btn btn-sm btn-secondary" style="margin-left: 12px;" onclick="refreshSummary()">🔄 Refresh</button>
+        </div>
+      </div>
+
+      <!-- ==================== OLD HOME PAGE (hidden, keep for stat IDs) ==================== -->
+      <div class="page" id="page-home" style="display:none;">
+        <div id="statBattery" style="display:none;">--%</div>
+        <div id="statStorage" style="display:none;">--</div>
+        <div id="statWifi" style="display:none;">--</div>
+        <div id="statUptime" style="display:none;">--</div>
+        <div id="infoFirmware" style="display:none;">--</div>
+        <div id="infoIP" style="display:none;">--</div>
+        <div id="infoMem" style="display:none;">--</div>
       </div>
 
       <!-- ==================== BUILDER PAGE ==================== -->
@@ -279,10 +377,28 @@
       </div>
 
       <!-- ==================== WIFI PAGE ==================== -->
-      <div class="page" id="page-wifi">
+      <div class="page active" id="page-wifi">
         <div class="page-header">
           <h1 class="page-title">WiFi Settings</h1>
           <p class="page-desc">Connect to your home network</p>
+        </div>
+        
+        <!-- Important info banner -->
+        <div class="card" style="background: linear-gradient(135deg, #e3f2fd 0%, #e8f5e9 100%); border: 1px solid #90caf9; margin-bottom: 12px;">
+          <div class="card-body" style="padding: 12px;">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <div style="font-size: 24px;">💡</div>
+              <div style="flex: 1;">
+                <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px;">Why Connect to WiFi?</div>
+                <div style="font-size: 11px; color: #555; line-height: 1.5;">
+                  Internet access enables: <strong>Weather updates</strong>, <strong>time sync</strong>, <strong>KOSync reading progress</strong>, and <strong>EPUB pre-processing</strong> (extracts chapters and covers for instant book loading).
+                </div>
+                <div style="font-size: 11px; color: #666; line-height: 1.5; margin-top: 8px; padding-top: 8px; border-top: 1px solid #ccc;">
+                  <strong>Steps:</strong> Enter your WiFi credentials below → After SUMI connects, switch your phone/laptop to the same WiFi → Access portal at the new IP address shown
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         
         <div class="card">
@@ -324,12 +440,51 @@
         
         <!-- Books Panel -->
         <div class="file-panel active" id="panel-books">
-          <div class="upload-zone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event,'books')">
+          <!-- Cover Processing Info Card -->
+          <div class="card" style="background: linear-gradient(135deg, #e8f4fd 0%, #f0e6ff 100%); border: 1px solid #b8d4e8; margin-bottom: 12px;">
+            <div class="card-body" style="padding: 12px;">
+              <div style="display: flex; align-items: flex-start; gap: 10px;">
+                <div style="font-size: 24px;">🚀</div>
+                <div style="flex: 1;">
+                  <div style="font-weight: 600; font-size: 13px; margin-bottom: 4px;">Smart Book Processing</div>
+                  <div style="font-size: 11px; color: #555; line-height: 1.4;">
+                    When you upload EPUBs, your browser pre-processes everything: extracts chapters as plain text, 
+                    optimizes cover art, and creates a ready-to-read cache. SUMI loads books instantly with zero processing!
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Dynamic warning for unprocessed books (populated by JS) -->
+          <div id="coverWarning"></div>
+          
+          <!-- Lightbulb tip for processing (populated by JS when on home network) -->
+          <div id="processingTip" style="display: none;"></div>
+          
+          <div class="upload-zone" id="bookUploadZone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleBookDrop(event)">
             <div class="icon">📚</div>
             <div class="text">Drop books here or click to upload</div>
-            <div class="hint">Supports: EPUB, PDF, TXT</div>
-            <input type="file" accept=".epub,.pdf,.txt" multiple onchange="uploadFiles(this.files,'books')">
+            <div class="hint">Supports: EPUB (with automatic cover extraction)</div>
+            <input type="file" accept=".epub,.pdf,.txt" multiple onchange="uploadBooks(this.files)">
           </div>
+          
+          <!-- Upload Progress (hidden by default) -->
+          <div id="uploadProgress" style="display: none; margin-bottom: 12px;">
+            <div class="card">
+              <div class="card-body" style="padding: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                  <div class="spinner" style="width: 20px; height: 20px; border: 2px solid #ddd; border-top-color: #007aff; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                  <div id="uploadStatusText" style="font-size: 12px; font-weight: 500;">Processing...</div>
+                </div>
+                <div class="progress" style="height: 6px; margin-bottom: 6px;">
+                  <div class="progress-bar" id="uploadProgressBar" style="width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <div id="uploadDetailText" style="font-size: 10px; color: #888;"></div>
+              </div>
+            </div>
+          </div>
+          
           <div class="card">
             <div class="card-header">
               <span class="card-title">Your Books</span>
@@ -365,6 +520,10 @@
                     <span class="toggle-label">Justify Text</span>
                     <div class="toggle-switch on" id="togJustify" onclick="toggleReaderOpt(this,'textAlign');updateReaderPreview()"></div>
                   </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Require Pre-processing</span>
+                    <div class="toggle-switch on" id="togReqPreprocess" onclick="toggleReaderOpt(this,'requirePreprocessed')" title="Books must be processed via portal to open (recommended)"></div>
+                  </div>
                 </div>
                 <div>
                   <div style="font-size:9px;font-weight:bold;margin-bottom:4px;color:var(--mac-gray-dark);">Preview</div>
@@ -379,6 +538,20 @@
         
         <!-- Images Panel -->
         <div class="file-panel" id="panel-images">
+          <!-- Info box -->
+          <div style="background: #e8f4fd; border: 1px solid #bee5eb; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <div style="font-size: 16px;">💡</div>
+              <div style="flex: 1; font-size: 11px; color: #0c5460; line-height: 1.5;">
+                <strong>Image Tips:</strong><br>
+                • <strong>Format:</strong> BMP files (1-bit monochrome or 24-bit color)<br>
+                • <strong>Processing:</strong> Color images auto-convert to grayscale with dithering<br>
+                • <strong>Size:</strong> Images are scaled to fit the 800×480 e-ink display<br>
+                • <strong>Sleep Screen:</strong> Enable "Shuffle Images" in Settings to use as a rotating sleep screen slideshow
+              </div>
+            </div>
+          </div>
+          
           <div class="upload-zone" onclick="this.querySelector('input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event,'images')">
             <div class="icon">🖼️</div>
             <div class="text">Drop images here</div>
@@ -420,11 +593,86 @@
             <button class="btn btn-secondary" onclick="document.getElementById('ankiImport').click()">📥 Import</button>
             <input type="file" id="ankiImport" accept=".txt,.csv,.apkg" style="display:none" onchange="importAnkiDeck(this.files[0])">
           </div>
+          
+          <!-- Info box -->
+          <div style="background: #e8f4fd; border: 1px solid #bee5eb; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <div style="font-size: 16px;">💡</div>
+              <div style="flex: 1; font-size: 11px; color: #0c5460; line-height: 1.5;">
+                <strong>Supported Formats:</strong><br>
+                • <strong>CSV/TSV (recommended):</strong> <code>question,answer</code> or <code>term⇥definition</code> — works with Quizlet & Anki exports<br>
+                • <strong>TXT:</strong> Alternating lines (question on one line, answer on next) or <code>question;answer</code> per line<br>
+                • <strong>JSON:</strong> Array of objects with field pairs: front/back, question/answer, term/definition, word/meaning, or kanji/reading
+              </div>
+            </div>
+          </div>
+          
           <div class="card">
             <div class="card-header"><span class="card-title">Your Decks</span><button class="btn btn-sm btn-secondary" onclick="refreshFiles('flashcards')">🔄</button></div>
             <div class="card-body">
               <div id="deckList">
                 <div class="file-empty"><div class="icon">🎴</div><div>No decks yet</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Flashcard Settings</span></div>
+            <div class="card-body">
+              <div style="display:grid;grid-template-columns:1fr 180px;gap:12px;">
+                <div>
+                  <div class="slider-row">
+                    <span class="slider-label">Font Size</span>
+                    <select id="fcFontSize" onchange="updateFlashcardPreview();saveFlashcardSettings()">
+                      <option value="0">Small</option>
+                      <option value="1" selected>Medium</option>
+                      <option value="2">Large</option>
+                      <option value="3">Extra Large</option>
+                    </select>
+                  </div>
+                  <div class="toggle">
+                    <span class="toggle-label">Center Text</span>
+                    <div class="toggle-switch on" id="togFcCenter" onclick="toggleSwitchSimple(this);updateFlashcardPreview();saveFlashcardSettings()"></div>
+                  </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Shuffle Cards</span>
+                    <div class="toggle-switch on" id="togFcShuffle" onclick="toggleSwitchSimple(this);saveFlashcardSettings()"></div>
+                  </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Show Progress Bar</span>
+                    <div class="toggle-switch on" id="togFcProgress" onclick="toggleSwitchSimple(this);updateFlashcardPreview();saveFlashcardSettings()"></div>
+                  </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Show Stats</span>
+                    <div class="toggle-switch on" id="togFcStats" onclick="toggleSwitchSimple(this);updateFlashcardPreview();saveFlashcardSettings()"></div>
+                  </div>
+                </div>
+                <div>
+                  <div style="font-size:9px;font-weight:bold;margin-bottom:4px;color:var(--mac-gray-dark);">Preview</div>
+                  <div id="flashcardPreview" style="background:#f5f5f0;border:1px solid var(--mac-black);height:200px;overflow:hidden;font-family:sans-serif;position:relative;">
+                    <!-- Progress bar -->
+                    <div id="fcPreviewProgress" style="height:6px;background:#ddd;margin:6px 8px;">
+                      <div style="width:40%;height:100%;background:#333;"></div>
+                    </div>
+                    <div style="font-size:8px;padding:0 8px;color:#666;">Card 2 of 5</div>
+                    <div style="border-top:1px solid #333;margin:4px 0;"></div>
+                    <!-- Question area -->
+                    <div id="fcPreviewQuestion" style="padding:4px 8px;">
+                      <div style="font-size:8px;color:#666;margin-bottom:2px;">Question:</div>
+                      <div id="fcPreviewQText" style="font-size:14px;font-weight:bold;">What is 2 + 2?</div>
+                    </div>
+                    <div style="border-top:1px solid #333;margin:4px 8px;"></div>
+                    <!-- Answer area -->
+                    <div id="fcPreviewAnswer" style="padding:4px 8px;">
+                      <div style="font-size:8px;color:#666;margin-bottom:2px;">Answer:</div>
+                      <div id="fcPreviewAText" style="font-size:14px;font-weight:bold;">4</div>
+                    </div>
+                    <!-- Footer -->
+                    <div style="position:absolute;bottom:0;left:0;right:0;border-top:1px solid #333;padding:4px 8px;background:#f5f5f0;display:flex;justify-content:space-between;font-size:8px;">
+                      <span id="fcPreviewStats">2/0</span>
+                      <span>&lt;Wrong  Right&gt;</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

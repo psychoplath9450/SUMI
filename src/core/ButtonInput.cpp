@@ -1,7 +1,7 @@
 /**
  * @file ButtonInput.cpp
  * @brief Physical button reading implementation
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #include "core/ButtonInput.h"

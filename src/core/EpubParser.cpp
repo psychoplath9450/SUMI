@@ -1,33 +1,42 @@
 /**
  * @file EpubParser.cpp
- * @brief EPUB Parser Implementation with ZIP Support
- * @version 2.1.16
+ * @brief Streaming EPUB Parser Implementation
+ * @version 1.4.2
  *
- * Supports:
- * - Direct .epub file reading (ZIP archives)
- * - Extracted EPUB folders
- * - Streaming decompression for large chapters
+ * Memory-efficient EPUB parsing:
+ * - Expat streaming XML parser (1KB chunks)
+ * - Manifest written to temp file, not RAM
+ * - Two-tier caching via BookMetadataCache
+ * - No full-file loading
  */
 
 #include "core/EpubParser.h"
-#include "core/StreamingHtmlParser.h"
-#include "core/ZipReader.h"
-#include <SD.h>
 
+// Global instance
+EpubParser* epubParser = nullptr;
 
 // Static members
-Chapter EpubParser::_emptyChapter;
 TocEntry EpubParser::_emptyTocEntry;
-
-// Global ZipReader instance for current EPUB
-static ZipReader epubZip;
 
 // =============================================================================
 // Constructor / Destructor
 // =============================================================================
 
-EpubParser::EpubParser() 
-    : _isOpen(false), _sourceType(EpubSourceType::FOLDER) {
+EpubParser::EpubParser()
+    : _isOpen(false)
+    , _xmlParser(nullptr)
+    , _parserState(EpubParserState::IDLE)
+    , _manifestCount(0)
+    , _currentDepth(0)
+    , _inMetadata(false)
+    , _inManifest(false)
+    , _inSpine(false) {
+    memset(_tempBuffer, 0, sizeof(_tempBuffer));
+    memset(_currentElement, 0, sizeof(_currentElement));
+    memset(_currentId, 0, sizeof(_currentId));
+    memset(_currentHref, 0, sizeof(_currentHref));
+    memset(_currentMediaType, 0, sizeof(_currentMediaType));
+    memset(_currentTitle, 0, sizeof(_currentTitle));
 }
 
 EpubParser::~EpubParser() {
@@ -39,193 +48,266 @@ EpubParser::~EpubParser() {
 // =============================================================================
 
 bool EpubParser::open(const String& path) {
+    MEM_LOG("epub_open_start");
+    
     close();
     
     _path = path;
     _error = "";
     
-    // Determine source type
-    if (path.endsWith(".epub") || path.endsWith(".EPUB")) {
-        _sourceType = EpubSourceType::ZIP_FILE;
-        Serial.printf("[EPUB] Opening ZIP: %s\n", path.c_str());
-        
-        // Open as ZIP file
-        if (!epubZip.open(path)) {
-            _error = "Failed to open EPUB ZIP: " + epubZip.getError();
-            Serial.printf("[EPUB] %s\n", _error.c_str());
-            return false;
-        }
-    } else {
+    // Detect source type
+    if (isValidEpubFolder(path)) {
         _sourceType = EpubSourceType::FOLDER;
-        Serial.printf("[EPUB] Opening folder: %s\n", path.c_str());
-        
-        // Check if folder exists
-        if (!SD.exists(path)) {
-            _error = "Path does not exist";
-            return false;
-        }
+        return openFolder(path);
     }
     
-    // Parse container.xml to find OPF path (stores in _opfPath member)
-    if (!parseContainer()) {
-        if (_sourceType == EpubSourceType::ZIP_FILE) {
-            epubZip.close();
-        }
+    if (!isEpubFile(path)) {
+        _error = "Not an EPUB file: " + path;
         return false;
     }
     
-    // Now parse OPF separately - this reduces stack depth
-    // parseContainer's stack is freed before parseOPF allocates
-    if (!parseOPF(_opfPath)) {
-        if (_sourceType == EpubSourceType::ZIP_FILE) {
-            epubZip.close();
-        }
-        return false;
-    }
+    _sourceType = EpubSourceType::ZIP_FILE;
     
-    // Parse NCX for chapter titles (optional, after OPF stack is freed)
-    if (_ncxPath.length() > 0) {
-        parseNCX(_ncxPath);
-    }
-    
-    _isOpen = true;
-    Serial.printf("[EPUB] Opened: \"%s\" by %s, %d chapters\n", 
-                  _title.c_str(), _author.c_str(), (int)_chapters.size());
-    
-    return true;
-}
-
-void EpubParser::close() {
-    if (_sourceType == EpubSourceType::ZIP_FILE) {
-        epubZip.close();
-    }
-    _isOpen = false;
-    _path = "";
-    _error = "";
-    _title = "";
-    _author = "";
-    _language = "";
-    _publisher = "";
-    _chapters.clear();
-    _toc.clear();
-    _contentBasePath = "";
-    _ncxPath = "";
-    _coverImagePath = "";
-    _opfPath = "";
-}
-
-// =============================================================================
-// Chapter Access
-// =============================================================================
-
-const Chapter& EpubParser::getChapter(int index) const {
-    if (index >= 0 && index < (int)_chapters.size()) {
-        return _chapters[index];
-    }
-    return _emptyChapter;
-}
-
-String EpubParser::getChapterText(int chapterIndex) {
-    String html = getChapterHTML(chapterIndex);
-    if (html.length() == 0) {
-        return "";
-    }
-    return extractTextFromHTML(html);
-}
-
-String EpubParser::getChapterHTML(int chapterIndex) {
-    if (chapterIndex < 0 || chapterIndex >= (int)_chapters.size()) {
-        return "";
-    }
-    
-    String href = _chapters[chapterIndex].href;
-    String fullPath = resolvePath(_contentBasePath, href);
-    
-    return readFile(fullPath);
-}
-
-bool EpubParser::streamChapterToFile(int chapterIndex, const String& outputPath) {
-    if (chapterIndex < 0 || chapterIndex >= (int)_chapters.size()) {
-        _error = "Invalid chapter index";
-        return false;
-    }
-    
-    String href = _chapters[chapterIndex].href;
-    String fullPath = resolvePath(_contentBasePath, href);
-    
-    Serial.printf("[EPUB] Streaming chapter %d to %s\n", chapterIndex, outputPath.c_str());
-    Serial.printf("[EPUB] Source path: %s\n", fullPath.c_str());
-    
-    // Open output file
-    File outFile = SD.open(outputPath, FILE_WRITE);
-    if (!outFile) {
-        _error = "Failed to open output file: " + outputPath;
+    // Open ZIP file
+    if (!_zip.open(path)) {
+        _error = "Failed to open EPUB: " + _zip.getError();
         Serial.printf("[EPUB] %s\n", _error.c_str());
         return false;
     }
     
-    bool success = false;
+    // Get cache path
+    _cachePath = BookCacheManager::getCachePath(path);
+    BookCacheManager::ensureCacheDir(_cachePath);
     
-    if (_sourceType == EpubSourceType::ZIP_FILE) {
-        // Stream from ZIP to file using ZipReader's streamFileTo
-        success = epubZip.streamFileTo(fullPath, outFile, 1024);
-        if (!success) {
-            _error = "Failed to stream from ZIP: " + epubZip.getError();
+    // Try to load from cache first
+    String bookBinPath = BookCacheManager::getBookBinPath(_cachePath);
+    if (SD.exists(bookBinPath)) {
+        if (_metadata.load(bookBinPath)) {
+            Serial.printf("[EPUB] Loaded from cache: \"%s\"\n", _metadata.title);
+            _contentBasePath = _metadata.contentBasePath;
+            _isOpen = true;
+            MEM_LOG("epub_open_cached");
+            return true;
         }
-    } else {
-        // Copy from folder
-        String srcPath = _path + "/" + fullPath;
-        File srcFile = SD.open(srcPath, FILE_READ);
-        if (srcFile) {
-            uint8_t buffer[1024];
-            while (srcFile.available()) {
-                size_t read = srcFile.read(buffer, sizeof(buffer));
-                outFile.write(buffer, read);
+        Serial.println("[EPUB] Cache invalid, reparsing...");
+    }
+    
+    // Parse container.xml to find OPF
+    if (!parseContainer()) {
+        _zip.close();
+        return false;
+    }
+    
+    MEM_LOG("epub_after_container");
+    
+    // Parse OPF file
+    if (!parseOPF()) {
+        _zip.close();
+        return false;
+    }
+    
+    MEM_LOG("epub_after_opf");
+    
+    // Parse NCX or NAV for TOC
+    if (_ncxPath.length() > 0) {
+        parseNCX();
+    } else if (_navPath.length() > 0) {
+        parseNAV();
+    }
+    
+    // Link TOC entries to spine
+    _metadata.linkTocToSpine();
+    
+    // Save metadata cache
+    strncpy(_metadata.contentBasePath, _contentBasePath.c_str(), MAX_HREF_LEN - 1);
+    _metadata.save(bookBinPath);
+    
+    _isOpen = true;
+    
+    Serial.printf("[EPUB] Parsed: \"%s\" by %s, %d chapters, %d TOC entries\n",
+                  _metadata.title, _metadata.author, 
+                  _metadata.spineCount, _metadata.tocCount);
+    
+    MEM_LOG("epub_open_complete");
+    
+    return true;
+}
+
+bool EpubParser::openFolder(const String& path) {
+    _path = path;
+    _cachePath = BookCacheManager::getCachePath(path);
+    BookCacheManager::ensureCacheDir(_cachePath);
+    
+    // For folder mode, we read files directly from SD
+    // Parse container.xml
+    String containerPath = path + "/META-INF/container.xml";
+    if (!SD.exists(containerPath)) {
+        _error = "container.xml not found";
+        return false;
+    }
+    
+    // Read container.xml to find OPF path
+    File f = SD.open(containerPath, FILE_READ);
+    if (!f) {
+        _error = "Failed to open container.xml";
+        return false;
+    }
+    
+    // Simple parse for rootfile
+    String content;
+    content.reserve(2048);
+    while (f.available() && content.length() < 2048) {
+        content += (char)f.read();
+    }
+    f.close();
+    
+    // Find full-path attribute
+    int rootfilePos = content.indexOf("rootfile");
+    if (rootfilePos > 0) {
+        int fullPathPos = content.indexOf("full-path", rootfilePos);
+        if (fullPathPos > 0) {
+            int quoteStart = content.indexOf('"', fullPathPos);
+            if (quoteStart > 0) {
+                int quoteEnd = content.indexOf('"', quoteStart + 1);
+                if (quoteEnd > quoteStart) {
+                    _opfPath = content.substring(quoteStart + 1, quoteEnd);
+                }
             }
-            srcFile.close();
-            success = true;
-        } else {
-            _error = "Failed to open source file: " + srcPath;
         }
     }
     
-    outFile.close();
-    
-    if (success) {
-        Serial.printf("[EPUB] Streamed chapter %d successfully\n", chapterIndex);
-    } else {
-        Serial.printf("[EPUB] Stream failed: %s\n", _error.c_str());
-        SD.remove(outputPath);  // Clean up failed file
+    if (_opfPath.length() == 0) {
+        _error = "No OPF path in container.xml";
+        return false;
     }
     
-    return success;
+    // Set content base path
+    int lastSlash = _opfPath.lastIndexOf('/');
+    if (lastSlash > 0) {
+        _contentBasePath = _opfPath.substring(0, lastSlash + 1);
+    }
+    
+    // Try cache
+    String bookBinPath = BookCacheManager::getBookBinPath(_cachePath);
+    if (SD.exists(bookBinPath) && _metadata.load(bookBinPath)) {
+        _isOpen = true;
+        return true;
+    }
+    
+    // Parse OPF from folder
+    String opfFullPath = path + "/" + _opfPath;
+    f = SD.open(opfFullPath, FILE_READ);
+    if (!f) {
+        _error = "Failed to open OPF: " + opfFullPath;
+        return false;
+    }
+    
+    // Simple OPF parsing for folder mode
+    // For full streaming, use Expat - but for folders, simple parsing is OK
+    content = "";
+    content.reserve(32768);
+    while (f.available() && content.length() < 32768) {
+        content += (char)f.read();
+    }
+    f.close();
+    
+    // Extract title
+    int titleStart = content.indexOf("<dc:title");
+    if (titleStart > 0) {
+        int tagEnd = content.indexOf('>', titleStart);
+        int closeTag = content.indexOf("</dc:title>", tagEnd);
+        if (tagEnd > 0 && closeTag > tagEnd) {
+            String title = content.substring(tagEnd + 1, closeTag);
+            title.trim();
+            strncpy(_metadata.title, title.c_str(), MAX_TITLE_LEN - 1);
+        }
+    }
+    
+    // Extract author
+    int authorStart = content.indexOf("<dc:creator");
+    if (authorStart > 0) {
+        int tagEnd = content.indexOf('>', authorStart);
+        int closeTag = content.indexOf("</dc:creator>", tagEnd);
+        if (tagEnd > 0 && closeTag > tagEnd) {
+            String author = content.substring(tagEnd + 1, closeTag);
+            author.trim();
+            strncpy(_metadata.author, author.c_str(), MAX_AUTHOR_LEN - 1);
+        }
+    }
+    
+    // Parse spine items (simplified)
+    int spineStart = content.indexOf("<spine");
+    int spineEnd = content.indexOf("</spine>");
+    if (spineStart > 0 && spineEnd > spineStart) {
+        String spineSection = content.substring(spineStart, spineEnd);
+        
+        int pos = 0;
+        while ((pos = spineSection.indexOf("idref=", pos)) > 0) {
+            int quoteStart = spineSection.indexOf('"', pos);
+            int quoteEnd = spineSection.indexOf('"', quoteStart + 1);
+            if (quoteStart > 0 && quoteEnd > quoteStart) {
+                String idref = spineSection.substring(quoteStart + 1, quoteEnd);
+                
+                // Find this item in manifest
+                String searchStr = "id=\"" + idref + "\"";
+                int itemPos = content.indexOf(searchStr);
+                if (itemPos > 0) {
+                    int hrefPos = content.indexOf("href=", itemPos);
+                    if (hrefPos > 0 && hrefPos < itemPos + 200) {
+                        int hq1 = content.indexOf('"', hrefPos);
+                        int hq2 = content.indexOf('"', hq1 + 1);
+                        if (hq1 > 0 && hq2 > hq1) {
+                            String href = content.substring(hq1 + 1, hq2);
+                            String fullHref = _contentBasePath + urlDecode(href);
+                            
+                            // Get file size
+                            String filePath = path + "/" + fullHref;
+                            uint32_t fileSize = 0;
+                            if (SD.exists(filePath)) {
+                                File chf = SD.open(filePath, FILE_READ);
+                                if (chf) {
+                                    fileSize = chf.size();
+                                    chf.close();
+                                }
+                            }
+                            
+                            _metadata.addSpineEntry(fullHref.c_str(), fileSize);
+                        }
+                    }
+                }
+            }
+            pos = quoteEnd + 1;
+        }
+    }
+    
+    // Save cache
+    strncpy(_metadata.contentBasePath, _contentBasePath.c_str(), MAX_HREF_LEN - 1);
+    _metadata.save(bookBinPath);
+    
+    _isOpen = true;
+    return true;
 }
 
-String EpubParser::getAllText() {
-    String result;
-    for (int i = 0; i < (int)_chapters.size(); i++) {
-        result += getChapterText(i);
-        result += "\n\n";
+void EpubParser::close() {
+    if (_xmlParser) {
+        XML_ParserFree(_xmlParser);
+        _xmlParser = nullptr;
     }
-    return result;
-}
-
-// =============================================================================
-// TOC Access
-// =============================================================================
-
-const TocEntry& EpubParser::getTocEntry(int index) const {
-    if (index >= 0 && index < (int)_toc.size()) {
-        return _toc[index];
+    
+    if (_manifestFile) {
+        _manifestFile.close();
     }
-    return _emptyTocEntry;
-}
-
-int EpubParser::getChapterForToc(int tocIndex) const {
-    if (tocIndex >= 0 && tocIndex < (int)_toc.size()) {
-        return _toc[tocIndex].chapterIndex;
-    }
-    return 0;
+    
+    _zip.close();
+    _isOpen = false;
+    _path = "";
+    _cachePath = "";
+    _contentBasePath = "";
+    _opfPath = "";
+    _ncxPath = "";
+    _navPath = "";
+    _metadata.clear();
+    _parserState = EpubParserState::IDLE;
 }
 
 // =============================================================================
@@ -233,33 +315,21 @@ int EpubParser::getChapterForToc(int tocIndex) const {
 // =============================================================================
 
 bool EpubParser::parseContainer() {
-    // Read META-INF/container.xml
-    String container = readFile("META-INF/container.xml");
+    Serial.println("[EPUB] Parsing container.xml...");
     
-    if (container.length() == 0) {
-        _error = "Cannot read container.xml";
+    _opfPath = "";
+    
+    if (!streamParseFile("META-INF/container.xml", EpubParserState::PARSING_CONTAINER)) {
+        _error = "Failed to parse container.xml";
         return false;
     }
     
-    // Find rootfile element
-    int rfStart = container.indexOf("<rootfile");
-    if (rfStart < 0) {
-        _error = "No rootfile in container.xml";
-        return false;
-    }
-    
-    // Extract full-path attribute and store in member variable
-    // This allows container String to be freed before parseOPF runs
-    _opfPath = extractAttribute(container.substring(rfStart), "full-path");
     if (_opfPath.length() == 0) {
-        _error = "No full-path in rootfile";
+        _error = "No OPF path found in container.xml";
         return false;
     }
     
     Serial.printf("[EPUB] OPF path: %s\n", _opfPath.c_str());
-    
-    // Don't call parseOPF here - let open() call it after this returns
-    // This reduces stack depth
     return true;
 }
 
@@ -267,435 +337,736 @@ bool EpubParser::parseContainer() {
 // OPF Parsing
 // =============================================================================
 
-bool EpubParser::parseOPF(const String& opfPath) {
-    String opf = readFile(opfPath);
-    if (opf.length() == 0) {
-        _error = "Cannot read OPF file";
-        return false;
-    }
+bool EpubParser::parseOPF() {
+    Serial.printf("[EPUB] Parsing OPF: %s\n", _opfPath.c_str());
     
-    // Set content base path (directory containing OPF)
-    int lastSlash = opfPath.lastIndexOf('/');
+    // Set content base path
+    int lastSlash = _opfPath.lastIndexOf('/');
     if (lastSlash > 0) {
-        _contentBasePath = opfPath.substring(0, lastSlash + 1);
+        _contentBasePath = _opfPath.substring(0, lastSlash + 1);
     } else {
         _contentBasePath = "";
     }
     
-    // Extract metadata
-    int metaStart = opf.indexOf("<metadata");
-    int metaEnd = opf.indexOf("</metadata>");
-    String coverId = "";  // Will store cover item ID from metadata
+    // Create temp file for manifest items
+    String manifestPath = "/.sumi/temp_manifest.bin";
+    SD.remove(manifestPath);
+    _manifestFile = SD.open(manifestPath, FILE_WRITE);
+    if (!_manifestFile) {
+        _error = "Failed to create manifest temp file";
+        return false;
+    }
+    _manifestCount = 0;
     
-    if (metaStart >= 0 && metaEnd > metaStart) {
-        String meta = opf.substring(metaStart, metaEnd);
-        
-        // Title
-        int titleStart = meta.indexOf("<dc:title");
-        if (titleStart >= 0) {
-            int tagEnd = meta.indexOf('>', titleStart);
-            int closeTag = meta.indexOf("</dc:title>", tagEnd);
-            if (tagEnd >= 0 && closeTag > tagEnd) {
-                _title = meta.substring(tagEnd + 1, closeTag);
-                _title.trim();
-            }
-        }
-        
-        // Author
-        int authorStart = meta.indexOf("<dc:creator");
-        if (authorStart >= 0) {
-            int tagEnd = meta.indexOf('>', authorStart);
-            int closeTag = meta.indexOf("</dc:creator>", tagEnd);
-            if (tagEnd >= 0 && closeTag > tagEnd) {
-                _author = meta.substring(tagEnd + 1, closeTag);
-                _author.trim();
-            }
-        }
-        
-        // Language
-        int langStart = meta.indexOf("<dc:language");
-        if (langStart >= 0) {
-            int tagEnd = meta.indexOf('>', langStart);
-            int closeTag = meta.indexOf("</dc:language>", tagEnd);
-            if (tagEnd >= 0 && closeTag > tagEnd) {
-                _language = meta.substring(tagEnd + 1, closeTag);
-                _language.trim();
-            }
-        }
-        
-        // =====================================================
-        // COVER IMAGE: Look for <meta name="cover" content="..." />
-        // =====================================================
-        int metaPos = 0;
-        while ((metaPos = meta.indexOf("<meta", metaPos)) >= 0) {
-            int metaTagEnd = meta.indexOf(">", metaPos);
-            if (metaTagEnd < 0) break;
-            
-            String metaTag = meta.substring(metaPos, metaTagEnd + 1);
-            String name = extractAttribute(metaTag, "name");
-            
-            if (name == "cover") {
-                coverId = extractAttribute(metaTag, "content");
-                Serial.printf("[EPUB] Found cover meta, id: %s\n", coverId.c_str());
-            }
-            
-            metaPos = metaTagEnd;
-        }
+    // Parse OPF
+    _inMetadata = false;
+    _inManifest = false;
+    _inSpine = false;
+    
+    bool result = streamParseFile(_opfPath, EpubParserState::PARSING_OPF_METADATA);
+    
+    _manifestFile.close();
+    
+    if (!result) {
+        SD.remove(manifestPath);
+        _error = "Failed to parse OPF file";
+        return false;
     }
     
-    // Build manifest map (id -> href)
-    std::vector<std::pair<String, String>> manifest;
-    std::vector<std::pair<String, String>> manifestMediaType;
+    // Clean up temp file
+    SD.remove(manifestPath);
     
-    int manifestStart = opf.indexOf("<manifest");
-    int manifestEnd = opf.indexOf("</manifest>");
-    if (manifestStart >= 0 && manifestEnd > manifestStart) {
-        String manifestSection = opf.substring(manifestStart, manifestEnd);
-        
-        int pos = 0;
-        while ((pos = manifestSection.indexOf("<item", pos)) >= 0) {
-            int itemEnd = manifestSection.indexOf(">", pos);
-            if (itemEnd < 0) break;
-            
-            String item = manifestSection.substring(pos, itemEnd + 1);
-            String id = extractAttribute(item, "id");
-            String href = extractAttribute(item, "href");
-            String mediaType = extractAttribute(item, "media-type");
-            
-            if (id.length() > 0 && href.length() > 0) {
-                manifest.push_back(std::make_pair(id, urlDecode(href)));
-                manifestMediaType.push_back(std::make_pair(id, mediaType));
-                
-                // Check for NCX
-                if (mediaType == "application/x-dtbncx+xml") {
-                    _ncxPath = resolvePath(_contentBasePath, href);
-                }
-                
-                // Check for cover image by id or properties
-                if (coverId.length() > 0 && id == coverId) {
-                    _coverImagePath = resolvePath(_contentBasePath, href);
-                    Serial.printf("[EPUB] Cover image from meta: %s\n", _coverImagePath.c_str());
-                }
-                // Also check for cover-image property (EPUB3)
-                String properties = extractAttribute(item, "properties");
-                if (properties.indexOf("cover-image") >= 0) {
-                    _coverImagePath = resolvePath(_contentBasePath, href);
-                    Serial.printf("[EPUB] Cover image from properties: %s\n", _coverImagePath.c_str());
-                }
-            }
-            
-            pos = itemEnd;
-        }
+    if (_metadata.spineCount == 0) {
+        _error = "No chapters found in spine";
+        Serial.println("[EPUB] Error: spine is empty!");
     }
     
-    // If no cover found by metadata, try common cover filenames
-    if (_coverImagePath.length() == 0) {
-        String commonCoverNames[] = {"cover.jpg", "cover.jpeg", "cover.png", "Cover.jpg", "Cover.jpeg", "images/cover.jpg"};
-        for (const String& name : commonCoverNames) {
-            String testPath = resolvePath(_contentBasePath, name);
-            if (fileExists(testPath)) {
-                _coverImagePath = testPath;
-                Serial.printf("[EPUB] Cover image by common name: %s\n", _coverImagePath.c_str());
-                break;
-            }
-        }
-    }
-    
-    // Parse spine to get reading order
-    int spineStart = opf.indexOf("<spine");
-    int spineEnd = opf.indexOf("</spine>");
-    if (spineStart >= 0 && spineEnd > spineStart) {
-        String spine = opf.substring(spineStart, spineEnd);
-        
-        int spineIndex = 0;
-        int pos = 0;
-        while ((pos = spine.indexOf("<itemref", pos)) >= 0) {
-            int itemEnd = spine.indexOf(">", pos);
-            if (itemEnd < 0) break;
-            
-            String itemref = spine.substring(pos, itemEnd + 1);
-            String idref = extractAttribute(itemref, "idref");
-            
-            // Look up in manifest
-            for (const auto& item : manifest) {
-                if (item.first == idref) {
-                    Chapter chapter;
-                    chapter.href = item.second;
-                    chapter.spineIndex = spineIndex;
-                    chapter.title = "Chapter " + String(spineIndex + 1);
-                    
-                    // Check for anchor
-                    int hashPos = chapter.href.indexOf('#');
-                    if (hashPos > 0) {
-                        chapter.anchor = chapter.href.substring(hashPos + 1);
-                        chapter.href = chapter.href.substring(0, hashPos);
-                    }
-                    
-                    _chapters.push_back(chapter);
-                    spineIndex++;
-                    break;
-                }
-            }
-            
-            pos = itemEnd;
-        }
-    }
-    
-    // Don't parse NCX here - let open() call it after parseOPF returns
-    // This reduces stack depth further
-    
-    return _chapters.size() > 0;
+    return _metadata.spineCount > 0;
 }
 
 // =============================================================================
-// NCX Parsing (Table of Contents)
+// NCX Parsing (EPUB 2 TOC)
 // =============================================================================
 
-bool EpubParser::parseNCX(const String& ncxPath) {
-    String ncx = readFile(ncxPath);
-    if (ncx.length() == 0) {
+bool EpubParser::parseNCX() {
+    Serial.printf("[EPUB] Parsing NCX: %s\n", _ncxPath.c_str());
+    
+    _currentDepth = 0;
+    memset(_currentTitle, 0, sizeof(_currentTitle));
+    memset(_currentHref, 0, sizeof(_currentHref));
+    
+    return streamParseFile(_ncxPath, EpubParserState::PARSING_NCX);
+}
+
+// =============================================================================
+// NAV Parsing (EPUB 3 TOC)
+// =============================================================================
+
+bool EpubParser::parseNAV() {
+    Serial.printf("[EPUB] Parsing NAV: %s\n", _navPath.c_str());
+    
+    _currentDepth = 0;
+    memset(_currentTitle, 0, sizeof(_currentTitle));
+    memset(_currentHref, 0, sizeof(_currentHref));
+    
+    return streamParseFile(_navPath, EpubParserState::PARSING_NAV);
+}
+
+// =============================================================================
+// Streaming Parse Core
+// =============================================================================
+
+bool EpubParser::streamParseFile(const String& innerPath, EpubParserState initialState) {
+    // Create Expat parser
+    if (_xmlParser) {
+        XML_ParserFree(_xmlParser);
+    }
+    _xmlParser = XML_ParserCreate(nullptr);
+    if (!_xmlParser) {
+        _error = "Failed to create XML parser";
         return false;
     }
     
-    // Find navMap
-    int navMapStart = ncx.indexOf("<navMap");
-    int navMapEnd = ncx.lastIndexOf("</navMap>");
-    if (navMapStart < 0 || navMapEnd < 0) {
+    XML_SetUserData(_xmlParser, this);
+    XML_SetElementHandler(_xmlParser, startElementHandler, endElementHandler);
+    XML_SetCharacterDataHandler(_xmlParser, characterDataHandler);
+    
+    _parserState = initialState;
+    memset(_currentElement, 0, sizeof(_currentElement));
+    
+    // Get file size
+    size_t fileSize = 0;
+    if (!_zip.getFileSize(innerPath, fileSize)) {
+        Serial.printf("[EPUB] File not found: %s\n", innerPath.c_str());
+        XML_ParserFree(_xmlParser);
+        _xmlParser = nullptr;
         return false;
     }
     
-    String navMap = ncx.substring(navMapStart, navMapEnd);
+    // Stream through parser in chunks
+    bool success = true;
+    size_t offset = 0;
+    size_t totalRead = 0;
     
-    // Parse navPoints
-    int pos = 0;
-    while ((pos = navMap.indexOf("<navPoint", pos)) >= 0) {
-        // Find the end of this navPoint
-        int contentStart = navMap.indexOf("<content", pos);
-        int textStart = navMap.indexOf("<text>", pos);
-        int textEnd = navMap.indexOf("</text>", textStart);
+    while (offset < fileSize) {
+        size_t toRead = min((size_t)EPUB_CHUNK_SIZE, fileSize - offset);
+        size_t bytesRead = _zip.readFileChunk(innerPath, offset, (uint8_t*)_tempBuffer, toRead);
         
-        if (contentStart < 0) break;
+        if (bytesRead == 0) break;
         
-        // Extract title
-        String title = "";
-        if (textStart >= 0 && textEnd > textStart) {
-            title = navMap.substring(textStart + 6, textEnd);
-            title.trim();
-            title = decodeEntities(title);
+        bool isFinal = (offset + bytesRead >= fileSize);
+        
+        if (XML_Parse(_xmlParser, _tempBuffer, bytesRead, isFinal) == XML_STATUS_ERROR) {
+            Serial.printf("[EPUB] XML error at line %lu: %s\n",
+                          XML_GetCurrentLineNumber(_xmlParser),
+                          XML_ErrorString(XML_GetErrorCode(_xmlParser)));
+            success = false;
+            break;
         }
         
-        // Extract src from content
-        int contentEnd = navMap.indexOf("/>", contentStart);
-        if (contentEnd < 0) contentEnd = navMap.indexOf(">", contentStart);
+        offset += bytesRead;
+        totalRead += bytesRead;
         
-        String contentTag = navMap.substring(contentStart, contentEnd + 1);
-        String src = extractAttribute(contentTag, "src");
-        src = urlDecode(src);
-        
-        // Create TOC entry
-        TocEntry entry;
-        entry.title = title;
-        entry.level = 0;
-        
-        // Split href and anchor
-        int hashPos = src.indexOf('#');
-        if (hashPos > 0) {
-            entry.href = src.substring(0, hashPos);
-            entry.anchor = src.substring(hashPos + 1);
-        } else {
-            entry.href = src;
+        // Yield every 8KB
+        if (totalRead % 8192 == 0) {
+            yield();
         }
-        
-        // Find matching chapter
-        entry.chapterIndex = -1;
-        for (int i = 0; i < (int)_chapters.size(); i++) {
-            if (_chapters[i].href == entry.href || 
-                _chapters[i].href.endsWith("/" + entry.href)) {
-                entry.chapterIndex = i;
-                
-                // Update chapter title from TOC
-                if (title.length() > 0) {
-                    _chapters[i].title = title;
+    }
+    
+    XML_ParserFree(_xmlParser);
+    _xmlParser = nullptr;
+    _parserState = EpubParserState::IDLE;
+    
+    return success;
+}
+
+// =============================================================================
+// Expat Callbacks
+// =============================================================================
+
+void XMLCALL EpubParser::startElementHandler(void* userData, const char* name, const char** atts) {
+    EpubParser* self = static_cast<EpubParser*>(userData);
+    self->handleStartElement(name, atts);
+}
+
+void XMLCALL EpubParser::endElementHandler(void* userData, const char* name) {
+    EpubParser* self = static_cast<EpubParser*>(userData);
+    self->handleEndElement(name);
+}
+
+void XMLCALL EpubParser::characterDataHandler(void* userData, const char* s, int len) {
+    EpubParser* self = static_cast<EpubParser*>(userData);
+    self->handleCharacterData(s, len);
+}
+
+const char* EpubParser::getAttr(const char** atts, const char* name) {
+    for (int i = 0; atts[i]; i += 2) {
+        if (strcmp(atts[i], name) == 0) {
+            return atts[i + 1];
+        }
+    }
+    return nullptr;
+}
+
+// =============================================================================
+// Element Handlers
+// =============================================================================
+
+void EpubParser::handleStartElement(const char* name, const char** atts) {
+    const char* localName = strrchr(name, ':');
+    localName = localName ? localName + 1 : name;
+    
+    strncpy(_currentElement, localName, sizeof(_currentElement) - 1);
+    
+    switch (_parserState) {
+        case EpubParserState::PARSING_CONTAINER:
+            if (strcmp(localName, "rootfile") == 0) {
+                const char* fullPath = getAttr(atts, "full-path");
+                if (fullPath) {
+                    _opfPath = fullPath;
                 }
-                break;
+            }
+            break;
+            
+        case EpubParserState::PARSING_OPF_METADATA:
+        case EpubParserState::PARSING_OPF_MANIFEST:
+        case EpubParserState::PARSING_OPF_SPINE:
+            handleOPFElement(localName, atts);
+            break;
+            
+        case EpubParserState::PARSING_NCX:
+            handleNCXElement(localName, atts);
+            break;
+            
+        case EpubParserState::PARSING_NAV:
+            handleNAVElement(localName, atts);
+            break;
+            
+        default:
+            break;
+    }
+}
+
+void EpubParser::handleEndElement(const char* name) {
+    const char* localName = strrchr(name, ':');
+    localName = localName ? localName + 1 : name;
+    
+    switch (_parserState) {
+        case EpubParserState::PARSING_OPF_METADATA:
+        case EpubParserState::PARSING_OPF_MANIFEST:
+        case EpubParserState::PARSING_OPF_SPINE:
+            handleOPFEndElement(localName);
+            break;
+            
+        case EpubParserState::PARSING_NCX:
+            handleNCXEndElement(localName);
+            break;
+            
+        case EpubParserState::PARSING_NAV:
+            handleNAVEndElement(localName);
+            break;
+            
+        default:
+            break;
+    }
+    
+    memset(_currentElement, 0, sizeof(_currentElement));
+}
+
+void EpubParser::handleCharacterData(const char* s, int len) {
+    if (_parserState == EpubParserState::PARSING_OPF_METADATA) {
+        if (strcmp(_currentElement, "title") == 0 && strlen(_metadata.title) == 0) {
+            size_t currentLen = strlen(_metadata.title);
+            size_t copyLen = min((size_t)len, MAX_TITLE_LEN - currentLen - 1);
+            strncat(_metadata.title, s, copyLen);
+        }
+        else if ((strcmp(_currentElement, "creator") == 0 || 
+                  strcmp(_currentElement, "author") == 0) && 
+                 strlen(_metadata.author) == 0) {
+            size_t currentLen = strlen(_metadata.author);
+            size_t copyLen = min((size_t)len, MAX_AUTHOR_LEN - currentLen - 1);
+            strncat(_metadata.author, s, copyLen);
+        }
+        else if (strcmp(_currentElement, "language") == 0 && strlen(_metadata.language) == 0) {
+            size_t copyLen = min((size_t)len, sizeof(_metadata.language) - 1);
+            strncat(_metadata.language, s, copyLen);
+        }
+    }
+    else if (_parserState == EpubParserState::PARSING_NCX) {
+        if (strcmp(_currentElement, "text") == 0) {
+            size_t currentLen = strlen(_currentTitle);
+            size_t copyLen = min((size_t)len, sizeof(_currentTitle) - currentLen - 1);
+            strncat(_currentTitle, s, copyLen);
+        }
+    }
+    else if (_parserState == EpubParserState::PARSING_NAV) {
+        if (strcmp(_currentElement, "a") == 0 && strlen(_currentHref) > 0) {
+            size_t currentLen = strlen(_currentTitle);
+            size_t copyLen = min((size_t)len, sizeof(_currentTitle) - currentLen - 1);
+            strncat(_currentTitle, s, copyLen);
+        }
+    }
+}
+
+// =============================================================================
+// OPF Handlers
+// =============================================================================
+
+void EpubParser::handleOPFElement(const char* name, const char** atts) {
+    if (strcmp(name, "metadata") == 0) {
+        _inMetadata = true;
+        _parserState = EpubParserState::PARSING_OPF_METADATA;
+    }
+    else if (strcmp(name, "manifest") == 0) {
+        _inManifest = true;
+        _parserState = EpubParserState::PARSING_OPF_MANIFEST;
+    }
+    else if (strcmp(name, "spine") == 0) {
+        // Close manifest file before spine parsing so findManifestItem can read it
+        if (_manifestFile) {
+            _manifestFile.close();
+        }
+        _inSpine = true;
+        _parserState = EpubParserState::PARSING_OPF_SPINE;
+    }
+    else if (strcmp(name, "item") == 0 && _inManifest) {
+        ManifestItem item;
+        item.clear();
+        
+        const char* id = getAttr(atts, "id");
+        const char* href = getAttr(atts, "href");
+        const char* mediaType = getAttr(atts, "media-type");
+        const char* properties = getAttr(atts, "properties");
+        
+        if (id) strncpy(item.id, id, sizeof(item.id) - 1);
+        if (href) strncpy(item.href, urlDecode(href).c_str(), sizeof(item.href) - 1);
+        if (mediaType) strncpy(item.mediaType, mediaType, sizeof(item.mediaType) - 1);
+        if (properties) strncpy(item.properties, properties, sizeof(item.properties) - 1);
+        
+        // Check for NCX
+        if (mediaType && strcmp(mediaType, "application/x-dtbncx+xml") == 0) {
+            _ncxPath = resolvePath(_contentBasePath, item.href);
+        }
+        
+        // Check for NAV
+        if (properties && strstr(properties, "nav") != nullptr) {
+            _navPath = resolvePath(_contentBasePath, item.href);
+        }
+        
+        // Check for cover image
+        if (properties && strstr(properties, "cover-image") != nullptr) {
+            strncpy(_metadata.coverHref, 
+                    resolvePath(_contentBasePath, item.href).c_str(),
+                    MAX_HREF_LEN - 1);
+        }
+        
+        // Write to temp file
+        if (_manifestFile) {
+            _manifestFile.write((uint8_t*)&item, sizeof(ManifestItem));
+            _manifestCount++;
+            if (_manifestCount <= 5 || _manifestCount % 20 == 0) {
+                Serial.printf("[EPUB] Manifest item %d: id=%s href=%s\n", 
+                             _manifestCount, item.id, item.href);
             }
         }
+    }
+    else if (strcmp(name, "itemref") == 0 && _inSpine) {
+        const char* idref = getAttr(atts, "idref");
+        if (idref) {
+            Serial.printf("[EPUB] Spine itemref: %s\n", idref);
+            ManifestItem item;
+            if (findManifestItem(idref, item)) {
+                String fullPath = resolvePath(_contentBasePath, item.href);
+                
+                size_t fileSize = 0;
+                _zip.getFileSize(fullPath, fileSize);
+                
+                _metadata.addSpineEntry(fullPath.c_str(), fileSize);
+                Serial.printf("[EPUB] Added spine: %s (%d bytes)\n", fullPath.c_str(), fileSize);
+            } else {
+                Serial.printf("[EPUB] Manifest item not found: %s\n", idref);
+            }
+        }
+    }
+    else if (strcmp(name, "meta") == 0 && _inMetadata) {
+        const char* nameAttr = getAttr(atts, "name");
+        const char* content = getAttr(atts, "content");
         
-        if (entry.chapterIndex >= 0) {
-            _toc.push_back(entry);
+        if (nameAttr && content && strcmp(nameAttr, "cover") == 0) {
+            strncpy(_currentId, content, sizeof(_currentId) - 1);
+        }
+    }
+}
+
+void EpubParser::handleOPFEndElement(const char* name) {
+    if (strcmp(name, "metadata") == 0) {
+        _inMetadata = false;
+        
+        if (strlen(_currentId) > 0 && strlen(_metadata.coverHref) == 0) {
+            ManifestItem item;
+            if (findManifestItem(_currentId, item)) {
+                strncpy(_metadata.coverHref,
+                        resolvePath(_contentBasePath, item.href).c_str(),
+                        MAX_HREF_LEN - 1);
+            }
+            memset(_currentId, 0, sizeof(_currentId));
+        }
+    }
+    else if (strcmp(name, "manifest") == 0) {
+        _inManifest = false;
+    }
+    else if (strcmp(name, "spine") == 0) {
+        _inSpine = false;
+    }
+}
+
+// =============================================================================
+// NCX Handlers
+// =============================================================================
+
+void EpubParser::handleNCXElement(const char* name, const char** atts) {
+    if (strcmp(name, "navPoint") == 0) {
+        _currentDepth++;
+        memset(_currentTitle, 0, sizeof(_currentTitle));
+        memset(_currentHref, 0, sizeof(_currentHref));
+    }
+    else if (strcmp(name, "content") == 0) {
+        const char* src = getAttr(atts, "src");
+        if (src) {
+            const char* hash = strchr(src, '#');
+            if (hash) {
+                size_t hrefLen = hash - src;
+                strncpy(_currentHref, src, min(hrefLen, sizeof(_currentHref) - 1));
+            } else {
+                strncpy(_currentHref, src, sizeof(_currentHref) - 1);
+            }
+        }
+    }
+}
+
+void EpubParser::handleNCXEndElement(const char* name) {
+    if (strcmp(name, "navPoint") == 0) {
+        if (strlen(_currentTitle) > 0 && strlen(_currentHref) > 0) {
+            String fullPath = resolvePath(_contentBasePath, urlDecode(_currentHref));
+            
+            const char* anchor = nullptr;
+            int hashPos = fullPath.indexOf('#');
+            String anchorStr;
+            if (hashPos > 0) {
+                anchorStr = fullPath.substring(hashPos + 1);
+                anchor = anchorStr.c_str();
+                fullPath = fullPath.substring(0, hashPos);
+            }
+            
+            _metadata.addTocEntry(_currentTitle, fullPath.c_str(), anchor, _currentDepth - 1);
         }
         
-        pos = contentEnd;
+        _currentDepth--;
+        memset(_currentTitle, 0, sizeof(_currentTitle));
+        memset(_currentHref, 0, sizeof(_currentHref));
+    }
+}
+
+// =============================================================================
+// NAV Handlers (EPUB 3)
+// =============================================================================
+
+void EpubParser::handleNAVElement(const char* name, const char** atts) {
+    if (strcmp(name, "ol") == 0) {
+        _currentDepth++;
+    }
+    else if (strcmp(name, "a") == 0) {
+        memset(_currentTitle, 0, sizeof(_currentTitle));
+        const char* href = getAttr(atts, "href");
+        if (href) {
+            strncpy(_currentHref, href, sizeof(_currentHref) - 1);
+        }
+    }
+}
+
+void EpubParser::handleNAVEndElement(const char* name) {
+    if (strcmp(name, "ol") == 0) {
+        _currentDepth--;
+    }
+    else if (strcmp(name, "a") == 0) {
+        if (strlen(_currentTitle) > 0 && strlen(_currentHref) > 0) {
+            String fullPath = resolvePath(_contentBasePath, urlDecode(_currentHref));
+            
+            const char* anchor = nullptr;
+            int hashPos = fullPath.indexOf('#');
+            String anchorStr;
+            if (hashPos > 0) {
+                anchorStr = fullPath.substring(hashPos + 1);
+                anchor = anchorStr.c_str();
+                fullPath = fullPath.substring(0, hashPos);
+            }
+            
+            _metadata.addTocEntry(_currentTitle, fullPath.c_str(), anchor, _currentDepth - 1);
+        }
+        memset(_currentHref, 0, sizeof(_currentHref));
+    }
+}
+
+// =============================================================================
+// Manifest Lookup
+// =============================================================================
+
+bool EpubParser::findManifestItem(const char* id, ManifestItem& out) {
+    String manifestPath = "/.sumi/temp_manifest.bin";
+    File f = SD.open(manifestPath, FILE_READ);
+    if (!f) return false;
+    
+    ManifestItem item;
+    while (f.read((uint8_t*)&item, sizeof(ManifestItem)) == sizeof(ManifestItem)) {
+        if (strcmp(item.id, id) == 0) {
+            out = item;
+            f.close();
+            return true;
+        }
     }
     
-    Serial.printf("[EPUB] Parsed NCX: %d TOC entries\n", (int)_toc.size());
+    f.close();
+    return false;
+}
+
+// =============================================================================
+// Chapter Access
+// =============================================================================
+
+const Chapter& EpubParser::getChapter(int index) const {
+    static Chapter empty;
+    
+    if (!_isOpen || index < 0 || index >= _metadata.spineCount) {
+        return empty;
+    }
+    
+    const SpineEntry& spine = _metadata.spine[index];
+    
+    _tempChapter.href = spine.href;
+    _tempChapter.size = spine.size;
+    _tempChapter.spineIndex = index;
+    
+    // Get title from TOC if available
+    int tocIdx = _metadata.getTocIndexForSpine(index);
+    if (tocIdx >= 0) {
+        _tempChapter.title = _metadata.toc[tocIdx].title;
+        _tempChapter.anchor = _metadata.toc[tocIdx].anchor;
+    } else {
+        _tempChapter.title = "Chapter " + String(index + 1);
+        _tempChapter.anchor = "";
+    }
+    
+    return _tempChapter;
+}
+
+bool EpubParser::streamChapterToFile(int chapterIndex, const String& outputPath) {
+    if (!_isOpen || chapterIndex < 0 || chapterIndex >= _metadata.spineCount) {
+        _error = "Invalid chapter index";
+        return false;
+    }
+    
+    const SpineEntry& entry = _metadata.spine[chapterIndex];
+    
+    MEM_LOG("stream_chapter_start");
+    
+    if (_sourceType == EpubSourceType::FOLDER) {
+        return streamFolderFileToFile(entry.href, outputPath);
+    }
+    
+    // Check if ZIP is still open
+    if (!_zip.isOpen()) {
+        if (!_zip.open(_path)) {
+            _error = "Failed to reopen ZIP: " + _zip.getError();
+            MEM_LOG("stream_chapter_end");
+            return false;
+        }
+    }
+    
+    SD.mkdir("/.sumi");
+    
+    File outFile = SD.open(outputPath, FILE_WRITE);
+    if (!outFile) {
+        _error = "Failed to create output file: " + outputPath;
+        MEM_LOG("stream_chapter_end");
+        return false;
+    }
+    
+    bool success = _zip.streamFileTo(entry.href, outFile, EPUB_CHUNK_SIZE);
+    size_t fileSize = outFile.size();
+    outFile.close();
+    
+    if (!success) {
+        _error = "Failed to stream from ZIP: " + _zip.getError();
+        SD.remove(outputPath);
+    } else {
+        Serial.printf("[EPUB] Streamed ch%d: %d bytes\n", chapterIndex, fileSize);
+    }
+    
+    MEM_LOG("stream_chapter_end");
+    
+    return success;
+}
+
+bool EpubParser::streamFolderFileToFile(const String& innerPath, const String& outputPath) {
+    String srcPath = _path + "/" + innerPath;
+    
+    File src = SD.open(srcPath, FILE_READ);
+    if (!src) {
+        _error = "Failed to open: " + srcPath;
+        return false;
+    }
+    
+    File dst = SD.open(outputPath, FILE_WRITE);
+    if (!dst) {
+        src.close();
+        _error = "Failed to create: " + outputPath;
+        return false;
+    }
+    
+    uint8_t buffer[1024];
+    while (src.available()) {
+        size_t read = src.read(buffer, sizeof(buffer));
+        if (read > 0) {
+            dst.write(buffer, read);
+        }
+        yield();
+    }
+    
+    src.close();
+    dst.close();
     return true;
 }
 
-// =============================================================================
-// File Reading (handles both ZIP and folder)
-// =============================================================================
-
-String EpubParser::readFile(const String& relativePath) {
-    if (_sourceType == EpubSourceType::ZIP_FILE) {
-        return readFileFromZip(relativePath);
-    } else {
-        return readFileFromFolder(relativePath);
+bool EpubParser::extractCoverImage(const String& outputPath) {
+    if (!_isOpen || strlen(_metadata.coverHref) == 0) {
+        _error = "No cover image available";
+        return false;
     }
+    
+    return extractImage(_metadata.coverHref, outputPath);
 }
 
-String EpubParser::readFileFromZip(const String& innerPath) {
-    if (!epubZip.isOpen()) {
-        _error = "ZIP not open";
-        return "";
+bool EpubParser::extractImage(const String& imagePath, const String& outputPath) {
+    if (!_isOpen) return false;
+    
+    String resolvedPath = imagePath;
+    if (!imagePath.startsWith("/") && !imagePath.startsWith(_contentBasePath)) {
+        resolvedPath = _contentBasePath + imagePath;
     }
     
-    String content = epubZip.readFile(innerPath.c_str());
-    if (content.length() == 0) {
-        // Try without leading slash
-        if (innerPath.startsWith("/")) {
-            content = epubZip.readFile(innerPath.substring(1).c_str());
-        }
+    if (_sourceType == EpubSourceType::FOLDER) {
+        return streamFolderFileToFile(resolvedPath, outputPath);
     }
     
-    if (content.length() == 0) {
-        Serial.printf("[EPUB] Failed to read from ZIP: %s\n", innerPath.c_str());
+    File outFile = SD.open(outputPath, FILE_WRITE);
+    if (!outFile) {
+        _error = "Failed to create image file";
+        return false;
     }
     
-    return content;
+    bool success = _zip.streamFileTo(resolvedPath, outFile, 1024);
+    outFile.close();
+    
+    if (!success) {
+        _error = "Failed to extract image: " + _zip.getError();
+        SD.remove(outputPath);
+    }
+    
+    return success;
 }
 
-String EpubParser::readFileFromFolder(const String& relativePath) {
-    String fullPath = _path + "/" + relativePath;
+// =============================================================================
+// TOC Access
+// =============================================================================
+
+const TocEntry& EpubParser::getTocEntry(int index) const {
+    if (index >= 0 && index < _metadata.tocCount) {
+        return _metadata.toc[index];
+    }
+    return _emptyTocEntry;
+}
+
+int EpubParser::getChapterForToc(int tocIndex) const {
+    if (tocIndex >= 0 && tocIndex < _metadata.tocCount) {
+        return _metadata.toc[tocIndex].spineIndex;
+    }
+    return 0;
+}
+
+// =============================================================================
+// DEPRECATED Methods (compatibility only)
+// =============================================================================
+
+String EpubParser::getChapterText(int chapterIndex) {
+    Serial.println("[EPUB] WARNING: getChapterText() is deprecated - use streamChapterToFile()");
+    MEM_LOG("deprecated_getChapterText");
     
-    File file = SD.open(fullPath, FILE_READ);
-    if (!file) {
-        Serial.printf("[EPUB] Cannot open: %s\n", fullPath.c_str());
+    // Stream to temp, read back, delete - inefficient but compatible
+    if (!streamChapterToFile(chapterIndex, TEMP_HTML_PATH)) {
         return "";
     }
     
-    size_t size = file.size();
-    if (size > 512 * 1024) {  // 512KB limit
-        Serial.printf("[EPUB] File too large: %s (%d bytes)\n", fullPath.c_str(), (int)size);
-        file.close();
-        return "";
-    }
+    File f = SD.open(TEMP_HTML_PATH, FILE_READ);
+    if (!f) return "";
     
+    // Only read up to 32KB to avoid memory issues
+    size_t maxRead = min((size_t)32768, (size_t)f.size());
     String content;
-    content.reserve(size);
+    content.reserve(maxRead);
     
-    while (file.available()) {
-        content += (char)file.read();
+    while (f.available() && content.length() < maxRead) {
+        content += (char)f.read();
+    }
+    f.close();
+    SD.remove(TEMP_HTML_PATH);
+    
+    // Strip HTML tags (simple version)
+    String text;
+    text.reserve(content.length());
+    bool inTag = false;
+    for (size_t i = 0; i < content.length(); i++) {
+        char c = content[i];
+        if (c == '<') inTag = true;
+        else if (c == '>') inTag = false;
+        else if (!inTag) text += c;
     }
     
-    file.close();
+    return text;
+}
+
+String EpubParser::getChapterHTML(int chapterIndex) {
+    Serial.println("[EPUB] WARNING: getChapterHTML() is deprecated - use streamChapterToFile()");
+    MEM_LOG("deprecated_getChapterHTML");
+    
+    if (!streamChapterToFile(chapterIndex, TEMP_HTML_PATH)) {
+        return "";
+    }
+    
+    File f = SD.open(TEMP_HTML_PATH, FILE_READ);
+    if (!f) return "";
+    
+    size_t maxRead = min((size_t)32768, (size_t)f.size());
+    String content;
+    content.reserve(maxRead);
+    
+    while (f.available() && content.length() < maxRead) {
+        content += (char)f.read();
+    }
+    f.close();
+    SD.remove(TEMP_HTML_PATH);
+    
     return content;
 }
 
-bool EpubParser::fileExists(const String& relativePath) {
-    if (_sourceType == EpubSourceType::ZIP_FILE) {
-        return epubZip.hasFile(relativePath);
-    } else {
-        String fullPath = _path + "/" + relativePath;
-        return SD.exists(fullPath);
-    }
+String EpubParser::getAllText() {
+    // This function was CATASTROPHIC - tried to load entire book to RAM
+    Serial.println("[EPUB] getAllText() is deprecated - use streamChapterToFile() instead");
+    Serial.println("[EPUB] Use streamChapterToFile() and process chapters individually");
+    return "[Chapter content - use streaming methods]";
 }
 
 // =============================================================================
-// HTML Processing
-// =============================================================================
-
-String EpubParser::extractTextFromHTML(const String& html) {
-    String body = extractBody(html);
-    String stripped = stripTags(body);
-    String decoded = decodeEntities(stripped);
-    return normalizeWhitespace(decoded);
-}
-
-String EpubParser::extractBody(const String& html) {
-    int bodyStart = html.indexOf("<body");
-    if (bodyStart < 0) {
-        return html;
-    }
-    
-    int bodyTagEnd = html.indexOf('>', bodyStart);
-    int bodyEnd = html.lastIndexOf("</body>");
-    
-    if (bodyTagEnd >= 0 && bodyEnd > bodyTagEnd) {
-        return html.substring(bodyTagEnd + 1, bodyEnd);
-    }
-    
-    return html.substring(bodyTagEnd + 1);
-}
-
-String EpubParser::stripTags(const String& html) {
-    String result;
-    result.reserve(html.length());
-    
-    bool inTag = false;
-    bool inScript = false;
-    bool inStyle = false;
-    
-    for (int i = 0; i < (int)html.length(); i++) {
-        char c = html[i];
-        
-        if (c == '<') {
-            inTag = true;
-            
-            String upcoming = html.substring(i, min((int)html.length(), i + 10));
-            upcoming.toLowerCase();
-            if (upcoming.startsWith("<script")) inScript = true;
-            if (upcoming.startsWith("<style")) inStyle = true;
-            if (upcoming.startsWith("</script")) inScript = false;
-            if (upcoming.startsWith("</style")) inStyle = false;
-            
-            if (upcoming.startsWith("<p") || upcoming.startsWith("<div") ||
-                upcoming.startsWith("<br") || upcoming.startsWith("<h") ||
-                upcoming.startsWith("</p") || upcoming.startsWith("</div") ||
-                upcoming.startsWith("</h")) {
-                result += ' ';
-            }
-        } else if (c == '>') {
-            inTag = false;
-        } else if (!inTag && !inScript && !inStyle) {
-            result += c;
-        }
-    }
-    
-    return result;
-}
-
-String EpubParser::decodeEntities(const String& text) {
-    return decodeHtmlEntities(text);
-}
-
-String EpubParser::normalizeWhitespace(const String& text) {
-    String result;
-    result.reserve(text.length());
-    
-    bool lastWasSpace = true;
-    
-    for (int i = 0; i < (int)text.length(); i++) {
-        char c = text[i];
-        bool isSpace = (c == ' ' || c == '\t' || c == '\n' || c == '\r');
-        
-        if (isSpace) {
-            if (!lastWasSpace) {
-                result += ' ';
-            }
-            lastWasSpace = true;
-        } else {
-            result += c;
-            lastWasSpace = false;
-        }
-    }
-    
-    result.trim();
-    return result;
-}
-
-// =============================================================================
-// Path Helpers
+// Path Utilities
 // =============================================================================
 
 String EpubParser::resolvePath(const String& base, const String& relative) {
@@ -713,17 +1084,12 @@ String EpubParser::resolvePath(const String& base, const String& relative) {
 String EpubParser::normalizePath(const String& path) {
     String result = path;
     
-    // CRITICAL: Convert all backslashes to forward slashes FIRST
-    // Windows-created EPUBs use backslashes internally
     result.replace("\\", "/");
-    
-    // Remove ./ sequences
     result.replace("/./", "/");
     if (result.startsWith("./")) {
         result = result.substring(2);
     }
     
-    // Resolve ../ sequences
     int pos;
     while ((pos = result.indexOf("/../")) >= 0) {
         int prevSlash = result.lastIndexOf('/', pos - 1);
@@ -734,12 +1100,10 @@ String EpubParser::normalizePath(const String& path) {
         }
     }
     
-    // Remove double slashes
     while (result.indexOf("//") >= 0) {
         result.replace("//", "/");
     }
     
-    // Remove leading slash if present
     if (result.startsWith("/")) {
         result = result.substring(1);
     }
@@ -751,9 +1115,9 @@ String EpubParser::urlDecode(const String& path) {
     String result;
     result.reserve(path.length());
     
-    for (int i = 0; i < (int)path.length(); i++) {
+    for (size_t i = 0; i < path.length(); i++) {
         char c = path[i];
-        if (c == '%' && i + 2 < (int)path.length()) {
+        if (c == '%' && i + 2 < path.length()) {
             char hex[3] = {path[i+1], path[i+2], 0};
             int value = strtol(hex, nullptr, 16);
             result += (char)value;
@@ -768,96 +1132,6 @@ String EpubParser::urlDecode(const String& path) {
     return result;
 }
 
-String EpubParser::extractAttribute(const String& tag, const char* attrName) {
-    String search = String(attrName) + "=\"";
-    int attrStart = tag.indexOf(search);
-    if (attrStart < 0) {
-        search = String(attrName) + "='";
-        attrStart = tag.indexOf(search);
-    }
-    
-    if (attrStart < 0) {
-        return "";
-    }
-    
-    int valueStart = attrStart + search.length();
-    char quote = tag[valueStart - 1];
-    int valueEnd = tag.indexOf(quote, valueStart);
-    
-    if (valueEnd < 0) {
-        return "";
-    }
-    
-    return tag.substring(valueStart, valueEnd);
-}
-
-// =============================================================================
-// Cover Image Extraction
-// =============================================================================
-
-bool EpubParser::extractCoverImage(const String& outputPath) {
-    if (_coverImagePath.length() == 0) {
-        _error = "No cover image found in EPUB";
-        Serial.println("[EPUB] No cover image to extract");
-        return false;
-    }
-    
-    Serial.printf("[EPUB] Extracting cover: %s -> %s\n", _coverImagePath.c_str(), outputPath.c_str());
-    
-    // Ensure output directory exists
-    int lastSlash = outputPath.lastIndexOf('/');
-    if (lastSlash > 0) {
-        String dir = outputPath.substring(0, lastSlash);
-        if (!SD.exists(dir)) {
-            SD.mkdir(dir);
-        }
-    }
-    
-    // Open output file
-    File outFile = SD.open(outputPath, FILE_WRITE);
-    if (!outFile) {
-        _error = "Failed to open output file: " + outputPath;
-        Serial.printf("[EPUB] %s\n", _error.c_str());
-        return false;
-    }
-    
-    bool success = false;
-    
-    if (_sourceType == EpubSourceType::ZIP_FILE) {
-        // Stream from ZIP to file
-        success = epubZip.streamFileTo(_coverImagePath, outFile, 1024);
-        if (!success) {
-            _error = "Failed to extract cover from ZIP: " + epubZip.getError();
-        }
-    } else {
-        // Copy from folder
-        String srcPath = _path + "/" + _coverImagePath;
-        File srcFile = SD.open(srcPath, FILE_READ);
-        if (srcFile) {
-            uint8_t buffer[1024];
-            while (srcFile.available()) {
-                size_t read = srcFile.read(buffer, sizeof(buffer));
-                outFile.write(buffer, read);
-            }
-            srcFile.close();
-            success = true;
-        } else {
-            _error = "Failed to open cover file: " + srcPath;
-        }
-    }
-    
-    outFile.close();
-    
-    if (success) {
-        Serial.printf("[EPUB] Cover extracted successfully\n");
-    } else {
-        Serial.printf("[EPUB] Cover extraction failed: %s\n", _error.c_str());
-        SD.remove(outputPath);  // Clean up failed file
-    }
-    
-    return success;
-}
-
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -868,5 +1142,7 @@ bool isValidEpubFolder(const String& path) {
 }
 
 bool isEpubFile(const String& path) {
-    return path.endsWith(".epub") || path.endsWith(".EPUB");
+    String lower = path;
+    lower.toLowerCase();
+    return lower.endsWith(".epub");
 }

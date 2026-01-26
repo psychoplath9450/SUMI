@@ -1,7 +1,10 @@
 /**
  * @file AppLauncher.cpp
- * @brief App launching implementation
- * @version 2.1.16
+ * @brief App launching with on-demand memory allocation
+ * @version 1.4.2
+ * 
+ * All plugins are allocated when opened and freed when closed.
+ * This saves ~40KB+ of RAM when plugins aren't in use.
  */
 
 #include "core/AppLauncher.h"
@@ -10,29 +13,26 @@
 #include "core/ButtonInput.h"
 #include "core/PluginRunner.h"
 #include "core/SettingsState.h"
+#include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 
 // External state from main.cpp
 enum Screen { SCREEN_HOME, SCREEN_SETTINGS };
 extern Screen currentScreen;
 
-// Plugin instances (extern - defined in src/plugins/*.cpp)
+// Plugin headers only - no global instances!
 #if FEATURE_READER
 #include "plugins/Library.h"
-extern LibraryApp libraryApp;
 #endif
 
 #if FEATURE_FLASHCARDS
 #include "plugins/Flashcards.h"
-extern FlashcardsApp flashcardsApp;
 #endif
 
-// Weather - uses FEATURE_WEATHER (separate from games)
 #if FEATURE_WEATHER
 #include "plugins/Weather.h"
-extern WeatherApp weatherApp;
 #endif
 
-// Games and productivity plugins - only when FEATURE_GAMES is enabled
 #if FEATURE_GAMES
 #include "plugins/Notes.h"
 #include "plugins/ChessGame.h"
@@ -45,18 +45,6 @@ extern WeatherApp weatherApp;
 #include "plugins/Maps.h"
 #include "plugins/ToolSuite.h"
 #include "plugins/Cube3D.h"
-
-extern NotesApp notesApp;
-extern ChessGame chessGame;
-extern CheckersGame checkersGame;
-extern SudokuGame sudokuGame;
-extern MinesweeperGame minesweeperGame;
-extern SolitaireGame solitaireGame;
-extern TodoApp todoApp;
-extern ImagesApp imagesApp;
-extern MapsApp mapsApp;
-extern ToolSuiteApp toolSuiteApp;
-extern Cube3DApp cube3DApp;
 #endif
 
 // For placeholder app fallback
@@ -66,14 +54,16 @@ static Button lastButton = BTN_NONE;
 void showHomeScreen();
 
 // =============================================================================
-// App Launcher
+// App Launcher - All plugins allocated on-demand, freed on exit
 // =============================================================================
 void openAppByItemIndex(uint8_t itemIndex) {
     const HomeItemInfo* itemInfo = getHomeItemByIndex(itemIndex);
     const char* appName = itemInfo ? itemInfo->label : "Unknown";
     
     Serial.printf("[APP] Opening: %s (index=%d)\n", appName, itemIndex);
+    Serial.printf("[APP] Free heap: %d\n", ESP.getFreeHeap());
     
+    // Settings screen (part of core, not allocated)
     if (itemIndex == HOME_ITEM_SETTINGS) {
         currentScreen = SCREEN_SETTINGS;
         settingsInit();
@@ -81,75 +71,103 @@ void openAppByItemIndex(uint8_t itemIndex) {
         return;
     }
     
-    // Library - always available with FEATURE_READER
+    // Library - allocated on demand, handles its own display refresh
 #if FEATURE_READER
     if (itemIndex == HOME_ITEM_LIBRARY) {
-        runPluginSimple(libraryApp, "Library");
+        // Library needs ~35KB contiguous block. Check before attempting allocation.
+        size_t freeHeap = ESP.getFreeHeap();
+        size_t maxBlock = ESP.getMaxAllocHeap();
+        Serial.printf("[APP] Memory check: free=%d, maxBlock=%d\n", freeHeap, maxBlock);
+        
+        if (maxBlock < 35000) {
+            Serial.println("[APP] ERROR: Not enough contiguous memory for Library!");
+            Serial.println("[APP] Try rebooting the device to defragment memory.");
+            // Show message on screen
+            display.setFullWindow();
+            display.firstPage();
+            do {
+                display.fillScreen(GxEPD_WHITE);
+                display.setFont(&FreeSansBold12pt7b);
+                display.setTextColor(GxEPD_BLACK);
+                display.setCursor(40, 200);
+                display.print("Memory fragmented");
+                display.setCursor(40, 240);
+                display.setFont(&FreeSans9pt7b);
+                display.print("Please reboot to continue.");
+                display.setCursor(40, 280);
+                display.print("(Hold power button)");
+            } while (display.nextPage());
+            delay(3000);
+            showHomeScreen();
+            return;
+        }
+        
+        runPluginAllocDirect<LibraryApp>("Library");
         return;
     }
 #endif
 
-    // Flashcards - separate feature
+    // Flashcards - allocated on demand
 #if FEATURE_FLASHCARDS
     if (itemIndex == HOME_ITEM_FLASHCARDS) {
-        runPluginSimple(flashcardsApp, "Flashcards");
+        runPluginAllocSimple<FlashcardsApp>("Flashcards");
         return;
     }
 #endif
 
-    // Weather - separate feature (requires WiFi for API)
+    // Weather - allocated on demand
 #if FEATURE_WEATHER
     if (itemIndex == HOME_ITEM_WEATHER) {
-        runPluginSelfRefresh(weatherApp, "Weather");
+        runPluginAllocSelfRefresh<WeatherApp>("Weather");
         return;
     }
 #endif
 
-    // Games and productivity plugins - only when FEATURE_GAMES is enabled
+    // Games and productivity - all allocated on demand
 #if FEATURE_GAMES
     switch (itemIndex) {
         case HOME_ITEM_NOTES:
-            runPluginSimple(notesApp, "Notes");
+            runPluginAllocSimple<NotesApp>("Notes");
             return;
             
-        // Games (turn-based, e-ink friendly)
         case HOME_ITEM_CHESS:
-            runPluginSelfRefresh(chessGame, "Chess");
+            runPluginAllocSelfRefresh<ChessGame>("Chess");
             return;
+            
         case HOME_ITEM_CHECKERS:
-            runPluginSimple(checkersGame, "Checkers");
+            runPluginAllocSimple<CheckersGame>("Checkers");
             return;
+            
         case HOME_ITEM_SUDOKU:
-            runPluginSimple(sudokuGame, "Sudoku");
+            runPluginAllocSimple<SudokuGame>("Sudoku");
             return;
+            
         case HOME_ITEM_MINESWEEPER:
-            runPluginSimple(minesweeperGame, "Minesweeper");
+            runPluginAllocSimple<MinesweeperGame>("Minesweeper");
             return;
+            
         case HOME_ITEM_SOLITAIRE:
-            runPluginSimple(solitaireGame, "Solitaire");
+            runPluginAllocSimple<SolitaireGame>("Solitaire");
             return;
         
-        // 3D Animation Demo
         case HOME_ITEM_CUBE3D:
-            runPluginAnimation(cube3DApp, "Demo");
+            runPluginAllocAnimation<Cube3DApp>("Demo");
             return;
             
-        // Productivity
         case HOME_ITEM_TODO:
-            runPluginSimple(todoApp, "To-Do");
+            runPluginAllocSimple<TodoApp>("To-Do");
             return;
             
-        // Media
         case HOME_ITEM_IMAGES:
-            runPluginSimple(imagesApp, "Images");
-            return;
-        case HOME_ITEM_MAPS:
-            runPluginSimple(mapsApp, "Maps");
+            runPluginAllocSimple<ImagesApp>("Images");
             return;
             
-        // ToolSuite (consolidated tools)
+        case HOME_ITEM_MAPS:
+            runPluginAllocSimple<MapsApp>("Maps");
+            return;
+            
         case HOME_ITEM_TOOLS:
-            runPluginSelfRefresh(toolSuiteApp, "Tools");
+            runPluginAllocSelfRefresh<ToolSuiteApp>("Tools");
             return;
             
         default:
@@ -157,7 +175,7 @@ void openAppByItemIndex(uint8_t itemIndex) {
     }
 #endif
     
-    // Fallback - show placeholder
+    // Fallback - show placeholder for unimplemented apps
     currentScreen = SCREEN_HOME;
     showAppPlaceholder(appName);
     

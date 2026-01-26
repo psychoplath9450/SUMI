@@ -1,6 +1,26 @@
 # Writing Plugins for Sumi
 
-Plugins are self-contained apps that run from the home screen. Each one handles its own drawing, button input, and state.
+Plugins are self-contained apps that run from the home screen. Each one handles its own drawing, button input, and state. Plugins are allocated when opened and freed when closed to save RAM.
+
+## Memory Model
+
+Plugins are **not** global instances. They're allocated on-demand:
+
+```
+User taps "Chess" on home screen
+    ↓
+AppLauncher calls: runPluginAllocSimple<ChessGame>("Chess")
+    ↓
+ChessGame* plugin = new ChessGame()  // Allocated
+plugin->init(w, h)
+plugin->draw()
+// ... user plays ...
+delete plugin                         // Freed when user exits
+    ↓
+Back to home screen (plugin memory reclaimed)
+```
+
+This means your plugin class must have a working default constructor and destructor.
 
 ## Basic Structure
 
@@ -8,7 +28,7 @@ You need two files:
 
 ```
 include/plugins/MyPlugin.h   # the class definition
-src/plugins/MyPlugin.cpp     # just instantiates it
+src/plugins/MyPlugin.cpp     # can be minimal (just includes header)
 ```
 
 ### Minimal Example
@@ -27,13 +47,14 @@ extern GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display;
 class MyPlugin {
 public:
     MyPlugin() : screenW(800), screenH(480) {}
+    ~MyPlugin() {}  // Clean up any resources here
     
     void init(int w, int h) {
         screenW = w;
         screenH = h;
     }
     
-    bool handleButton(Button btn) {
+    bool handleInput(Button btn) {
         if (btn == BTN_BACK) {
             return false;  // exit
         }
@@ -56,15 +77,15 @@ private:
     int screenW, screenH;
 };
 
-extern MyPlugin myPlugin;
-
 #endif
 ```
 
 ```cpp
 // src/plugins/MyPlugin.cpp
 #include "plugins/MyPlugin.h"
-MyPlugin myPlugin;
+#if FEATURE_GAMES  // Or whatever feature flag applies
+// No global instance needed - plugin is allocated on demand
+#endif
 ```
 
 ## Hooking It Up
@@ -85,45 +106,51 @@ static const HomeItemInfo HOME_ITEMS[] = {
 ```cpp
 #include "plugins/MyPlugin.h"
 
-// in openApp():
+// in openAppByItemIndex():
 case HOME_ITEM_MYPLUGIN:
-    runPluginSimple(myPlugin, "My Plugin");
-    break;
+    runPluginAllocSimple<MyPlugin>("My Plugin");  // Allocated on open, freed on close
+    return;
 ```
 
-### 3. Include in main.cpp
-
-```cpp
-#include "plugins/MyPlugin.h"
-```
+Note: Use the appropriate runner template:
+- `runPluginAllocSimple<T>()` - Standard plugins
+- `runPluginAllocSelfRefresh<T>()` - Plugins with partial refresh (needs `needsFullRedraw`, `drawPartial()`, `update()`)
+- `runPluginAllocAnimation<T>()` - Animation plugins (needs `isRunning()`, `drawFullScreen()`)
 
 ## Saving State
 
-Most plugins want to remember things between runs:
+Since plugins are deleted when closed, save state in your destructor:
 
 ```cpp
-void saveState() {
-    File f = SD.open("/data/myplugin.json", FILE_WRITE);
-    if (f) {
-        JsonDocument doc;
-        doc["score"] = score;
-        doc["level"] = level;
-        serializeJson(doc, f);
-        f.close();
-    }
-}
-
-void loadState() {
-    File f = SD.open("/data/myplugin.json");
-    if (f) {
-        JsonDocument doc;
-        if (!deserializeJson(doc, f)) {
-            score = doc["score"] | 0;
-            level = doc["level"] | 1;
+class MyPlugin {
+public:
+    MyPlugin() { loadState(); }   // Load on create
+    ~MyPlugin() { saveState(); }  // Save on destroy
+    
+private:
+    void saveState() {
+        File f = SD.open("/data/myplugin.json", FILE_WRITE);
+        if (f) {
+            JsonDocument doc;
+            doc["score"] = score;
+            doc["level"] = level;
+            serializeJson(doc, f);
+            f.close();
         }
-        f.close();
     }
-}
+    
+    void loadState() {
+        File f = SD.open("/data/myplugin.json");
+        if (f) {
+            JsonDocument doc;
+            if (!deserializeJson(doc, f)) {
+                score = doc["score"] | 0;
+                level = doc["level"] | 1;
+            }
+            f.close();
+        }
+    }
+};
 ```
 
 ## E-Ink Tips
@@ -155,22 +182,21 @@ if (++partialCount >= 15) {
 Wrap your plugin so it can be compiled out:
 
 ```cpp
+// In header
 #include "config.h"
 #if FEATURE_GAMES
 
 class MyPlugin { ... };
-extern MyPlugin myPlugin;
 
 #endif
 ```
 
-And in AppLauncher:
-
 ```cpp
+// In AppLauncher.cpp
 #if FEATURE_GAMES
 case HOME_ITEM_MYPLUGIN:
-    runPluginSimple(myPlugin, "My Plugin");
-    break;
+    runPluginAllocSimple<MyPlugin>("My Plugin");
+    return;
 #endif
 ```
 
@@ -179,10 +205,11 @@ case HOME_ITEM_MYPLUGIN:
 Check out these for reference:
 
 - `Sudoku.h` - grid-based game with partial refresh
-- `Flashcards.h` - file loading, multiple formats
-- `Weather.h` - network requests, JSON parsing
-- `ChessGame.h` - save/resume game state
-- `Cube3D.h` - menu-based Demo plugin with multiple modes
+- `Flashcards.h` - file loading, multiple formats, destructor cleanup
+- `Weather.h` - network requests, JSON parsing, self-refresh
+- `ChessGame.h` - inline implementation, self-refresh with partial updates
+- `Cube3D.h` - animation plugin with menu system
+- `Library.h` - complex plugin that allocates subsystems (TextLayout, PageCache)
 
 ## Widgets
 

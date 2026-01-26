@@ -1,7 +1,7 @@
 /**
  * @file PageCache.cpp
  * @brief Page Caching System Implementation
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Implements the page caching system that:
  * - Stores pre-computed page layouts to SD card
@@ -15,7 +15,7 @@
 #include "core/PageCache.h"
 
 // Global instance
-PageCache pageCache;
+PageCache* pageCache = nullptr;
 
 // =============================================================================
 // Constructor

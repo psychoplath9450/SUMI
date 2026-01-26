@@ -1,6 +1,6 @@
 # Web Portal
 
-The web portal lets you configure Sumi from a browser. It's embedded in the firmware and served directly by the ESP32.
+The web portal lets you configure SUMI from a browser. It's embedded in the firmware and served directly by the ESP32.
 
 ## Accessing the Portal
 
@@ -13,12 +13,79 @@ The web portal lets you configure Sumi from a browser. It's embedded in the firm
 - Connect to the same WiFi as your device
 - Go to `sumi.local` (or the device's IP address)
 
+## Portal Pages
+
+### My SUMI (Summary)
+A comprehensive "save game" style overview of your device configuration:
+- **Device Status** - Battery, storage, RAM, uptime
+- **Connection & Location** - WiFi network, IP address, weather location, timezone
+- **SD Card Contents** - File counts for books, images, maps, flashcards, notes
+- **Home Screen** - Current theme, icon style, orientation, enabled apps
+- **Settings** - Display, reader, sync, keyboard settings
+
+### WiFi
+Scan for and connect to WiFi networks. The portal shows a connection status banner:
+- 🟡 **Hotspot Mode** - SUMI not connected to WiFi yet
+- 🟢 **Transitional** - SUMI connected, but your browser is still on hotspot
+- 🟢 **Home Network** - Both SUMI and browser on same network
+
+### Files
+Browse and manage SD card contents:
+- **Books** - Upload EPUBs, process existing books, view library
+- **Images** - Upload photos for viewer
+- **Maps** - Upload offline map tiles
+- **Flashcards** - Upload card decks (CSV format)
+
+### Book Processing
+
+**Important:** As of v1.4.2, books must be pre-processed through the portal before they can be read. On-device EPUB parsing was causing memory issues and reliability problems on the ESP32-C3, so browser-based pre-processing is now the default.
+
+EPUBs are pre-processed in the browser before the ESP32 reads them:
+1. Upload EPUB to `/books/` folder
+2. Click "Process Now" (requires internet for JSZip library)
+3. Portal extracts metadata, chapters, and cover art
+4. Processed files saved to `/.sumi/books/{hash}/`
+5. ESP32 reads rich text files instead of parsing complex EPUBs
+
+If you try to open a book that hasn't been processed, you'll see "Process this book in the portal first".
+
+**Rich Text Preservation (v1.4.3+):**
+The portal preserves formatting from the original EPUB:
+- **Bold text** (`<b>`, `<strong>`) → `**text**`
+- *Italic text* (`<i>`, `<em>`) → `*text*`
+- Headers (`<h1>`-`<h6>`) → `# Header` (rendered centered and bold)
+- List items (`<li>`) → `• item`
+- Images → `[Image]` or `[Image: alt text]` placeholder
+- Tables → `[Table]` placeholder
+- Soft hyphens preserved for better line breaking
+
+**Reader Settings → Require Pre-processing** (default: ON)
+- When ON: Only pre-processed books can be opened (recommended)
+- When OFF: Falls back to on-device EPUB parsing (also outputs rich text markers, but unreliable on large books)
+
+**Cache structure:**
+```
+/.sumi/books/a1b2c3d4/
+  meta.json         # Title, author, chapter count, word count, etc.
+  cover_thumb.jpg   # 80×120 for home widget
+  cover_full.jpg    # 300px wide for library browser
+  ch_000.txt        # Chapter 1 with rich text markers
+  ch_001.txt        # Chapter 2
+  ...
+```
+
+**Re-processing books:**
+If you update the firmware and need to re-process books (e.g., to get new formatting features), delete the book's cache folder and process again.
+
+### Customize
+Configure home screen, display settings, reader preferences, and more.
+
 ## What You Can Configure
 
 - **WiFi** - scan and connect to networks
 - **Home screen** - pick which apps show up and in what order
 - **Display** - orientation, sleep timeout, refresh settings, boot to last book
-- **Reader** - font size, margins, line spacing, scene break spacing
+- **Reader** - font size (4 options), margins (5 options), line spacing (3 compression levels), justification, extra paragraph spacing
 - **Reading Statistics** - view pages read, time spent, books finished
 - **KOReader Sync** - sync reading progress with other devices
 - **Bluetooth** - pair keyboards and page turners

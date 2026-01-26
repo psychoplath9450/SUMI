@@ -1,0 +1,36 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build outputs
+build/
+*.bin
+*.elf
+
+# Portal build artifacts
+portal/dist/
+portal/*.gz
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# NOTE: samples/ folder contains SD card content (flashcards, etc.)
+# It is NOT compiled into firmware - PlatformIO only builds from src/
+# Users should copy samples/ contents to their SD card

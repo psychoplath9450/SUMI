@@ -4,7 +4,7 @@
 /**
  * @file ChessGame.h
  * @brief Full-featured Chess for Sumi e-reader with bitmap pieces
- * @version 2.2.0
+ * @version 1.3.0
  *
  * Features:
  * - 16x16 bitmap piece graphics
@@ -1485,7 +1485,6 @@ public:
 };
 
 
-extern ChessGame chessGame;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_CHESSGAME_H

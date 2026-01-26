@@ -1,7 +1,7 @@
 /**
  * @file ButtonCalibration.h
  * @brief Button ADC calibration system for Sumi firmware
- * @version 2.1.16
+ * @version 1.3.0
  *
  * Allows users to calibrate button ADC values for their specific hardware.
  * Different resistor values on community-built devices may require

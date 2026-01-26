@@ -1,7 +1,7 @@
 /**
  * @file Notes.cpp
  * @brief Text editor implementation
- * @version 2.1.16
+ * @version 1.3.0
  */
 
 #include <SD.h>
@@ -9,7 +9,6 @@
 
 #if FEATURE_GAMES
 
-NotesApp notesApp;
 NotesApp* g_notesInstance = nullptr;
 
 // =============================================================================
@@ -19,6 +18,10 @@ NotesApp* g_notesInstance = nullptr;
 NotesApp::NotesApp() { 
     g_notesInstance = this;
     reset(); 
+}
+
+NotesApp::~NotesApp() {
+    g_notesInstance = nullptr;
 }
 
 // =============================================================================

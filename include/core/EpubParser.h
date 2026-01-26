@@ -1,56 +1,85 @@
 /**
  * @file EpubParser.h
- * @brief Enhanced EPUB Parser for Sumi E-Reader
- * @version 2.1.16
+ * @brief Streaming EPUB Parser - Memory-Efficient Implementation
+ * @version 1.4.2
  *
- * Features:
- * - Reads .epub ZIP files directly (no extraction needed)
- * - Supports extracted EPUB folders (for large files)
- * - NCX table of contents parsing
- * - Comprehensive HTML entity decoding
- * - Better text extraction from XHTML
+ * COMPLETELY REWRITTEN for 380KB RAM constraint:
+ * - NEVER loads entire files into memory
+ * - Uses Expat streaming XML parser with 1KB chunks
+ * - Two-tier caching via BookMetadataCache
+ * - All chapter access via streaming
+ *
+ * 
  */
 
 #ifndef SUMI_EPUB_PARSER_H
 #define SUMI_EPUB_PARSER_H
 
 #include <Arduino.h>
-#include <vector>
 #include <SD.h>
 #include "config.h"
+#include "core/BookMetadataCache.h"
+#include "core/ZipReader.h"
+
+// Forward declare Expat types
+extern "C" {
+    #include "expat.h"
+}
 
 // =============================================================================
-// EPUB Source Type
+// Constants
+// =============================================================================
+#define EPUB_CHUNK_SIZE     1024
+#define TEMP_HTML_PATH      "/.sumi/temp_chapter.html"
+
+// =============================================================================
+// Parser State
+// =============================================================================
+enum class EpubParserState {
+    IDLE,
+    PARSING_CONTAINER,
+    PARSING_OPF_METADATA,
+    PARSING_OPF_MANIFEST,
+    PARSING_OPF_SPINE,
+    PARSING_NCX,
+    PARSING_NAV
+};
+
+// =============================================================================
+// Source Type
 // =============================================================================
 enum class EpubSourceType {
-    ZIP_FILE,       // Standard .epub file (ZIP archive)
-    FOLDER          // Extracted EPUB folder
+    ZIP_FILE,
+    FOLDER
 };
 
 // =============================================================================
-// Chapter Info
+// Chapter Info (compatibility with existing code)
 // =============================================================================
 struct Chapter {
-    String title;           // Chapter title from TOC
-    String href;            // Path within EPUB (relative to OPF)
-    String anchor;          // Optional anchor within file (after #)
-    uint32_t size;          // File size in bytes
-    int spineIndex;         // Position in reading order
-};
-
-// =============================================================================
-// TOC Entry (from NCX)
-// =============================================================================
-struct TocEntry {
     String title;
     String href;
     String anchor;
-    int level;              // Nesting level (0 = top)
-    int chapterIndex;       // Corresponding chapter index
+    uint32_t size;
+    int spineIndex;
+    
+    Chapter() : size(0), spineIndex(0) {}
 };
 
 // =============================================================================
-// EPUB Parser Class
+// Manifest Item (temp during OPF parsing)
+// =============================================================================
+struct ManifestItem {
+    char id[64];
+    char href[MAX_HREF_LEN];
+    char mediaType[48];
+    char properties[32];
+    
+    void clear() { memset(this, 0, sizeof(ManifestItem)); }
+};
+
+// =============================================================================
+// EpubParser Class
 // =============================================================================
 class EpubParser {
 public:
@@ -60,96 +89,68 @@ public:
     // ==========================================================================
     // Open/Close
     // ==========================================================================
-    
-    /**
-     * Open an EPUB file or folder
-     * @param path Path to .epub file or extracted EPUB folder
-     * @return true if successful
-     */
     bool open(const String& path);
-    
-    /**
-     * Close current EPUB
-     */
     void close();
     
     // ==========================================================================
     // Metadata
     // ==========================================================================
-    String getTitle() const { return _title; }
-    String getAuthor() const { return _author; }
-    String getLanguage() const { return _language; }
-    String getPublisher() const { return _publisher; }
+    String getTitle() const { return String(_metadata.title); }
+    String getAuthor() const { return String(_metadata.author); }
+    String getLanguage() const { return String(_metadata.language); }
+    String getPublisher() const { return ""; }
+    String getCoverImagePath() const { return String(_metadata.coverHref); }
+    bool hasCover() const { return strlen(_metadata.coverHref) > 0; }
     
     // ==========================================================================
     // Chapters (Spine Items)
     // ==========================================================================
-    int getChapterCount() const { return _chapters.size(); }
+    int getChapterCount() const { return _metadata.spineCount; }
     const Chapter& getChapter(int index) const;
     
     /**
-     * Get chapter text content
-     * @param chapterIndex Index of chapter
-     * @return Plain text content
-     */
-    String getChapterText(int chapterIndex);
-    
-    /**
-     * Get raw HTML content of chapter
-     * @param chapterIndex Index of chapter  
-     * @return Raw XHTML content
-     */
-    String getChapterHTML(int chapterIndex);
-    
-    /**
-     * Stream chapter HTML content to a file (memory-efficient)
-     * @param chapterIndex Index of chapter
-     * @param outputPath Path to write temp file
-     * @return true if successful
+     * Stream chapter HTML to temp file
+     * THIS IS THE PRIMARY WAY TO ACCESS CHAPTER CONTENT
      */
     bool streamChapterToFile(int chapterIndex, const String& outputPath);
     
     /**
-     * Get cover image path (relative to EPUB root)
-     * @return Path to cover image, empty if none
-     */
-    String getCoverImagePath() const { return _coverImagePath; }
-    
-    /**
-     * Check if EPUB has a cover image
-     */
-    bool hasCover() const { return _coverImagePath.length() > 0; }
-    
-    /**
      * Extract cover image to file
-     * @param outputPath Where to save the cover (e.g., "/.sumi/cover.jpg")
-     * @return true if successful
      */
     bool extractCoverImage(const String& outputPath);
     
     /**
-     * Extract any image from EPUB by path
-     * @param imagePath Path to image inside EPUB (relative or absolute from content)
-     * @param outputPath Where to save the image
-     * @return true if successful
+     * Extract any image from EPUB
      */
     bool extractImage(const String& imagePath, const String& outputPath);
     
+    // ==========================================================================
+    // DEPRECATED: These load entire files to RAM - use streaming instead
+    // ==========================================================================
+    
     /**
-     * Get all text (concatenated chapters)
-     * @return Entire book as plain text
+     * @deprecated Use streamChapterToFile() + StreamingHtmlProcessor instead
+     * Still works for small chapters but will log warnings
+     */
+    String getChapterText(int chapterIndex);
+    
+    /**
+     * @deprecated Use streamChapterToFile() instead
+     * Still works for small chapters but will log warnings
+     */
+    String getChapterHTML(int chapterIndex);
+    
+    /**
+     * @deprecated Legacy method - use streaming API instead
+     * Will return error message instead of book content
      */
     String getAllText();
     
     // ==========================================================================
     // Table of Contents
     // ==========================================================================
-    int getTocCount() const { return _toc.size(); }
+    int getTocCount() const { return _metadata.tocCount; }
     const TocEntry& getTocEntry(int index) const;
-    
-    /**
-     * Find chapter index for a TOC entry
-     */
     int getChapterForToc(int tocIndex) const;
     
     // ==========================================================================
@@ -159,130 +160,110 @@ public:
     bool isFolder() const { return _sourceType == EpubSourceType::FOLDER; }
     const String& getError() const { return _error; }
     const String& getPath() const { return _path; }
-
+    
+    // ==========================================================================
+    // Cache Access (added for streaming)
+    // ==========================================================================
+    const BookMetadataCache& getMetadata() const { return _metadata; }
+    BookMetadataCache& getMetadata() { return _metadata; }
+    const String& getCachePath() const { return _cachePath; }
+    
 private:
-    // State
-    String _path;
-    String _error;
     bool _isOpen;
+    String _path;
+    String _cachePath;
+    String _error;
+    String _contentBasePath;
+    String _opfPath;
+    String _ncxPath;
+    String _navPath;
     EpubSourceType _sourceType;
     
-    // Metadata
-    String _title;
-    String _author;
-    String _language;
-    String _publisher;
+    // Two-tier metadata cache
+    BookMetadataCache _metadata;
     
-    // Content
-    std::vector<Chapter> _chapters;
-    std::vector<TocEntry> _toc;
-    String _contentBasePath;    // Base path for content files relative to EPUB root
-    String _ncxPath;            // Path to NCX file (table of contents)
-    String _coverImagePath;     // Path to cover image
-    String _opfPath;            // Path to OPF file (set by parseContainer)
+    // ZIP reader
+    ZipReader _zip;
     
-    // Static empty chapter for bounds checking
-    static Chapter _emptyChapter;
+    // Expat streaming parser
+    XML_Parser _xmlParser;
+    EpubParserState _parserState;
+    
+    // Parsing buffers (reused, never grows)
+    char _tempBuffer[EPUB_CHUNK_SIZE];
+    char _currentElement[32];
+    char _currentId[64];
+    char _currentHref[MAX_HREF_LEN];
+    char _currentMediaType[48];
+    char _currentTitle[64];
+    int _currentDepth;
+    bool _inMetadata;
+    bool _inManifest;
+    bool _inSpine;
+    
+    // Manifest temp file (written to SD, not RAM)
+    File _manifestFile;
+    int _manifestCount;
+    
+    // Compatibility: cached chapter for getChapter()
+    mutable Chapter _tempChapter;
+    
+    // Static empty objects
     static TocEntry _emptyTocEntry;
     
     // ==========================================================================
-    // Parsing Methods
+    // Streaming Parse Methods
     // ==========================================================================
     bool parseContainer();
-    bool parseOPF(const String& opfPath);
-    bool parseNCX(const String& ncxPath);
+    bool parseOPF();
+    bool parseNCX();
+    bool parseNAV();
+    bool streamParseFile(const String& innerPath, EpubParserState initialState);
+    bool findManifestItem(const char* id, ManifestItem& out);
     
     // ==========================================================================
-    // File Reading
+    // Expat Callbacks
     // ==========================================================================
+    static void XMLCALL startElementHandler(void* userData, const char* name, const char** atts);
+    static void XMLCALL endElementHandler(void* userData, const char* name);
+    static void XMLCALL characterDataHandler(void* userData, const char* s, int len);
     
-    /**
-     * Read file from ZIP or folder
-     */
-    String readFile(const String& relativePath);
+    void handleStartElement(const char* name, const char** atts);
+    void handleEndElement(const char* name);
+    void handleCharacterData(const char* s, int len);
+    void handleOPFElement(const char* name, const char** atts);
+    void handleOPFEndElement(const char* name);
+    void handleNCXElement(const char* name, const char** atts);
+    void handleNCXEndElement(const char* name);
+    void handleNAVElement(const char* name, const char** atts);
+    void handleNAVEndElement(const char* name);
     
-    /**
-     * Read file from ZIP archive
-     */
-    String readFileFromZip(const String& innerPath);
-    
-    /**
-     * Read file from folder
-     */
-    String readFileFromFolder(const String& relativePath);
-    
-    /**
-     * Check if path exists (works for both ZIP and folder)
-     */
-    bool fileExists(const String& relativePath);
+    static const char* getAttr(const char** atts, const char* name);
     
     // ==========================================================================
-    // HTML Processing
+    // Path Utilities
     // ==========================================================================
-    
-    /**
-     * Extract plain text from HTML/XHTML
-     */
-    String extractTextFromHTML(const String& html);
-    
-    /**
-     * Extract body content from full HTML document
-     */
-    String extractBody(const String& html);
-    
-    /**
-     * Strip all HTML tags
-     */
-    String stripTags(const String& html);
-    
-    /**
-     * Decode HTML entities
-     */
-    String decodeEntities(const String& text);
-    
-    /**
-     * Normalize whitespace
-     */
-    String normalizeWhitespace(const String& text);
-    
-    // ==========================================================================
-    // Path Helpers
-    // ==========================================================================
-    
-    /**
-     * Resolve relative path against base
-     */
     String resolvePath(const String& base, const String& relative);
+    static String normalizePath(const String& path);
+    static String urlDecode(const String& path);
     
-    /**
-     * Normalize path (resolve . and ..)
-     */
-    String normalizePath(const String& path);
-    
-    /**
-     * URL decode path
-     */
-    String urlDecode(const String& path);
-    
-    /**
-     * Extract attribute value from XML tag string
-     */
-    String extractAttribute(const String& tag, const char* attrName);
+    // ==========================================================================
+    // Folder Mode Support
+    // ==========================================================================
+    bool openFolder(const String& path);
+    String readFileFromFolder(const String& relativePath);
+    bool streamFolderFileToFile(const String& innerPath, const String& outputPath);
 };
 
 // =============================================================================
-// Folder EPUB Detection
+// Global Instance
 // =============================================================================
+extern EpubParser* epubParser;
 
-/**
- * Check if path is a valid extracted EPUB folder
- * (contains META-INF/container.xml)
- */
+// =============================================================================
+// Utility Functions
+// =============================================================================
 bool isValidEpubFolder(const String& path);
-
-/**
- * Check if path is an EPUB file
- */
 bool isEpubFile(const String& path);
 
 #endif // SUMI_EPUB_PARSER_H

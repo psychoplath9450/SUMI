@@ -1,7 +1,7 @@
 /**
  * @file Solitaire.cpp
  * @brief Klondike Solitaire implementation
- * @version 2.1.26
+ * @version 1.3.0
  * 
  * Optimized with raw button handling
  */
@@ -10,7 +10,6 @@
 
 #if FEATURE_GAMES
 
-SolitaireGame solitaireGame;
 
 SolitaireGame::SolitaireGame() { 
     reset(); 

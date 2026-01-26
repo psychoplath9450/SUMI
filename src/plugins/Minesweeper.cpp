@@ -1,7 +1,7 @@
 /**
  * @file Minesweeper.cpp
  * @brief Minesweeper game implementation
- * @version 2.1.26
+ * @version 1.3.0
  * 
  * Optimized with raw button handling and partial refresh support
  */
@@ -10,7 +10,6 @@
 
 #if FEATURE_GAMES
 
-MinesweeperGame minesweeperGame;
 
 MinesweeperGame::MinesweeperGame() { 
     reset(); 

@@ -32,11 +32,23 @@ Sumi runs on an ESP32-C3 with 400KB RAM and 16MB flash. The main constraints are
 
 The C3 is tight on RAM. We do a few things to cope:
 
+**On-demand plugin allocation:** Plugins are allocated when opened and freed when closed. This saves ~40KB+ of RAM when not in use. Only the active plugin occupies memory.
+
+```
+Home Screen:     Core only (~5KB)
+Open Library:    +LibraryApp +TextLayout +PageCache (~15KB)
+Close Library:   Freed, back to ~5KB
+Open Chess:      +ChessGame (~8KB)
+Close Chess:     Freed, back to ~5KB
+```
+
 **Display buffering:** GxEPD2 uses paged drawing - only 100 lines at a time instead of the full 480. This saves a ton of RAM.
 
 **Feature flags:** `SUMI_LOW_MEMORY=1` reduces buffer sizes everywhere. Disabling games saves another ~100KB.
 
-**Streaming parsers:** EPUBs and HTML are parsed in chunks using Expat, not loaded all at once.
+**Portal preprocessing:** EPUBs are pre-processed in the browser by default, converting HTML to rich text files on the SD card. This eliminates on-device parsing entirely for much faster loading.
+
+**Streaming parsers (legacy):** On-device EPUB parsing (when enabled) uses Expat to parse HTML in chunks, not all at once.
 
 **Portal cleanup:** After setup, the web server resources get freed to reclaim 30-40KB.
 
@@ -72,13 +84,16 @@ Plugins get registered in HomeItems.h and wired up in AppLauncher.cpp.
 The SD card stores user content only. The web portal is embedded in the firmware.
 
 ```
-/books/         EPUB, PDF, and TXT files
+/books/         EPUB and TXT files
 /flashcards/    study decks (JSON)
-/images/        pictures (BMP, PNG, JPG)
+/images/        pictures (BMP, JPEG)
 /maps/          map images or OSM tile folders
 /notes/         text notes (.txt, .md)
 /.config/       settings.json (auto-created)
-/.sumi/         internal data (cover cache, book progress)
+/.sumi/         internal data:
+  /books/       pre-processed EPUB cache (rich text chapters, covers, metadata)
+  /lastbook.bin last-read book info
+  /reading_stats.bin lifetime reading statistics
 ```
 
 ## Feature Flags

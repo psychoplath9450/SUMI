@@ -1,7 +1,7 @@
 /**
  * @file Checkers.h
  * @brief Checkers/Draughts game for Sumi e-reader
- * @version 2.1.26
+ * @version 1.3.0
  */
 
 #ifndef SUMI_PLUGIN_CHECKERS_H
@@ -55,7 +55,6 @@ private:
     void aiMove();
 };
 
-extern CheckersGame checkersGame;
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_CHECKERS_H
