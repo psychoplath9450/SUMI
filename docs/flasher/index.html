@@ -5,10 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SUMI Flasher</title>
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <script type="module" src="https://unpkg.com/esptool-js@0.4.5/bundle.js"></script>
     <style>
-        /* =============================================================================
-           SUMI Flasher - Classic Mac OS Style
-           ============================================================================= */
         :root {
             --mac-white: #ffffff;
             --mac-black: #000000;
@@ -76,14 +74,8 @@
         .instructions { font-size: 11px; margin-bottom: 10px; }
         .instructions ol { margin-left: 18px; }
         .instructions li { margin-bottom: 3px; }
-        .hint { font-size: 10px; color: var(--mac-gray-dark); margin-bottom: 10px; }
         
-        /* ESP Web Tools Button Styling */
-        esp-web-install-button {
-            display: block;
-            margin: 10px 0;
-        }
-        
+        esp-web-install-button { display: block; margin: 10px 0; }
         esp-web-install-button::part(button) {
             background: linear-gradient(180deg, #4488ee, #2266cc);
             border: 1px solid #1155aa;
@@ -96,7 +88,6 @@
             box-shadow: 0 1px 0 var(--mac-black);
             width: 100%;
         }
-        
         esp-web-install-button::part(button):hover {
             background: linear-gradient(180deg, #5599ff, #3377dd);
         }
@@ -114,24 +105,6 @@
         .browser-warning h3 { color: var(--mac-error); font-size: 12px; margin-bottom: 4px; }
         .hidden { display: none !important; }
         
-        .file-upload { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-        .file-upload .btn { flex-shrink: 0; }
-        .file-info {
-            flex: 1; padding: 6px 10px; background: var(--mac-white);
-            border: 1px solid var(--mac-gray-dark); font-size: 10px;
-            color: var(--mac-gray-dark); overflow: hidden;
-            text-overflow: ellipsis; white-space: nowrap;
-        }
-        .file-info.selected { color: var(--mac-success); }
-        
-        .btn {
-            background: linear-gradient(180deg, var(--mac-white), var(--mac-gray));
-            border: 1px solid var(--mac-black); border-radius: 4px;
-            padding: 5px 14px; font-family: inherit; font-size: 11px;
-            cursor: pointer; box-shadow: 0 1px 0 var(--mac-black);
-        }
-        .btn:active { background: linear-gradient(180deg, var(--mac-gray), var(--mac-white)); box-shadow: none; }
-        
         .version-info {
             text-align: center;
             padding: 10px;
@@ -142,6 +115,54 @@
         .version-info .version { font-weight: bold; color: var(--mac-highlight); font-size: 14px; }
         .version-info .size { color: var(--mac-gray-dark); font-size: 10px; }
         
+        .drop-zone {
+            border: 2px dashed var(--mac-gray-dark);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 10px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .drop-zone:hover, .drop-zone.drag-over {
+            border-color: var(--mac-highlight);
+            background: #e8f0ff;
+        }
+        .drop-zone.has-file {
+            border-color: var(--mac-success);
+            background: #e8ffe8;
+        }
+        .drop-zone-text { font-size: 11px; color: var(--mac-gray-dark); }
+        .drop-zone-file { font-size: 12px; color: var(--mac-success); font-weight: bold; margin-top: 5px; }
+        .drop-zone input[type="file"] { display: none; }
+        
+        .btn {
+            background: linear-gradient(180deg, var(--mac-white), var(--mac-gray));
+            border: 1px solid var(--mac-black); border-radius: 4px;
+            padding: 8px 16px; font-family: inherit; font-size: 11px;
+            cursor: pointer; box-shadow: 0 1px 0 var(--mac-black);
+            width: 100%;
+        }
+        .btn:active { background: linear-gradient(180deg, var(--mac-gray), var(--mac-white)); box-shadow: none; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: linear-gradient(180deg, #4488ee, #2266cc); color: white; border-color: #1155aa; }
+        
+        .progress-container { margin-top: 10px; display: none; }
+        .progress-container.active { display: block; }
+        .progress {
+            height: 16px; border: 1px solid var(--mac-black); border-radius: 8px;
+            background: var(--mac-white); overflow: hidden; padding: 2px; margin-bottom: 6px;
+        }
+        .progress-fill {
+            height: 100%; border-radius: 6px; width: 0%; transition: width 0.3s;
+            background: repeating-linear-gradient(-45deg, var(--mac-highlight), var(--mac-highlight) 3px, #5588dd 3px, #5588dd 6px);
+        }
+        .progress-text { font-size: 10px; color: var(--mac-gray-dark); text-align: center; }
+        
+        .status-line { font-size: 10px; color: var(--mac-gray-dark); margin-top: 8px; text-align: center; }
+        .status-line.success { color: var(--mac-success); }
+        .status-line.error { color: var(--mac-error); }
+        
         footer {
             text-align: center; margin-top: 16px; padding-top: 10px;
             border-top: 1px solid var(--mac-gray);
@@ -149,15 +170,6 @@
         }
         footer a { color: var(--mac-highlight); text-decoration: none; }
         footer a:hover { text-decoration: underline; }
-        
-        .alt-method {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px dashed var(--mac-gray-dark);
-            font-size: 10px;
-            color: var(--mac-gray-dark);
-        }
-        .alt-method a { color: var(--mac-highlight); }
     </style>
 </head>
 <body>
@@ -206,10 +218,20 @@
             <div class="panel">
                 <div class="panel-header"><span class="step">2</span> Custom Firmware (Optional)</div>
                 <div class="panel-body">
-                    <p class="hint">Want to flash a backup, CrossPoint, or other firmware? Use the manual tool:</p>
-                    <div class="alt-method">
-                        <a href="https://web.esptool.io/" target="_blank">→ Open Web ESPTool</a> (flash any .bin file at address 0x0)
+                    <div id="dropZone" class="drop-zone">
+                        <div class="drop-zone-text">Drag & drop a .bin file here<br>or click to browse</div>
+                        <div id="dropZoneFile" class="drop-zone-file hidden"></div>
+                        <input type="file" id="fileInput" accept=".bin">
                     </div>
+                    
+                    <button id="flashCustomBtn" class="btn btn-primary" disabled>⚡ Flash Custom Firmware</button>
+                    
+                    <div id="customProgress" class="progress-container">
+                        <div class="progress"><div id="customProgressFill" class="progress-fill"></div></div>
+                        <div id="customProgressText" class="progress-text">Connecting...</div>
+                    </div>
+                    
+                    <div id="customStatus" class="status-line"></div>
                 </div>
             </div>
             
@@ -220,11 +242,133 @@
         </div>
     </div>
     
-    <script>
+    <script type="module">
+        import { ESPLoader, Transport } from 'https://unpkg.com/esptool-js@0.4.5/bundle.js';
+        
         // Check browser support
         if (!('serial' in navigator)) {
             document.getElementById('browserWarning').classList.remove('hidden');
         }
+        
+        const dropZone = document.getElementById('dropZone');
+        const dropZoneFile = document.getElementById('dropZoneFile');
+        const fileInput = document.getElementById('fileInput');
+        const flashBtn = document.getElementById('flashCustomBtn');
+        const progressContainer = document.getElementById('customProgress');
+        const progressFill = document.getElementById('customProgressFill');
+        const progressText = document.getElementById('customProgressText');
+        const statusLine = document.getElementById('customStatus');
+        
+        let customFirmware = null;
+        let customFileName = null;
+        
+        // Drag and drop handling
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file) handleFile(file);
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) handleFile(file);
+        });
+        
+        async function handleFile(file) {
+            if (!file.name.endsWith('.bin')) {
+                statusLine.textContent = 'Please select a .bin file';
+                statusLine.className = 'status-line error';
+                return;
+            }
+            
+            customFirmware = await file.arrayBuffer();
+            customFileName = file.name;
+            
+            dropZone.classList.add('has-file');
+            dropZoneFile.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+            dropZoneFile.classList.remove('hidden');
+            flashBtn.disabled = false;
+            statusLine.textContent = '';
+        }
+        
+        flashBtn.addEventListener('click', async () => {
+            if (!customFirmware) return;
+            
+            flashBtn.disabled = true;
+            progressContainer.classList.add('active');
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Requesting port...';
+            statusLine.textContent = '';
+            
+            try {
+                const port = await navigator.serial.requestPort();
+                const transport = new Transport(port, true);
+                
+                progressText.textContent = 'Connecting (hold BOOT if needed)...';
+                
+                const esploader = new ESPLoader({
+                    transport,
+                    baudrate: 921600,
+                    romBaudrate: 115200,
+                    terminal: {
+                        clean: () => {},
+                        writeLine: (data) => console.log(data),
+                        write: (data) => console.log(data)
+                    }
+                });
+                
+                await esploader.main();
+                progressText.textContent = 'Connected! Erasing flash...';
+                progressFill.style.width = '10%';
+                
+                const flashOptions = {
+                    fileArray: [{
+                        data: new Uint8Array(customFirmware),
+                        address: 0x0
+                    }],
+                    flashSize: 'keep',
+                    flashMode: 'keep',
+                    flashFreq: 'keep',
+                    eraseAll: true,
+                    compress: true,
+                    reportProgress: (fileIndex, written, total) => {
+                        const pct = Math.round((written / total) * 90) + 10;
+                        progressFill.style.width = pct + '%';
+                        progressText.textContent = `Writing: ${pct}%`;
+                    }
+                };
+                
+                await esploader.writeFlash(flashOptions);
+                
+                progressFill.style.width = '100%';
+                progressText.textContent = '✓ Complete! Unplug and reconnect your device.';
+                statusLine.textContent = `Successfully flashed ${customFileName}`;
+                statusLine.className = 'status-line success';
+                
+                await esploader.hardReset();
+                await transport.disconnect();
+                
+            } catch (error) {
+                console.error(error);
+                progressText.textContent = 'Flash failed';
+                statusLine.textContent = error.message || 'Unknown error';
+                statusLine.className = 'status-line error';
+            }
+            
+            flashBtn.disabled = false;
+        });
     </script>
 </body>
 </html>
