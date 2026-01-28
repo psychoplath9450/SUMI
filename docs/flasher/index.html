@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SUMI Flasher</title>
-    <script src="https://unpkg.com/esptool-js@0.4.3/bundle.js"></script>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
     <style>
         /* =============================================================================
            SUMI Flasher - Classic Mac OS Style
@@ -73,74 +73,32 @@
         }
         .panel-body { padding: 10px; }
         
-        .status-bar {
-            display: flex; align-items: center; gap: 8px;
-            padding: 6px 10px; background: var(--mac-white);
-            border: 1px solid var(--mac-gray-dark); margin-bottom: 10px;
-        }
-        .status-dot {
-            width: 10px; height: 10px; border-radius: 50%;
-            background: var(--mac-gray-dark); border: 1px solid var(--mac-black);
-        }
-        .status-dot.connected { background: var(--mac-success); }
-        .status-dot.error { background: var(--mac-error); }
-        .status-dot.busy { background: var(--mac-warning); animation: pulse 1s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .status-text { flex: 1; font-size: 11px; }
+        .instructions { font-size: 11px; margin-bottom: 10px; }
+        .instructions ol { margin-left: 18px; }
+        .instructions li { margin-bottom: 3px; }
+        .hint { font-size: 10px; color: var(--mac-gray-dark); margin-bottom: 10px; }
         
-        .btn {
-            background: linear-gradient(180deg, var(--mac-white), var(--mac-gray));
-            border: 1px solid var(--mac-black); border-radius: 4px;
-            padding: 5px 14px; font-family: inherit; font-size: 11px;
-            cursor: pointer; box-shadow: 0 1px 0 var(--mac-black);
+        /* ESP Web Tools Button Styling */
+        esp-web-install-button {
+            display: block;
+            margin: 10px 0;
         }
-        .btn:active { background: linear-gradient(180deg, var(--mac-gray), var(--mac-white)); box-shadow: none; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-primary { background: linear-gradient(180deg, #4488ee, #2266cc); color: white; border-color: #1155aa; }
-        .btn-primary:active { background: linear-gradient(180deg, #2266cc, #4488ee); }
-        .btn-danger { background: linear-gradient(180deg, #ff6666, #cc3333); color: white; border-color: #aa2222; }
-        .btn-block { display: block; width: 100%; }
-        .btn-group { display: flex; gap: 8px; }
-        .btn-group .btn { flex: 1; }
         
-        .tabs { display: flex; margin-bottom: 10px; border: 1px solid var(--mac-black); border-radius: 4px; overflow: hidden; }
-        .tab {
-            flex: 1; padding: 6px 12px;
-            background: linear-gradient(180deg, var(--mac-white), var(--mac-gray));
-            border: none; border-right: 1px solid var(--mac-black);
-            font-family: inherit; font-size: 11px; cursor: pointer;
+        esp-web-install-button::part(button) {
+            background: linear-gradient(180deg, #4488ee, #2266cc);
+            border: 1px solid #1155aa;
+            border-radius: 4px;
+            padding: 10px 20px;
+            font-family: inherit;
+            font-size: 12px;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 1px 0 var(--mac-black);
+            width: 100%;
         }
-        .tab:last-child { border-right: none; }
-        .tab.active { background: linear-gradient(180deg, #4488ee, #2266cc); color: white; }
-        .tab-panel { display: none; }
-        .tab-panel.active { display: block; }
         
-        .firmware-info {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 8px 10px; background: var(--mac-white);
-            border: 1px solid var(--mac-gray-dark); margin-bottom: 10px;
-        }
-        .firmware-version { font-weight: bold; color: var(--mac-highlight); }
-        .firmware-size { color: var(--mac-gray-dark); font-size: 10px; }
-        
-        .file-upload { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-        .file-upload .btn { flex-shrink: 0; }
-        .file-info {
-            flex: 1; padding: 6px 10px; background: var(--mac-white);
-            border: 1px solid var(--mac-gray-dark); font-size: 10px;
-            color: var(--mac-gray-dark); overflow: hidden;
-            text-overflow: ellipsis; white-space: nowrap;
-        }
-        .file-info.selected { color: var(--mac-success); }
-        
-        .checkbox { display: flex; align-items: center; gap: 8px; margin: 10px 0; cursor: pointer; font-size: 11px; }
-        .checkbox input[type="checkbox"] {
-            appearance: none; width: 14px; height: 14px;
-            border: 1px solid var(--mac-black); border-radius: 2px;
-            background: var(--mac-white); cursor: pointer; position: relative;
-        }
-        .checkbox input[type="checkbox"]:checked::after {
-            content: '✓'; position: absolute; top: -1px; left: 2px; font-size: 12px; font-weight: bold;
+        esp-web-install-button::part(button):hover {
+            background: linear-gradient(180deg, #5599ff, #3377dd);
         }
         
         .warning-box {
@@ -156,32 +114,33 @@
         .browser-warning h3 { color: var(--mac-error); font-size: 12px; margin-bottom: 4px; }
         .hidden { display: none !important; }
         
-        .progress-container { margin-top: 10px; display: none; }
-        .progress-container.active { display: block; }
-        .progress {
-            height: 16px; border: 1px solid var(--mac-black); border-radius: 8px;
-            background: var(--mac-white); overflow: hidden; padding: 2px; margin-bottom: 6px;
+        .file-upload { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .file-upload .btn { flex-shrink: 0; }
+        .file-info {
+            flex: 1; padding: 6px 10px; background: var(--mac-white);
+            border: 1px solid var(--mac-gray-dark); font-size: 10px;
+            color: var(--mac-gray-dark); overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
         }
-        .progress-fill {
-            height: 100%; border-radius: 6px; width: 0%; transition: width 0.3s;
-            background: repeating-linear-gradient(-45deg, var(--mac-highlight), var(--mac-highlight) 3px, #5588dd 3px, #5588dd 6px);
-        }
-        .progress-text { font-size: 10px; color: var(--mac-gray-dark); text-align: center; }
+        .file-info.selected { color: var(--mac-success); }
         
-        .log-container {
-            background: var(--mac-white); border: 1px solid var(--mac-black);
-            padding: 8px; max-height: 150px; overflow-y: auto;
-            font-family: 'Monaco', 'Consolas', monospace; font-size: 9px;
+        .btn {
+            background: linear-gradient(180deg, var(--mac-white), var(--mac-gray));
+            border: 1px solid var(--mac-black); border-radius: 4px;
+            padding: 5px 14px; font-family: inherit; font-size: 11px;
+            cursor: pointer; box-shadow: 0 1px 0 var(--mac-black);
         }
-        .log-line { padding: 1px 0; color: var(--mac-gray-dark); }
-        .log-line.error { color: var(--mac-error); }
-        .log-line.success { color: var(--mac-success); }
-        .log-line.info { color: var(--mac-highlight); }
+        .btn:active { background: linear-gradient(180deg, var(--mac-gray), var(--mac-white)); box-shadow: none; }
         
-        .instructions { font-size: 11px; margin-bottom: 10px; }
-        .instructions ol { margin-left: 18px; }
-        .instructions li { margin-bottom: 3px; }
-        .hint { font-size: 10px; color: var(--mac-gray-dark); margin-bottom: 10px; }
+        .version-info {
+            text-align: center;
+            padding: 10px;
+            background: var(--mac-white);
+            border: 1px solid var(--mac-gray-dark);
+            margin-bottom: 10px;
+        }
+        .version-info .version { font-weight: bold; color: var(--mac-highlight); font-size: 14px; }
+        .version-info .size { color: var(--mac-gray-dark); font-size: 10px; }
         
         footer {
             text-align: center; margin-top: 16px; padding-top: 10px;
@@ -190,6 +149,15 @@
         }
         footer a { color: var(--mac-highlight); text-decoration: none; }
         footer a:hover { text-decoration: underline; }
+        
+        .alt-method {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed var(--mac-gray-dark);
+            font-size: 10px;
+            color: var(--mac-gray-dark);
+        }
+        .alt-method a { color: var(--mac-highlight); }
     </style>
 </head>
 <body>
@@ -207,345 +175,56 @@
             </div>
             
             <div class="panel">
-                <div class="panel-header"><span class="step">1</span> Connect Device</div>
+                <div class="panel-header"><span class="step">1</span> Flash Latest SUMI</div>
                 <div class="panel-body">
                     <div class="instructions">
                         <ol>
                             <li>Connect your Xteink X4 via USB-C</li>
-                            <li>Hold the <strong>BOOT</strong> button while clicking Connect</li>
+                            <li>Hold the <strong>BOOT</strong> button while clicking Install</li>
                             <li>Release BOOT after the popup appears</li>
+                            <li>Select the USB serial port</li>
                         </ol>
                     </div>
-                    <div class="status-bar">
-                        <div id="statusDot" class="status-dot"></div>
-                        <span id="statusText" class="status-text">Not connected</span>
-                    </div>
-                    <div class="btn-group">
-                        <button id="connectBtn" class="btn btn-primary">Connect</button>
-                        <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="panel">
-                <div class="panel-header"><span class="step">2</span> Backup Current Firmware (Optional)</div>
-                <div class="panel-body">
-                    <p class="hint">Save your current firmware before flashing. This lets you restore later.</p>
-                    <button id="backupBtn" class="btn btn-block" disabled>📥 Download Backup</button>
-                    <div id="backupProgress" class="progress-container">
-                        <div class="progress"><div id="backupFill" class="progress-fill"></div></div>
-                        <div id="backupText" class="progress-text">Reading flash...</div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="panel">
-                <div class="panel-header"><span class="step">3</span> Flash Firmware</div>
-                <div class="panel-body">
-                    <div class="tabs">
-                        <button id="tabLatest" class="tab active" onclick="selectTab('latest')">Latest SUMI</button>
-                        <button id="tabCustom" class="tab" onclick="selectTab('custom')">Custom File</button>
+                    
+                    <div class="version-info">
+                        <div class="version">SUMI v1.5.0</div>
+                        <div class="size">~2.1 MB</div>
                     </div>
                     
-                    <div id="panelLatest" class="tab-panel active">
-                        <div class="firmware-info">
-                            <div>
-                                <span id="firmwareVersion" class="firmware-version">Loading...</span>
-                                <span id="firmwareSize" class="firmware-size"></span>
-                            </div>
-                            <button id="refreshFirmware" class="btn" style="padding: 3px 10px;">↻ Refresh</button>
-                        </div>
-                    </div>
-                    
-                    <div id="panelCustom" class="tab-panel">
-                        <div class="file-upload">
-                            <input type="file" id="customFile" accept=".bin" style="display: none;">
-                            <button class="btn" onclick="document.getElementById('customFile').click()">📂 Select File</button>
-                            <div id="customFileInfo" class="file-info">No file selected</div>
-                        </div>
-                        <p class="hint">Flash your backup, CrossPoint, factory firmware, or any compatible .bin</p>
-                    </div>
+                    <esp-web-install-button manifest="manifest.json">
+                        <button slot="activate">⚡ Install SUMI v1.5.0</button>
+                        <span slot="unsupported">Your browser doesn't support Web Serial</span>
+                        <span slot="not-allowed">Not allowed to use Web Serial</span>
+                    </esp-web-install-button>
                     
                     <div class="warning-box">
-                        <strong>⚠️ Warning:</strong> This will overwrite the current firmware.
-                    </div>
-                    
-                    <label class="checkbox">
-                        <input type="checkbox" id="eraseBeforeFlash" checked>
-                        <span>Erase flash before writing (recommended)</span>
-                    </label>
-                    
-                    <button id="flashBtn" class="btn btn-primary btn-block" disabled>⚡ Flash Firmware</button>
-                    <button id="eraseBtn" class="btn btn-danger btn-block" style="margin-top: 8px;" disabled>🗑️ Erase Flash Only</button>
-                    
-                    <div id="flashProgress" class="progress-container">
-                        <div class="progress"><div id="flashFill" class="progress-fill"></div></div>
-                        <div id="flashText" class="progress-text">Flashing...</div>
+                        <strong>⚠️ Note:</strong> This will erase and replace your current firmware.
                     </div>
                 </div>
             </div>
             
             <div class="panel">
-                <div class="panel-header">Console Output</div>
-                <div class="panel-body" style="padding: 0;">
-                    <div id="logContainer" class="log-container"></div>
+                <div class="panel-header"><span class="step">2</span> Custom Firmware (Optional)</div>
+                <div class="panel-body">
+                    <p class="hint">Want to flash a backup, CrossPoint, or other firmware? Use the manual tool:</p>
+                    <div class="alt-method">
+                        <a href="https://web.esptool.io/" target="_blank">→ Open Web ESPTool</a> (flash any .bin file at address 0x0)
+                    </div>
                 </div>
             </div>
             
             <footer>
                 <a href="https://github.com/psychoplath9450/SUMI">SUMI on GitHub</a> · 
-                <a href="https://github.com/psychoplath9450/SUMI/releases">Releases</a>
+                <a href="https://github.com/psychoplath9450/SUMI/releases">All Releases</a>
             </footer>
         </div>
     </div>
     
     <script>
-        const GITHUB_REPO = 'psychoplath9450/SUMI';
-        const FLASH_SIZE = 4 * 1024 * 1024;
-        const BAUD_RATE = 921600;
-        
-        let esploader = null, transport = null, chip = null;
-        let firmwareData = null, firmwareVersion = null;
-        let customFirmwareData = null, customFirmwareName = null;
-        let activeTab = 'latest';
-        
-        const statusDot = document.getElementById('statusDot');
-        const statusText = document.getElementById('statusText');
-        const connectBtn = document.getElementById('connectBtn');
-        const disconnectBtn = document.getElementById('disconnectBtn');
-        const backupBtn = document.getElementById('backupBtn');
-        const eraseBtn = document.getElementById('eraseBtn');
-        const flashBtn = document.getElementById('flashBtn');
-        const logContainer = document.getElementById('logContainer');
-        const firmwareVersionEl = document.getElementById('firmwareVersion');
-        const firmwareSizeEl = document.getElementById('firmwareSize');
-        const customFileInput = document.getElementById('customFile');
-        const customFileInfo = document.getElementById('customFileInfo');
-        const eraseBeforeFlash = document.getElementById('eraseBeforeFlash');
-        
+        // Check browser support
         if (!('serial' in navigator)) {
             document.getElementById('browserWarning').classList.remove('hidden');
-            connectBtn.disabled = true;
         }
-        
-        function selectTab(tab) {
-            activeTab = tab;
-            document.getElementById('tabLatest').classList.toggle('active', tab === 'latest');
-            document.getElementById('tabCustom').classList.toggle('active', tab === 'custom');
-            document.getElementById('panelLatest').classList.toggle('active', tab === 'latest');
-            document.getElementById('panelCustom').classList.toggle('active', tab === 'custom');
-            updateFlashButton();
-        }
-        
-        function updateFlashButton() {
-            if (!esploader) { flashBtn.disabled = true; return; }
-            if (activeTab === 'latest') {
-                flashBtn.disabled = firmwareData === null;
-                flashBtn.textContent = firmwareVersion ? `⚡ Flash ${firmwareVersion}` : '⚡ Flash Firmware';
-            } else {
-                flashBtn.disabled = customFirmwareData === null;
-                flashBtn.textContent = customFirmwareName ? `⚡ Flash ${customFirmwareName}` : '⚡ Flash Firmware';
-            }
-        }
-        
-        customFileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            if (!file.name.endsWith('.bin')) { log('Error: Please select a .bin file', 'error'); return; }
-            try {
-                customFirmwareData = await file.arrayBuffer();
-                customFirmwareName = file.name;
-                customFileInfo.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
-                customFileInfo.classList.add('selected');
-                log(`Loaded ${file.name} (${(file.size / 1024).toFixed(1)} KB)`, 'success');
-                updateFlashButton();
-            } catch (error) { log(`Error reading file: ${error.message}`, 'error'); }
-        });
-        
-        function log(message, type = '') {
-            const line = document.createElement('div');
-            line.className = 'log-line ' + type;
-            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-            logContainer.appendChild(line);
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
-        
-        function setStatus(text, state = '') {
-            statusText.textContent = text;
-            statusDot.className = 'status-dot ' + state;
-        }
-        
-        async function fetchLatestFirmware() {
-            try {
-                log('Fetching latest release...', 'info');
-                firmwareVersionEl.textContent = 'Loading...';
-                firmwareSizeEl.textContent = '';
-                const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
-                if (!response.ok) throw new Error('Failed to fetch releases');
-                const release = await response.json();
-                firmwareVersion = release.tag_name;
-                const binAsset = release.assets.find(a => a.name.endsWith('-full.bin') || a.name.endsWith('.bin'));
-                if (!binAsset) throw new Error('No .bin file found in release');
-                log(`Found ${binAsset.name} (${(binAsset.size / 1024).toFixed(1)} KB)`, 'success');
-                log('Downloading firmware...', 'info');
-                const binResponse = await fetch(binAsset.browser_download_url);
-                if (!binResponse.ok) throw new Error('Failed to download firmware');
-                firmwareData = await binResponse.arrayBuffer();
-                firmwareVersionEl.textContent = firmwareVersion;
-                firmwareSizeEl.textContent = ` · ${(firmwareData.byteLength / 1024).toFixed(1)} KB`;
-                log(`Firmware ${firmwareVersion} ready`, 'success');
-                updateFlashButton();
-            } catch (error) {
-                log(`Error: ${error.message}`, 'error');
-                firmwareVersionEl.textContent = 'Failed to load';
-                firmwareData = null;
-            }
-        }
-        
-        async function connect() {
-            try {
-                setStatus('Connecting...', 'busy');
-                log('Requesting serial port...', 'info');
-                const port = await navigator.serial.requestPort();
-                transport = new esptool.Transport(port);
-                log('Connecting to ESP32...', 'info');
-                esploader = new esptool.ESPLoader({
-                    transport, baudrate: BAUD_RATE,
-                    terminal: { clean: () => {}, writeLine: (data) => log(data), write: (data) => {} }
-                });
-                chip = await esploader.main();
-                log(`Connected to ${chip}`, 'success');
-                setStatus(`Connected: ${chip}`, 'connected');
-                connectBtn.disabled = true;
-                disconnectBtn.disabled = false;
-                backupBtn.disabled = false;
-                eraseBtn.disabled = false;
-                updateFlashButton();
-            } catch (error) {
-                log(`Connection failed: ${error.message}`, 'error');
-                setStatus('Connection failed', 'error');
-                await disconnect();
-            }
-        }
-        
-        async function disconnect() {
-            try { if (transport) await transport.disconnect(); } catch (e) {}
-            esploader = null; transport = null; chip = null;
-            setStatus('Not connected', '');
-            connectBtn.disabled = false;
-            disconnectBtn.disabled = true;
-            backupBtn.disabled = true;
-            eraseBtn.disabled = true;
-            flashBtn.disabled = true;
-            log('Disconnected', 'info');
-        }
-        
-        async function backup() {
-            if (!esploader) return;
-            try {
-                backupBtn.disabled = true;
-                const progressContainer = document.getElementById('backupProgress');
-                const progressFill = document.getElementById('backupFill');
-                const progressText = document.getElementById('backupText');
-                progressContainer.classList.add('active');
-                progressFill.style.width = '0%';
-                log('Reading flash memory...', 'info');
-                setStatus('Backing up...', 'busy');
-                const flashData = await esploader.readFlash(0, FLASH_SIZE, (progress) => {
-                    const percent = Math.round((progress / FLASH_SIZE) * 100);
-                    progressFill.style.width = percent + '%';
-                    progressText.textContent = `Reading: ${percent}%`;
-                });
-                const blob = new Blob([flashData], { type: 'application/octet-stream' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `sumi-backup-${new Date().toISOString().slice(0, 10)}.bin`;
-                a.click();
-                log('Backup complete!', 'success');
-                setStatus(`Connected: ${chip}`, 'connected');
-                progressContainer.classList.remove('active');
-            } catch (error) {
-                log(`Backup failed: ${error.message}`, 'error');
-                setStatus('Backup failed', 'error');
-            }
-            backupBtn.disabled = false;
-        }
-        
-        async function erase() {
-            if (!esploader) return;
-            if (!confirm('This will erase ALL data on the device. Continue?')) return;
-            try {
-                eraseBtn.disabled = true; flashBtn.disabled = true;
-                log('Erasing flash...', 'info');
-                setStatus('Erasing...', 'busy');
-                await esploader.eraseFlash();
-                log('Flash erased successfully', 'success');
-                setStatus(`Connected: ${chip}`, 'connected');
-            } catch (error) {
-                log(`Erase failed: ${error.message}`, 'error');
-                setStatus('Erase failed', 'error');
-            }
-            eraseBtn.disabled = false;
-            updateFlashButton();
-        }
-        
-        async function flash() {
-            if (!esploader) return;
-            let dataToFlash, flashName;
-            if (activeTab === 'latest') {
-                if (!firmwareData) return;
-                dataToFlash = firmwareData; flashName = firmwareVersion;
-            } else {
-                if (!customFirmwareData) return;
-                dataToFlash = customFirmwareData; flashName = customFirmwareName;
-            }
-            if (!confirm(`Flash ${flashName}? This will overwrite existing firmware.`)) return;
-            try {
-                eraseBtn.disabled = true; flashBtn.disabled = true; backupBtn.disabled = true;
-                const progressContainer = document.getElementById('flashProgress');
-                const progressFill = document.getElementById('flashFill');
-                const progressText = document.getElementById('flashText');
-                progressContainer.classList.add('active');
-                progressFill.style.width = '0%';
-                if (eraseBeforeFlash.checked) {
-                    log('Erasing flash first...', 'info');
-                    progressText.textContent = 'Erasing flash...';
-                    await esploader.eraseFlash();
-                    log('Flash erased', 'success');
-                }
-                log(`Flashing ${flashName}...`, 'info');
-                setStatus('Flashing...', 'busy');
-                await esploader.writeFlash({
-                    fileArray: [{ data: new Uint8Array(dataToFlash), address: 0x0 }],
-                    flashSize: 'keep', flashMode: 'keep', flashFreq: 'keep',
-                    eraseAll: false, compress: true,
-                    reportProgress: (fileIndex, written, total) => {
-                        const percent = Math.round((written / total) * 100);
-                        progressFill.style.width = percent + '%';
-                        progressText.textContent = `Flashing: ${percent}%`;
-                    }
-                });
-                log('Flash complete!', 'success');
-                log('Disconnect and restart your device.', 'success');
-                setStatus('Flash complete!', 'connected');
-                progressText.textContent = '✓ Complete! Disconnect and restart.';
-            } catch (error) {
-                log(`Flash failed: ${error.message}`, 'error');
-                setStatus('Flash failed', 'error');
-            }
-            eraseBtn.disabled = false; backupBtn.disabled = false;
-            updateFlashButton();
-        }
-        
-        connectBtn.addEventListener('click', connect);
-        disconnectBtn.addEventListener('click', disconnect);
-        backupBtn.addEventListener('click', backup);
-        eraseBtn.addEventListener('click', erase);
-        flashBtn.addEventListener('click', flash);
-        document.getElementById('refreshFirmware').addEventListener('click', fetchLatestFirmware);
-        
-        fetchLatestFirmware();
-        log('SUMI Flasher ready', 'info');
     </script>
 </body>
 </html>
