@@ -6,7 +6,7 @@
       "chipFamily": "ESP32-C3",
       "parts": [
         {
-          "path": "https://github.com/psychoplath9450/SUMI/releases/download/v1.5.0/SUMI-v1.5.0-full.bin",
+          "path": "SUMI-v1.5.0-full.bin",
           "offset": 0
         }
       ]
