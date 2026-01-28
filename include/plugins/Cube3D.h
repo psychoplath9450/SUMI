@@ -3,19 +3,15 @@
 
 /**
  * @file Cube3D.h
- * @brief Demo/Development Testing Plugin
- * @version 1.4.0
+ * @brief Demo/Development Testing Plugin - E-ink Game Template
+ * @version 2.0.0
  *
- * A collection of visual demos and development tests for e-paper display.
- * Menu-based with multiple demo modes:
+ * A testing sandbox for e-paper game development concepts.
+ * Use this to prototype ideas without touching other code.
  * 
- * 1. 3D Shapes - Rotating wireframe shapes (cube, pyramid, diamond, heart)
- *    - LEFT/RIGHT: Change size
- *    - UP/DOWN: Change rotation speed
- * 
- * 2. Matrix Rain - Falling characters effect
- *    - LEFT/RIGHT: Change density
- *    - UP/DOWN: Change speed
+ * Demos:
+ * 1. 3D World - First-person view with pillars (movement test)
+ * 2. Matrix Rain - Classic falling characters effect
  */
 
 #include "config.h"
@@ -26,60 +22,60 @@
 #include <math.h>
 #include "core/PluginHelpers.h"
 #include "core/SettingsManager.h"
+#include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeMono9pt7b.h>
 
 extern GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display;
 extern SettingsManager settingsManager;
 
-// 3D Point structure
-struct Point3D {
-    float x, y, z;
-};
+// =============================================================================
+// 3D World Constants
+// =============================================================================
+#define WORLD_SIZE 20        // World is 20x20 units
+#define MAX_PILLARS 12       // Number of pillars in world
+#define PILLAR_RADIUS 0.4f   // Pillar collision radius
+#define MOVE_SPEED 1.2f      // Movement per button press (faster!)
+#define TURN_SPEED 0.4f      // Radians per turn (faster turning)
+#define VIEW_DISTANCE 15.0f  // Max render distance
+#define FOV 1.2f             // Field of view in radians (~70 degrees)
 
-// 2D Point for projection
-struct Point2D {
-    int x, y;
+// Pillar structure
+struct Pillar {
+    float x, z;      // Position in world
+    float height;    // Height (affects rendered size)
+    bool dark;       // Dark or light pillar
 };
 
 class Cube3DApp {
 public:
-    // Application states
     enum AppState {
         STATE_MENU,
-        STATE_SHAPES,
+        STATE_3D_WORLD,
         STATE_MATRIX
-    };
-    
-    // Shape types for 3D demo
-    enum ShapeType {
-        SHAPE_CUBE = 0,
-        SHAPE_PYRAMID,
-        SHAPE_DIAMOND,
-        SHAPE_HEART,
-        SHAPE_COUNT
     };
     
     Cube3DApp() : 
         screenW(800), screenH(480),
-        running(true), paused(false),
+        running(true), needsRedraw(true),
         appState(STATE_MENU), menuCursor(0),
-        lastFrameTime(0), frameDelay(400),
-        // Shape settings
-        currentShape(SHAPE_CUBE),
-        angleX(0), angleY(0), angleZ(0),
-        rotateSpeed(2), shapeSize(2),  // 1-5 scale
-        // Matrix settings
-        matrixDensity(2), matrixSpeed(2) {
+        // Player state
+        playerX(10.0f), playerZ(10.0f), playerAngle(0.0f),
+        // Matrix state
+        matrixDensity(2), matrixSpeed(2),
+        lastFrameTime(0) {
     }
+    
+    bool needsFullRedraw = true;
     
     void init(int w, int h) {
         screenW = w;
         screenH = h;
-        lastFrameTime = millis();
+        needsFullRedraw = true;
         
-        angleX = 0.3f;
-        angleY = 0.5f;
-        angleZ = 0.0f;
-        
+        // Initialize pillars in world
+        initWorld();
         initMatrix();
         
         Serial.println("[DEMO] Demo plugin initialized");
@@ -89,53 +85,135 @@ public:
         switch (appState) {
             case STATE_MENU:
                 return handleMenuInput(btn);
-            case STATE_SHAPES:
-                return handleShapesInput(btn);
+            case STATE_3D_WORLD:
+                return handle3DInput(btn);
             case STATE_MATRIX:
                 return handleMatrixInput(btn);
         }
         return false;
     }
     
-    void draw() {
-        switch (appState) {
-            case STATE_MENU:
-                // Menu is static, drawn once
-                break;
-            case STATE_SHAPES:
-                drawShapeFrame();
-                break;
-            case STATE_MATRIX:
-                drawMatrixFrame();
-                break;
+    bool update() {
+        if (appState == STATE_MATRIX && !paused) {
+            uint32_t now = millis();
+            uint32_t delay = 600 - (matrixSpeed * 100);
+            if (now - lastFrameTime >= delay) {
+                lastFrameTime = now;
+                updateMatrix();
+                needsFullRedraw = true;
+                return true;
+            }
         }
+        return false;
+    }
+    
+    void draw() {
+        if (!needsFullRedraw) return;
+        
+        display.setFullWindow();
+        display.firstPage();
+        do {
+            display.fillScreen(GxEPD_WHITE);
+            
+            switch (appState) {
+                case STATE_MENU:
+                    drawMenu();
+                    break;
+                case STATE_3D_WORLD:
+                    draw3DWorld();
+                    break;
+                case STATE_MATRIX:
+                    drawMatrix();
+                    break;
+            }
+        } while (display.nextPage());
+        
+        needsFullRedraw = false;
+    }
+    
+    void drawPartial() {
+        draw();
     }
     
     void drawFullScreen() {
-        if (appState == STATE_MENU) {
-            drawMenu();
-        } else {
-            drawDemoScreen();
-        }
+        needsFullRedraw = true;
+        draw();
     }
     
     bool isRunning() const { return running; }
     
 private:
     int screenW, screenH;
-    bool running, paused;
+    bool running, needsRedraw, paused = false;
     AppState appState;
     int menuCursor;
-    uint32_t lastFrameTime;
-    uint32_t frameDelay;
     
-    // Menu items
-    static const int MENU_ITEMS = 2;
-    const char* menuLabels[MENU_ITEMS] = { "3D Shapes", "Matrix Rain" };
+    // Player state for 3D world
+    float playerX, playerZ;  // Position
+    float playerAngle;       // Facing direction (radians)
+    
+    // World objects
+    Pillar pillars[MAX_PILLARS];
+    int pillarCount = 0;
+    
+    // Matrix rain state
+    int matrixDensity, matrixSpeed;
+    static const int MATRIX_COLS = 40;
+    static const int MATRIX_ROWS = 20;
+    char matrixChars[MATRIX_COLS][MATRIX_ROWS];
+    int matrixDrops[MATRIX_COLS];
+    uint32_t lastFrameTime;
+    
+    // =========================================================================
+    // WORLD INITIALIZATION
+    // =========================================================================
+    
+    void initWorld() {
+        // Create some pillars scattered around
+        // Avoid center spawn area
+        pillarCount = 0;
+        
+        // Fixed pillar positions for consistent world
+        float positions[][3] = {
+            {5.0f, 8.0f, 2.0f},     // x, z, height
+            {15.0f, 8.0f, 2.5f},
+            {8.0f, 5.0f, 1.8f},
+            {12.0f, 5.0f, 2.2f},
+            {6.0f, 15.0f, 2.0f},
+            {14.0f, 15.0f, 1.5f},
+            {3.0f, 12.0f, 2.8f},
+            {17.0f, 12.0f, 2.0f},
+            {10.0f, 3.0f, 3.0f},
+            {10.0f, 17.0f, 2.5f},
+            {4.0f, 4.0f, 1.8f},
+            {16.0f, 16.0f, 2.2f}
+        };
+        
+        for (int i = 0; i < MAX_PILLARS; i++) {
+            pillars[i].x = positions[i][0];
+            pillars[i].z = positions[i][1];
+            pillars[i].height = positions[i][2];
+            pillars[i].dark = (i % 2 == 0);
+        }
+        pillarCount = MAX_PILLARS;
+        
+        // Spawn player close to a pillar, facing toward it
+        // Pillar at (5, 8) - spawn at (5, 6) facing +Z direction
+        playerX = 5.0f;
+        playerZ = 6.0f;
+        playerAngle = 0.0f;  // Face +Z direction (toward pillar at z=8)
+    }
     
     // =========================================================================
     // MENU
     // =========================================================================
+    
+    static const int MENU_ITEMS = 2;
+    const char* menuLabels[MENU_ITEMS] = { "3D World", "Matrix Rain" };
+    const char* menuDescs[MENU_ITEMS] = { 
+        "First-person movement demo", 
+        "Classic falling characters" 
+    };
     
     bool handleMenuInput(Button btn) {
         switch (btn) {
@@ -146,27 +224,26 @@ private:
             case BTN_UP:
                 if (menuCursor > 0) {
                     menuCursor--;
-                    drawMenu();
+                    needsFullRedraw = true;
                 }
                 return true;
                 
             case BTN_DOWN:
                 if (menuCursor < MENU_ITEMS - 1) {
                     menuCursor++;
-                    drawMenu();
+                    needsFullRedraw = true;
                 }
                 return true;
                 
             case BTN_CONFIRM:
                 if (menuCursor == 0) {
-                    appState = STATE_SHAPES;
-                    paused = false;
+                    appState = STATE_3D_WORLD;
+                    initWorld();
                 } else {
                     appState = STATE_MATRIX;
-                    paused = false;
                     initMatrix();
                 }
-                drawDemoScreen();
+                needsFullRedraw = true;
                 return true;
                 
             default:
@@ -175,112 +252,109 @@ private:
     }
     
     void drawMenu() {
-        display.setFullWindow();
-        display.firstPage();
-        do {
-            display.fillScreen(GxEPD_WHITE);
+        // Header bar
+        display.fillRect(0, 0, screenW, 48, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold12pt7b);
+        int16_t tx, ty; uint16_t tw, th;
+        display.getTextBounds("Demo Lab", 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, 32);
+        display.print("Demo Lab");
+        
+        display.setTextColor(GxEPD_BLACK);
+        
+        // Subtitle
+        display.setFont(&FreeSans9pt7b);
+        display.getTextBounds("Development & Testing Sandbox", 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, 75);
+        display.print("Development & Testing Sandbox");
+        
+        // Menu items as cards
+        int cardW = screenW - 80;
+        int cardH = 70;
+        int cardX = 40;
+        int startY = 100;
+        
+        for (int i = 0; i < MENU_ITEMS; i++) {
+            int y = startY + i * (cardH + 16);
+            bool selected = (i == menuCursor);
             
-            // Header
-            display.setFont(&FreeSansBold12pt7b);
-            display.setTextColor(GxEPD_BLACK);
-            display.setCursor(20, 35);
-            display.print("Demo");
-            
-            display.setFont(&FreeSans9pt7b);
-            display.setCursor(100, 35);
-            display.print("- Development & Testing");
-            
-            display.drawLine(0, 50, screenW, 50, GxEPD_BLACK);
-            
-            // Menu items
-            int itemH = 60;
-            int startY = 80;
-            int itemW = screenW - 80;
-            int itemX = 40;
-            
-            for (int i = 0; i < MENU_ITEMS; i++) {
-                int y = startY + i * (itemH + 15);
-                
-                if (i == menuCursor) {
-                    display.fillRoundRect(itemX, y, itemW, itemH, 8, GxEPD_BLACK);
-                    display.setTextColor(GxEPD_WHITE);
-                } else {
-                    display.drawRoundRect(itemX, y, itemW, itemH, 8, GxEPD_BLACK);
-                    display.setTextColor(GxEPD_BLACK);
-                }
-                
-                display.setFont(&FreeSansBold12pt7b);
-                display.setCursor(itemX + 20, y + 38);
-                display.print(menuLabels[i]);
-                
-                // Descriptions
-                display.setFont(&FreeSans9pt7b);
-                if (i == 0) {
-                    display.setCursor(itemX + 200, y + 38);
-                    display.print("Cube, Pyramid, Diamond, Heart");
-                } else {
-                    display.setCursor(itemX + 200, y + 38);
-                    display.print("Falling characters effect");
-                }
+            if (selected) {
+                display.fillRoundRect(cardX, y, cardW, cardH, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(cardX, y, cardW, cardH, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
             }
             
-            // Footer
-            display.setTextColor(GxEPD_BLACK);
-            display.drawLine(0, screenH - 45, screenW, screenH - 45, GxEPD_BLACK);
-            display.setFont(&FreeSans9pt7b);
-            display.setCursor(20, screenH - 18);
-            display.print("UP/DOWN: Select | OK: Enter | BACK: Exit");
+            // Icon
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(cardX + 20, y + 30);
+            display.print(i == 0 ? ">" : "#");
             
-        } while (display.nextPage());
+            // Title
+            display.setCursor(cardX + 50, y + 30);
+            display.print(menuLabels[i]);
+            
+            // Description
+            display.setFont(&FreeSans9pt7b);
+            if (!selected) display.setTextColor(GxEPD_BLACK);
+            display.setCursor(cardX + 50, y + 52);
+            display.print(menuDescs[i]);
+        }
+        
+        // Footer
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.getTextBounds("UP/DOWN: Select | OK: Launch | BACK: Exit", 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, screenH - 20);
+        display.print("UP/DOWN: Select | OK: Launch | BACK: Exit");
     }
     
     // =========================================================================
-    // 3D SHAPES
+    // 3D WORLD
     // =========================================================================
-    ShapeType currentShape;
-    float angleX, angleY, angleZ;
-    int rotateSpeed;  // 1-5
-    int shapeSize;    // 1-5
     
-    bool handleShapesInput(Button btn) {
+    bool handle3DInput(Button btn) {
+        float dx = 0, dz = 0;
+        
         switch (btn) {
             case BTN_BACK:
                 appState = STATE_MENU;
-                drawMenu();
-                return true;
-                
-            case BTN_CONFIRM:
-                // Cycle through shapes
-                currentShape = (ShapeType)((currentShape + 1) % SHAPE_COUNT);
-                drawDemoHeader();
-                return true;
-                
-            case BTN_LEFT:
-                if (shapeSize > 1) {
-                    shapeSize--;
-                    drawDemoHeader();
-                }
-                return true;
-                
-            case BTN_RIGHT:
-                if (shapeSize < 5) {
-                    shapeSize++;
-                    drawDemoHeader();
-                }
-                return true;
-                
-            case BTN_UP:
-                if (rotateSpeed < 5) {
-                    rotateSpeed++;
-                    drawDemoHeader();
-                }
+                needsFullRedraw = true;
                 return true;
                 
             case BTN_DOWN:
-                if (rotateSpeed > 1) {
-                    rotateSpeed--;
-                    drawDemoHeader();
-                }
+                // Move forward (toward view direction)
+                dx = sin(playerAngle) * MOVE_SPEED;
+                dz = cos(playerAngle) * MOVE_SPEED;
+                tryMove(dx, dz);
+                needsFullRedraw = true;
+                return true;
+                
+            case BTN_UP:
+                // Move backward (away from view direction)
+                dx = -sin(playerAngle) * MOVE_SPEED;
+                dz = -cos(playerAngle) * MOVE_SPEED;
+                tryMove(dx, dz);
+                needsFullRedraw = true;
+                return true;
+                
+            case BTN_RIGHT:
+                // Turn left (counterclockwise when viewed from above)
+                playerAngle += TURN_SPEED;
+                needsFullRedraw = true;
+                return true;
+                
+            case BTN_LEFT:
+                // Turn right (clockwise when viewed from above)
+                playerAngle -= TURN_SPEED;
+                needsFullRedraw = true;
+                return true;
+                
+            case BTN_CONFIRM:
+                // Toggle minimap or action
+                needsFullRedraw = true;
                 return true;
                 
             default:
@@ -288,270 +362,273 @@ private:
         }
     }
     
-    Point3D rotatePoint(Point3D p, float ax, float ay, float az) {
-        float cosX = cos(ax), sinX = sin(ax);
-        float y1 = p.y * cosX - p.z * sinX;
-        float z1 = p.y * sinX + p.z * cosX;
+    void tryMove(float dx, float dz) {
+        float newX = playerX + dx;
+        float newZ = playerZ + dz;
         
-        float cosY = cos(ay), sinY = sin(ay);
-        float x2 = p.x * cosY + z1 * sinY;
-        float z2 = -p.x * sinY + z1 * cosY;
+        // World bounds
+        if (newX < 1.0f || newX > WORLD_SIZE - 1) return;
+        if (newZ < 1.0f || newZ > WORLD_SIZE - 1) return;
         
-        float cosZ = cos(az), sinZ = sin(az);
-        float x3 = x2 * cosZ - y1 * sinZ;
-        float y3 = x2 * sinZ + y1 * cosZ;
-        
-        return {x3, y3, z2};
-    }
-    
-    Point2D project(Point3D p, int cx, int cy) {
-        float scale = 300.0f / (300.0f + p.z);
-        return {
-            cx + (int)(p.x * scale),
-            cy + (int)(p.y * scale)
-        };
-    }
-    
-    void drawShapeFrame() {
-        uint32_t now = millis();
-        int delay = 600 - rotateSpeed * 100;  // 500ms to 100ms
-        if (now - lastFrameTime < (uint32_t)delay) {
-            return;
-        }
-        lastFrameTime = now;
-        
-        // Update rotation
-        float speed = rotateSpeed * 0.05f;
-        angleX += speed * 0.7f;
-        angleY += speed;
-        angleZ += speed * 0.3f;
-        
-        int baseSize = 40 + shapeSize * 20;  // 60 to 140
-        int cx = screenW / 2;
-        int cy = screenH / 2;
-        
-        // Calculate window
-        int margin = baseSize + 60;
-        int wx = cx - margin;
-        int wy = 55;
-        int ww = margin * 2;
-        int wh = screenH - 100;
-        
-        if (wx < 0) { ww += wx; wx = 0; }
-        if (wx + ww > screenW) ww = screenW - wx;
-        
-        display.setPartialWindow(wx, wy, ww, wh);
-        display.firstPage();
-        do {
-            display.fillRect(wx, wy, ww, wh, GxEPD_WHITE);
-            
-            switch (currentShape) {
-                case SHAPE_CUBE:
-                    drawCube(baseSize, cx, cy);
-                    break;
-                case SHAPE_PYRAMID:
-                    drawPyramid(baseSize, cx, cy);
-                    break;
-                case SHAPE_DIAMOND:
-                    drawDiamond(baseSize, cx, cy);
-                    break;
-                case SHAPE_HEART:
-                    drawHeart(baseSize, cx, cy);
-                    break;
-                default:
-                    drawCube(baseSize, cx, cy);
+        // Collision with pillars
+        for (int i = 0; i < pillarCount; i++) {
+            float distSq = (newX - pillars[i].x) * (newX - pillars[i].x) +
+                          (newZ - pillars[i].z) * (newZ - pillars[i].z);
+            if (distSq < (PILLAR_RADIUS + 0.3f) * (PILLAR_RADIUS + 0.3f)) {
+                return; // Collision
             }
-            
-        } while (display.nextPage());
+        }
+        
+        playerX = newX;
+        playerZ = newZ;
     }
     
-    void drawCube(int s, int cx, int cy) {
-        Point3D vertices[8] = {
-            {(float)-s, (float)-s, (float)-s}, {(float)s, (float)-s, (float)-s}, 
-            {(float)s, (float)s, (float)-s}, {(float)-s, (float)s, (float)-s},
-            {(float)-s, (float)-s, (float)s}, {(float)s, (float)-s, (float)s}, 
-            {(float)s, (float)s, (float)s}, {(float)-s, (float)s, (float)s}
-        };
+    void draw3DWorld() {
+        int horizonY = screenH / 2 - 20;  // Horizon line
         
-        Point2D projected[8];
-        for (int i = 0; i < 8; i++) {
-            Point3D r = rotatePoint(vertices[i], angleX, angleY, angleZ);
-            projected[i] = project(r, cx, cy);
+        // Sky (white - already filled)
+        
+        // Ground with dither pattern (gray)
+        for (int y = horizonY; y < screenH - 40; y++) {
+            for (int x = 0; x < screenW; x++) {
+                // Dither pattern for gray ground
+                // Denser near horizon, sparser far away
+                int ditherThreshold = ((y - horizonY) * 2 + (x % 4) * 3 + (y % 4)) % 8;
+                if (ditherThreshold < 3) {
+                    display.drawPixel(x, y, GxEPD_BLACK);
+                }
+            }
         }
         
-        int edges[12][2] = {
-            {0,1}, {1,2}, {2,3}, {3,0},
-            {4,5}, {5,6}, {6,7}, {7,4},
-            {0,4}, {1,5}, {2,6}, {3,7}
-        };
+        // Horizon line
+        display.drawLine(0, horizonY, screenW, horizonY, GxEPD_BLACK);
         
-        for (int i = 0; i < 12; i++) {
-            display.drawLine(projected[edges[i][0]].x, projected[edges[i][0]].y,
-                           projected[edges[i][1]].x, projected[edges[i][1]].y, GxEPD_BLACK);
+        // Render pillars (sorted by distance, far to near)
+        // Simple bubble sort for distance
+        int order[MAX_PILLARS];
+        float distances[MAX_PILLARS];
+        
+        for (int i = 0; i < pillarCount; i++) {
+            order[i] = i;
+            float dx = pillars[i].x - playerX;
+            float dz = pillars[i].z - playerZ;
+            distances[i] = dx * dx + dz * dz;
         }
         
-        for (int i = 0; i < 8; i++) {
-            display.fillCircle(projected[i].x, projected[i].y, 3, GxEPD_BLACK);
+        // Sort far to near
+        for (int i = 0; i < pillarCount - 1; i++) {
+            for (int j = i + 1; j < pillarCount; j++) {
+                if (distances[order[i]] < distances[order[j]]) {
+                    int tmp = order[i];
+                    order[i] = order[j];
+                    order[j] = tmp;
+                }
+            }
         }
+        
+        // Render each pillar
+        for (int i = 0; i < pillarCount; i++) {
+            renderPillar(pillars[order[i]], horizonY);
+        }
+        
+        // UI overlay
+        drawWorldUI();
     }
     
-    void drawPyramid(int s, int cx, int cy) {
-        // 4 base vertices + 1 apex
-        Point3D vertices[5] = {
-            {(float)-s, (float)s, (float)-s}, {(float)s, (float)s, (float)-s},
-            {(float)s, (float)s, (float)s}, {(float)-s, (float)s, (float)s},
-            {0, (float)-s, 0}  // Apex
-        };
+    void renderPillar(const Pillar& p, int horizonY) {
+        // Get relative position to player
+        float dx = p.x - playerX;
+        float dz = p.z - playerZ;
         
-        Point2D projected[5];
-        for (int i = 0; i < 5; i++) {
-            Point3D r = rotatePoint(vertices[i], angleX, angleY, angleZ);
-            projected[i] = project(r, cx, cy);
+        // Rotate by player angle to get view-space coords
+        float viewX = dx * cos(-playerAngle) - dz * sin(-playerAngle);
+        float viewZ = dx * sin(-playerAngle) + dz * cos(-playerAngle);
+        
+        // Behind player?
+        if (viewZ <= 0.1f) return;
+        
+        // Too far?
+        if (viewZ > VIEW_DISTANCE) return;
+        
+        // Project to screen
+        float screenX = (screenW / 2) + (viewX / viewZ) * (screenW / 2) / tan(FOV / 2);
+        
+        // Calculate pillar size based on distance
+        float scale = 1.0f / viewZ;
+        int pillarHeight = (int)(p.height * 80 * scale);
+        int pillarWidth = (int)(30 * scale);
+        
+        if (pillarWidth < 2) pillarWidth = 2;
+        if (pillarHeight < 4) pillarHeight = 4;
+        
+        int px = (int)screenX - pillarWidth / 2;
+        int py = horizonY - pillarHeight;
+        
+        // Clip to screen
+        if (px + pillarWidth < 0 || px > screenW) return;
+        
+        // Draw pillar
+        if (p.dark) {
+            // Dark pillar - filled
+            display.fillRect(px, py, pillarWidth, pillarHeight, GxEPD_BLACK);
+        } else {
+            // Light pillar - outline with cross-hatch
+            display.drawRect(px, py, pillarWidth, pillarHeight, GxEPD_BLACK);
+            // Cross-hatch fill
+            for (int y = py + 2; y < py + pillarHeight - 2; y += 4) {
+                for (int x = px + 2; x < px + pillarWidth - 2; x += 4) {
+                    display.drawPixel(x, y, GxEPD_BLACK);
+                }
+            }
         }
         
-        // Base edges
-        for (int i = 0; i < 4; i++) {
-            display.drawLine(projected[i].x, projected[i].y,
-                           projected[(i+1)%4].x, projected[(i+1)%4].y, GxEPD_BLACK);
-        }
-        // Apex edges
-        for (int i = 0; i < 4; i++) {
-            display.drawLine(projected[i].x, projected[i].y,
-                           projected[4].x, projected[4].y, GxEPD_BLACK);
-        }
-        
-        for (int i = 0; i < 5; i++) {
-            display.fillCircle(projected[i].x, projected[i].y, 3, GxEPD_BLACK);
-        }
+        // Pillar top (small cap)
+        display.fillRect(px - 1, py - 2, pillarWidth + 2, 3, GxEPD_BLACK);
     }
     
-    void drawDiamond(int s, int cx, int cy) {
-        // Octahedron - 6 vertices
-        Point3D vertices[6] = {
-            {0, (float)-s*1.5f, 0},  // Top
-            {(float)-s, 0, 0}, {(float)s, 0, 0},
-            {0, 0, (float)-s}, {0, 0, (float)s},
-            {0, (float)s*1.5f, 0}   // Bottom
-        };
+    void drawWorldUI() {
+        // Header bar
+        display.fillRect(0, 0, screenW, 36, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold9pt7b);
+        display.setCursor(12, 25);
+        display.print("3D World Demo");
         
-        Point2D projected[6];
-        for (int i = 0; i < 6; i++) {
-            Point3D r = rotatePoint(vertices[i], angleX, angleY, angleZ);
-            projected[i] = project(r, cx, cy);
-        }
+        // Position display
+        char posStr[32];
+        snprintf(posStr, 32, "X:%.1f Z:%.1f", playerX, playerZ);
+        display.setCursor(screenW - 120, 25);
+        display.print(posStr);
         
-        // Top half edges
-        int topEdges[8][2] = {{0,1},{0,2},{0,3},{0,4},{1,3},{3,2},{2,4},{4,1}};
-        for (int i = 0; i < 8; i++) {
-            display.drawLine(projected[topEdges[i][0]].x, projected[topEdges[i][0]].y,
-                           projected[topEdges[i][1]].x, projected[topEdges[i][1]].y, GxEPD_BLACK);
-        }
-        // Bottom half edges
-        int botEdges[4][2] = {{5,1},{5,2},{5,3},{5,4}};
-        for (int i = 0; i < 4; i++) {
-            display.drawLine(projected[botEdges[i][0]].x, projected[botEdges[i][0]].y,
-                           projected[botEdges[i][1]].x, projected[botEdges[i][1]].y, GxEPD_BLACK);
-        }
+        // Minimap (bottom right)
+        int mapSize = 80;
+        int mapX = screenW - mapSize - 12;
+        int mapY = screenH - mapSize - 50;
         
-        for (int i = 0; i < 6; i++) {
-            display.fillCircle(projected[i].x, projected[i].y, 3, GxEPD_BLACK);
-        }
-    }
-    
-    void drawHeart(int s, int cx, int cy) {
-        // Heart made of connected points
-        const int numPoints = 20;
-        Point3D vertices[numPoints];
+        // Map background
+        display.fillRect(mapX, mapY, mapSize, mapSize, GxEPD_WHITE);
+        display.drawRect(mapX, mapY, mapSize, mapSize, GxEPD_BLACK);
         
-        // Generate heart shape using parametric equation
-        for (int i = 0; i < numPoints; i++) {
-            float t = (float)i / numPoints * 2 * PI;
-            float x = 16 * pow(sin(t), 3);
-            float y = -(13 * cos(t) - 5 * cos(2*t) - 2 * cos(3*t) - cos(4*t));
-            vertices[i] = {x * s / 20.0f, y * s / 20.0f, 0};
+        // Scale: world to map
+        float scale = (float)mapSize / WORLD_SIZE;
+        
+        // Draw pillars on map
+        for (int i = 0; i < pillarCount; i++) {
+            int mx = mapX + (int)(pillars[i].x * scale);
+            int my = mapY + (int)(pillars[i].z * scale);
+            if (pillars[i].dark) {
+                display.fillCircle(mx, my, 2, GxEPD_BLACK);
+            } else {
+                display.drawCircle(mx, my, 2, GxEPD_BLACK);
+            }
         }
         
-        Point2D projected[numPoints];
-        for (int i = 0; i < numPoints; i++) {
-            Point3D r = rotatePoint(vertices[i], angleX, angleY, angleZ);
-            projected[i] = project(r, cx, cy);
-        }
+        // Draw player on map
+        int playerMapX = mapX + (int)(playerX * scale);
+        int playerMapY = mapY + (int)(playerZ * scale);
         
-        // Connect the dots
-        for (int i = 0; i < numPoints; i++) {
-            int next = (i + 1) % numPoints;
-            display.drawLine(projected[i].x, projected[i].y,
-                           projected[next].x, projected[next].y, GxEPD_BLACK);
-        }
+        // Player triangle showing direction
+        float triSize = 4;
+        float ax = playerMapX + sin(playerAngle) * triSize;
+        float ay = playerMapY + cos(playerAngle) * triSize;
+        float bx = playerMapX + sin(playerAngle + 2.5f) * triSize * 0.6f;
+        float by = playerMapY + cos(playerAngle + 2.5f) * triSize * 0.6f;
+        float cx = playerMapX + sin(playerAngle - 2.5f) * triSize * 0.6f;
+        float cy = playerMapY + cos(playerAngle - 2.5f) * triSize * 0.6f;
         
-        for (int i = 0; i < numPoints; i++) {
-            display.fillCircle(projected[i].x, projected[i].y, 2, GxEPD_BLACK);
-        }
-    }
-    
-    const char* getShapeName() {
-        switch (currentShape) {
-            case SHAPE_CUBE: return "Cube";
-            case SHAPE_PYRAMID: return "Pyramid";
-            case SHAPE_DIAMOND: return "Diamond";
-            case SHAPE_HEART: return "Heart";
-            default: return "Shape";
-        }
+        display.fillTriangle((int)ax, (int)ay, (int)bx, (int)by, (int)cx, (int)cy, GxEPD_BLACK);
+        
+        // Controls footer
+        display.fillRect(0, screenH - 40, screenW, 40, GxEPD_WHITE);
+        display.drawLine(0, screenH - 40, screenW, screenH - 40, GxEPD_BLACK);
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        int16_t tx, ty; uint16_t tw, th;
+        const char* controls = "UP: Forward | DOWN: Back | LEFT/RIGHT: Turn | BACK: Menu";
+        display.getTextBounds(controls, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, screenH - 15);
+        display.print(controls);
     }
     
     // =========================================================================
     // MATRIX RAIN
     // =========================================================================
-    static const int MATRIX_MAX_COLS = 50;
-    static const int MATRIX_MAX_ROWS = 25;
-    int matrixDrops[MATRIX_MAX_COLS];
-    int matrixSpeeds[MATRIX_MAX_COLS];
-    char matrixChars[MATRIX_MAX_COLS][MATRIX_MAX_ROWS];
-    int matrixDensity;  // 1-5
-    int matrixSpeed;    // 1-5
-    int matrixCols, matrixRows;
+    
+    void initMatrix() {
+        for (int c = 0; c < MATRIX_COLS; c++) {
+            matrixDrops[c] = random(0, MATRIX_ROWS);
+            for (int r = 0; r < MATRIX_ROWS; r++) {
+                matrixChars[c][r] = getRandomChar();
+            }
+        }
+        lastFrameTime = millis();
+        paused = false;
+    }
+    
+    char getRandomChar() {
+        int type = random(0, 3);
+        if (type == 0) return '0' + random(0, 10);
+        if (type == 1) return 'A' + random(0, 26);
+        return (char)(0x30 + random(0, 64));
+    }
+    
+    void updateMatrix() {
+        for (int c = 0; c < MATRIX_COLS; c++) {
+            if (random(0, 5 - matrixDensity) == 0) {
+                matrixDrops[c]++;
+                if (matrixDrops[c] >= MATRIX_ROWS + 8) {
+                    matrixDrops[c] = 0;
+                    for (int r = 0; r < MATRIX_ROWS; r++) {
+                        matrixChars[c][r] = getRandomChar();
+                    }
+                }
+            }
+            // Randomly change some chars
+            if (random(0, 10) == 0) {
+                int r = random(0, MATRIX_ROWS);
+                matrixChars[c][r] = getRandomChar();
+            }
+        }
+    }
     
     bool handleMatrixInput(Button btn) {
         switch (btn) {
             case BTN_BACK:
                 appState = STATE_MENU;
-                drawMenu();
-                return true;
-                
-            case BTN_CONFIRM:
-                paused = !paused;
+                needsFullRedraw = true;
                 return true;
                 
             case BTN_LEFT:
                 if (matrixDensity > 1) {
                     matrixDensity--;
-                    updateMatrixDimensions();
-                    initMatrix();
-                    drawDemoHeader();
+                    needsFullRedraw = true;
                 }
                 return true;
                 
             case BTN_RIGHT:
-                if (matrixDensity < 5) {
+                if (matrixDensity < 4) {
                     matrixDensity++;
-                    updateMatrixDimensions();
-                    initMatrix();
-                    drawDemoHeader();
+                    needsFullRedraw = true;
                 }
                 return true;
                 
             case BTN_UP:
                 if (matrixSpeed < 5) {
                     matrixSpeed++;
-                    drawDemoHeader();
+                    needsFullRedraw = true;
                 }
                 return true;
                 
             case BTN_DOWN:
                 if (matrixSpeed > 1) {
                     matrixSpeed--;
-                    drawDemoHeader();
+                    needsFullRedraw = true;
                 }
+                return true;
+                
+            case BTN_CONFIRM:
+                paused = !paused;
+                needsFullRedraw = true;
                 return true;
                 
             default:
@@ -559,155 +636,77 @@ private:
         }
     }
     
-    void initMatrix() {
-        updateMatrixDimensions();
+    void drawMatrix() {
+        // Black background
+        display.fillScreen(GxEPD_BLACK);
         
-        for (int i = 0; i < matrixCols; i++) {
-            matrixDrops[i] = random(0, matrixRows);
-            matrixSpeeds[i] = random(1, 4);
-            for (int j = 0; j < matrixRows; j++) {
-                matrixChars[i][j] = getRandomMatrixChar();
-            }
-        }
-    }
-    
-    void updateMatrixDimensions() {
-        int baseCols = 15 + matrixDensity * 7;  // 22 to 50 columns
-        matrixCols = min(baseCols, MATRIX_MAX_COLS);
-        matrixRows = min((screenH - 100) / 18, MATRIX_MAX_ROWS);
-    }
-    
-    char getRandomMatrixChar() {
-        int type = random(3);
-        if (type == 0) {
-            return '0' + random(10);
-        } else if (type == 1) {
-            return 'A' + random(26);
-        } else {
-            const char symbols[] = "!@#$%^&*+=<>?/|\\~";
-            return symbols[random(sizeof(symbols) - 1)];
-        }
-    }
-    
-    void drawMatrixFrame() {
-        if (paused) return;
+        // Header
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold9pt7b);
+        display.setCursor(12, 25);
+        display.print("Matrix Rain");
         
-        uint32_t now = millis();
-        int delay = 600 - matrixSpeed * 100;  // 500ms to 100ms
-        if (now - lastFrameTime < (uint32_t)delay) {
-            return;
-        }
-        lastFrameTime = now;
-        
-        int cellW = (screenW - 40) / matrixCols;
-        int cellH = 18;
-        int offsetX = 20;
-        int offsetY = 55;
-        
-        // Update drops
-        for (int i = 0; i < matrixCols; i++) {
-            matrixDrops[i] += matrixSpeeds[i];
-            if (matrixDrops[i] > matrixRows + 8) {
-                matrixDrops[i] = 0;
-                matrixSpeeds[i] = random(1, 4);
-            }
-            if (random(10) < 2) {
-                int row = random(0, matrixRows);
-                matrixChars[i][row] = getRandomMatrixChar();
-            }
+        if (paused) {
+            display.setCursor(screenW / 2 - 40, 25);
+            display.print("[PAUSED]");
         }
         
-        int drawH = matrixRows * cellH;
-        display.setPartialWindow(offsetX - 5, offsetY - 5, 
-                                 screenW - 40 + 10, drawH + 10);
-        display.firstPage();
-        do {
-            display.fillRect(offsetX - 5, offsetY - 5, 
-                            screenW - 40 + 10, drawH + 10, GxEPD_BLACK);
-            
-            display.setTextColor(GxEPD_WHITE);
-            display.setFont(nullptr);
-            
-            for (int col = 0; col < matrixCols; col++) {
-                int dropY = matrixDrops[col];
+        // Settings display
+        char setStr[32];
+        snprintf(setStr, 32, "Density:%d Speed:%d", matrixDensity, matrixSpeed);
+        display.setCursor(screenW - 160, 25);
+        display.print(setStr);
+        
+        // Draw characters
+        display.setFont(&FreeMono9pt7b);
+        int charW = (screenW - 40) / MATRIX_COLS;
+        int charH = (screenH - 80) / MATRIX_ROWS;
+        int startX = 20;
+        int startY = 45;
+        
+        for (int c = 0; c < MATRIX_COLS; c++) {
+            int drop = matrixDrops[c];
+            for (int r = 0; r < MATRIX_ROWS; r++) {
+                int brightness = 0;
                 
-                for (int row = 0; row < matrixRows; row++) {
-                    int dist = dropY - row;
+                // Calculate brightness based on distance from drop head
+                int dist = drop - r;
+                if (dist >= 0 && dist < 8) {
+                    brightness = 8 - dist;
+                }
+                
+                if (brightness > 0) {
+                    int x = startX + c * charW;
+                    int y = startY + r * charH + charH;
                     
-                    if (dist >= 0 && dist < 10) {
-                        int x = offsetX + col * cellW + cellW/2 - 3;
-                        int y = offsetY + row * cellH + cellH - 2;
-                        
-                        if (dist < 6) {
-                            display.setCursor(x, y);
-                            display.print((char)matrixChars[col][row]);
-                        }
+                    // Head of drop is brightest (white)
+                    if (dist == 0) {
+                        display.setTextColor(GxEPD_WHITE);
+                        display.setCursor(x, y);
+                        display.print(matrixChars[c][r]);
+                    }
+                    // Tail fades out with dithering
+                    else if (brightness > 3) {
+                        display.setTextColor(GxEPD_WHITE);
+                        display.setCursor(x, y);
+                        display.print(matrixChars[c][r]);
                     }
                 }
             }
-            
-        } while (display.nextPage());
-    }
-    
-    // =========================================================================
-    // COMMON UI
-    // =========================================================================
-    
-    void drawDemoScreen() {
-        display.setFullWindow();
-        display.firstPage();
-        do {
-            display.fillScreen(GxEPD_WHITE);
-            drawDemoHeaderContent();
-            drawDemoFooter();
-        } while (display.nextPage());
-    }
-    
-    void drawDemoHeader() {
-        display.setPartialWindow(0, 0, screenW, 50);
-        display.firstPage();
-        do {
-            display.fillRect(0, 0, screenW, 50, GxEPD_WHITE);
-            drawDemoHeaderContent();
-        } while (display.nextPage());
-    }
-    
-    void drawDemoHeaderContent() {
-        display.setFont(&FreeSansBold12pt7b);
-        display.setTextColor(GxEPD_BLACK);
-        display.setCursor(20, 35);
-        
-        if (appState == STATE_SHAPES) {
-            display.print("3D Shapes");
-            display.setFont(&FreeSans9pt7b);
-            display.setCursor(150, 35);
-            display.printf("Shape: %s", getShapeName());
-            display.setCursor(screenW - 250, 35);
-            display.printf("Size: %d  Speed: %d", shapeSize, rotateSpeed);
-        } else {
-            display.print("Matrix Rain");
-            display.setFont(&FreeSans9pt7b);
-            display.setCursor(screenW - 250, 35);
-            display.printf("Density: %d  Speed: %d", matrixDensity, matrixSpeed);
         }
         
-        display.drawLine(0, 48, screenW, 48, GxEPD_BLACK);
-    }
-    
-    void drawDemoFooter() {
-        display.drawLine(0, screenH - 40, screenW, screenH - 40, GxEPD_BLACK);
+        // Controls footer
+        display.fillRect(0, screenH - 35, screenW, 35, GxEPD_BLACK);
+        display.drawLine(0, screenH - 35, screenW, screenH - 35, GxEPD_WHITE);
+        display.setTextColor(GxEPD_WHITE);
         display.setFont(&FreeSans9pt7b);
-        display.setTextColor(GxEPD_BLACK);
-        display.setCursor(20, screenH - 15);
-        
-        if (appState == STATE_SHAPES) {
-            display.print("L/R: Size | U/D: Speed | OK: Next Shape | BACK: Menu");
-        } else {
-            display.print("L/R: Density | U/D: Speed | OK: Pause | BACK: Menu");
-        }
+        int16_t tx, ty; uint16_t tw, th;
+        const char* controls = "L/R: Density | U/D: Speed | OK: Pause | BACK: Menu";
+        display.getTextBounds(controls, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor((screenW - tw) / 2, screenH - 12);
+        display.print(controls);
     }
 };
-
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_CUBE3D_H

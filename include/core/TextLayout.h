@@ -28,11 +28,49 @@
 // =============================================================================
 // Layout Constants
 // =============================================================================
-// Layout limits - minimal for ESP32-C3 (pages cached to SD anyway)
+// Layout limits - balanced for ESP32-C3 memory constraints
 #define MAX_WORDS_PER_LINE      12      // Words per line
-#define MAX_LINES_PER_PAGE      20      // Lines per page (800px / 34px line height)
+#define MAX_LINES_PER_PAGE      26      // Lines per page (800px / 28px line height = 26 for medium font)
 #define MAX_PAGES_PER_CHAPTER   500
 #define WORD_BUFFER_SIZE        24      // Max word length
+#define IMAGE_PATH_SIZE         64      // Max image filename length
+
+// =============================================================================
+// Page Type - Text or Image
+// =============================================================================
+enum class PageType : uint8_t {
+    TEXT = 0,
+    IMAGE = 1
+};
+
+// =============================================================================
+// Page Info - Tracks page type and image path for image pages
+// =============================================================================
+struct PageInfo {
+    PageType type;
+    char imagePath[IMAGE_PATH_SIZE];  // Filename only (e.g., "img_001.jpg")
+    uint16_t imageWidth;
+    uint16_t imageHeight;
+    
+    PageInfo() : type(PageType::TEXT), imageWidth(0), imageHeight(0) {
+        imagePath[0] = '\0';
+    }
+    
+    void setImage(const char* path, int w, int h) {
+        type = PageType::IMAGE;
+        strncpy(imagePath, path, IMAGE_PATH_SIZE - 1);
+        imagePath[IMAGE_PATH_SIZE - 1] = '\0';
+        imageWidth = w;
+        imageHeight = h;
+    }
+    
+    void setText() {
+        type = PageType::TEXT;
+        imagePath[0] = '\0';
+        imageWidth = 0;
+        imageHeight = 0;
+    }
+};
 
 // =============================================================================
 // Word Structure
@@ -56,14 +94,16 @@ struct LayoutLine {
     uint8_t wordCount;
     int16_t y;              // Y position (baseline)
     int16_t width;          // Total width of words
+    int16_t indent;         // Paragraph indent (0 if none)
     bool justified;         // Whether spacing was applied
     
-    LayoutLine() : wordCount(0), y(0), width(0), justified(false) {}
+    LayoutLine() : wordCount(0), y(0), width(0), indent(0), justified(false) {}
     
     void clear() {
         wordCount = 0;
         y = 0;
         width = 0;
+        indent = 0;
         justified = false;
     }
 };
@@ -95,6 +135,7 @@ struct LayoutPage {
             f.write((const uint8_t*)&line.wordCount, sizeof(line.wordCount));
             f.write((const uint8_t*)&line.y, sizeof(line.y));
             f.write((const uint8_t*)&line.width, sizeof(line.width));
+            f.write((const uint8_t*)&line.indent, sizeof(line.indent));
             f.write((const uint8_t*)&line.justified, sizeof(line.justified));
             
             for (int j = 0; j < line.wordCount; j++) {
@@ -122,6 +163,7 @@ struct LayoutPage {
             if (f.read((uint8_t*)&line.wordCount, sizeof(line.wordCount)) != sizeof(line.wordCount)) return false;
             if (f.read((uint8_t*)&line.y, sizeof(line.y)) != sizeof(line.y)) return false;
             if (f.read((uint8_t*)&line.width, sizeof(line.width)) != sizeof(line.width)) return false;
+            if (f.read((uint8_t*)&line.indent, sizeof(line.indent)) != sizeof(line.indent)) return false;
             if (f.read((uint8_t*)&line.justified, sizeof(line.justified)) != sizeof(line.justified)) return false;
             
             if (line.wordCount > MAX_WORDS_PER_LINE) return false;
@@ -207,8 +249,20 @@ public:
     int getPageCount() const { return _pageCount; }
     
     /**
+     * Get page type (TEXT or IMAGE)
+     */
+    PageType getPageType(int pageNum) const;
+    
+    /**
+     * Get image info for an image page
+     * Returns false if page is not an image
+     */
+    bool getImageInfo(int pageNum, char* pathOut, size_t pathSize, int* widthOut, int* heightOut) const;
+    
+    /**
      * Render a specific page to display
      * Loads page from cache if necessary
+     * Note: For IMAGE pages, caller should use getImageInfo() and render separately
      */
     void renderPage(int pageNum, GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT>& display);
     
@@ -238,6 +292,8 @@ private:
     int _pageCount;
     bool _isHeaderLine;     // True when processing # header line (centered, bold)
     bool _isBulletLine;     // True when processing • bullet line
+    bool _nextLineIsParaStart;  // True when next line should be indented (paragraph start)
+    int _cachedSpaceWidth;  // Cached space width - calculated once per layout session
     
     // Current line being built
     LayoutLine _currentLine;
@@ -252,6 +308,9 @@ private:
     
     // Cache path for storing pages
     String _cachePath;
+    
+    // Page type tracking - which pages are images vs text
+    PageInfo _pageInfos[MAX_PAGES_PER_CHAPTER];
     
     // ==========================================================================
     // Internal Methods
@@ -271,6 +330,12 @@ private:
      * Complete current page (save to cache, start new)
      */
     void finishPage();
+    
+    /**
+     * Create an image-only page
+     * Finishes current page, creates image page, prepares for next text
+     */
+    void createImagePage(const char* imagePath, int width, int height);
     
     /**
      * Get pixel width of text with current font

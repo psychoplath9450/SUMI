@@ -49,11 +49,15 @@ inline BookType detectBookType(const char* path) {
  * @brief Information about a book in the library
  */
 struct BookEntry {
-    char filename[64];      // File or folder name
+    char filename[64];      // File or folder name (may be truncated for display)
     char title[48];         // Display title
     char author[32];        // Author name (if available)
     char coverPath[96];     // Path to cached cover image
     uint32_t size;          // File size in bytes
+    uint32_t totalWords;    // Word count (from meta.json)
+    uint32_t cacheHash;     // Hash for /.sumi/books/{hash}/ directory (computed from full filename)
+    uint16_t estimatedPages; // Estimated page count
+    uint16_t pubYear;       // Publication year (0 if unknown)
     bool isDirectory;       // True if this is a directory
     bool isRegularDir;      // True for non-book directories
     BookType bookType;      // Type of book

@@ -79,6 +79,15 @@ let wifiConnected = false;  // Track WiFi connection status
 let fileCache = { books: [], images: [], maps: [], flashcards: [], notes: [] };
 
 // =============================================================================
+// IMMEDIATE NETWORK DETECTION
+// =============================================================================
+// If hostname is 192.168.4.1, we're DEFINITELY on hotspot - no async needed
+// This runs immediately before any other code, so all functions have correct value
+window.isOnHotspot = (window.location.hostname === '192.168.4.1');
+window.hasInternetAccess = !window.isOnHotspot;
+console.log('[PORTAL] Immediate detection: hostname =', window.location.hostname, 'isOnHotspot =', window.isOnHotspot);
+
+// =============================================================================
 // API
 // =============================================================================
 async function api(url, method='GET', data=null) {
@@ -301,8 +310,8 @@ async function refreshSummary() {
   }
 }
 
-// Update the connection banner based on actual WiFi state from API + browser internet check
-async function updateConnectionBanner(sumiConnected, ssid, sumiIP) {
+// Update the connection banner based on actual WiFi state from API
+function updateConnectionBanner(sumiConnected, ssid, sumiIP) {
   const banner = document.getElementById('connectionBanner');
   if (!banner) return;
   
@@ -311,63 +320,37 @@ async function updateConnectionBanner(sumiConnected, ssid, sumiIP) {
   if (!sumiConnected) {
     // State 1: SUMI is in hotspot-only mode (no WiFi credentials saved)
     banner.innerHTML = `
-      <div style="background: linear-gradient(90deg, #fff3cd 0%, #ffe69c 100%); border-bottom: 1px solid #ffc107; padding: 8px 16px; display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 18px;">📡</span>
+      <div style="background: linear-gradient(90deg, #f8d7da 0%, #f5c6cb 100%); border-bottom: 2px solid #dc3545; padding: 12px 16px; display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 24px;">⚠️</span>
         <div style="flex: 1;">
-          <span style="font-weight: 600; color: #856404;">Hotspot Mode</span>
-          <span style="color: #856404; font-size: 12px;"> — Connect SUMI to your home WiFi for weather, sync, and book processing.</span>
+          <div style="font-weight: 700; color: #721c24; font-size: 14px;">Home WiFi Required for Books</div>
+          <div style="color: #721c24; font-size: 12px; margin-top: 4px;">SUMI needs your home network to process EPUBs, get weather, and sync progress. Games work offline.</div>
         </div>
-        <a href="#" onclick="showPage('wifi'); return false;" style="background: #ffc107; color: #856404; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: 600;">Setup WiFi →</a>
+        <a href="#" onclick="showPage('wifi'); return false;" style="background: #dc3545; color: white; padding: 8px 14px; border-radius: 6px; text-decoration: none; font-size: 12px; font-weight: 600;">Add WiFi →</a>
       </div>
     `;
     return;
   }
   
-  // SUMI is connected to home WiFi - check if browser is still on hotspot
-  // 192.168.4.1 definitively means hotspot
-  // sumi.local could be either - need to verify internet access
-  const browserHost = window.location.hostname;
-  const isDefinitelyOnHotspot = (browserHost === '192.168.4.1');
+  // SUMI is connected to home WiFi - check if browser is also on home network
+  // Use the global isOnHotspot flag set during page load
   const sumiHasHomeIP = sumiIP && sumiIP !== '192.168.4.1';
+  const browserOnHotspot = window.isOnHotspot === true;
   
-  // If we're at sumi.local and SUMI is connected to home WiFi,
-  // we need to check if browser has internet to know which network we're on
-  let browserHasInternet = false;
-  if (!isDefinitelyOnHotspot && sumiHasHomeIP) {
-    // Use image load to test internet - this actually fails without connectivity
-    browserHasInternet = await new Promise((resolve) => {
-      const img = new Image();
-      const timeout = setTimeout(() => {
-        img.onload = img.onerror = null;
-        resolve(false);
-      }, 3000);
-      img.onload = () => {
-        clearTimeout(timeout);
-        resolve(true);
-      };
-      img.onerror = () => {
-        clearTimeout(timeout);
-        resolve(false);
-      };
-      // Use a tiny favicon with cache-busting
-      img.src = 'https://www.google.com/favicon.ico?t=' + Date.now();
-    });
-  }
-  
-  if (isDefinitelyOnHotspot || (!browserHasInternet && sumiHasHomeIP)) {
+  if (browserOnHotspot && sumiHasHomeIP) {
     // State 2: Browser on hotspot but SUMI connected to home WiFi - prompt to switch
     banner.innerHTML = `
-      <div style="background: linear-gradient(90deg, #fff3cd 0%, #ffe69c 100%); border-bottom: 2px solid #ffc107; padding: 10px 16px; display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 20px;">⚠️</span>
+      <div style="background: linear-gradient(90deg, #cce5ff 0%, #b8daff 100%); border-bottom: 2px solid #007bff; padding: 12px 16px; display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 24px;">🔄</span>
         <div style="flex: 1;">
-          <span style="font-weight: 700; color: #856404;">Switch to ${ssid} for book processing</span>
-          <div style="color: #856404; font-size: 12px; margin-top: 4px;">
-            Then visit <a href="http://sumi.local" style="color: #856404; font-weight: 600;">sumi.local</a> or <a href="http://${sumiIP}" style="color: #856404; font-weight: 600;">${sumiIP}</a>
+          <div style="font-weight: 700; color: #004085; font-size: 14px;">SUMI Connected! Now switch your device</div>
+          <div style="color: #004085; font-size: 12px; margin-top: 4px;">
+            Connect your phone/computer to <strong>${ssid}</strong>, then visit <a href="http://sumi.local" style="color: #004085; font-weight: 600;">sumi.local</a> or <a href="http://${sumiIP}" style="color: #004085; font-weight: 600;">${sumiIP}</a>
           </div>
         </div>
       </div>
     `;
-  } else {
+  } else if (!browserOnHotspot && sumiHasHomeIP) {
     // State 3: Both SUMI and browser on home network - full features!
     banner.innerHTML = `
       <div style="background: linear-gradient(90deg, #d4edda 0%, #c3e6cb 100%); border-bottom: 1px solid #28a745; padding: 8px 16px; display: flex; align-items: center; gap: 10px;">
@@ -379,6 +362,27 @@ async function updateConnectionBanner(sumiConnected, ssid, sumiIP) {
         <span style="color: #155724; font-size: 11px; opacity: 0.8;">${ssid} • ${sumiIP}</span>
       </div>
     `;
+  } else {
+    // Fallback: unclear state
+    banner.innerHTML = `
+      <div style="background: linear-gradient(90deg, #fff3cd 0%, #ffeeba 100%); border-bottom: 2px solid #ffc107; padding: 12px 16px; display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 24px;">📶</span>
+        <div style="flex: 1;">
+          <div style="font-weight: 700; color: #856404; font-size: 14px;">SUMI is on ${ssid}</div>
+          <div style="color: #856404; font-size: 12px; margin-top: 4px;">
+            Switch to the same network to access all features
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  
+  // Update Files page hotspot warning visibility
+  const hotspotWarning = document.getElementById('hotspotBookWarning');
+  const bookProcessingInfo = document.getElementById('bookProcessingInfo');
+  if (hotspotWarning && bookProcessingInfo) {
+    hotspotWarning.style.display = browserOnHotspot ? 'block' : 'none';
+    bookProcessingInfo.style.display = browserOnHotspot ? 'none' : 'block';
   }
 }
 
@@ -877,8 +881,7 @@ async function saveAndDeploy() {
         fontSize: parseInt(document.getElementById('readerFontSize')?.value) || 18,
         lineHeight: parseInt(document.getElementById('readerLineHeight')?.value) || 150,
         margins: parseInt(document.getElementById('readerMargins')?.value) || 20,
-        textAlign: document.getElementById('togJustify')?.classList.contains('on') ? 1 : 0,
-        requirePreprocessed: document.getElementById('togReqPreprocess')?.classList.contains('on') ?? true
+        textAlign: document.getElementById('togJustify')?.classList.contains('on') ? 1 : 0
       }
     });
     
@@ -981,15 +984,17 @@ async function scanWifi() {
   const d = await api('/api/wifi/scan');
   
   if (d?.networks?.length) {
-    document.getElementById('wifiList').innerHTML = d.networks.map(n => `
-      <div class="wifi-item" onclick="promptWifi('${n.ssid.replace(/'/g,"\\'")}')">
+    document.getElementById('wifiList').innerHTML = d.networks.map(n => {
+      const safeSSID = n.ssid.replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+      return `
+      <div class="wifi-item" onclick="promptWifi('${safeSSID}')">
         <span class="wifi-icon">📶</span>
         <div class="wifi-info">
           <div class="wifi-name">${n.ssid}</div>
           <div class="wifi-meta">${n.rssi} dBm ${n.secure ? '🔒' : 'Open'}</div>
         </div>
       </div>
-    `).join('');
+    `}).join('');
   } else {
     document.getElementById('wifiList').innerHTML = '<p style="text-align:center;padding:20px;color:var(--text-muted);">No networks found. Try again.</p>';
   }
@@ -999,8 +1004,10 @@ async function scanWifi() {
 }
 
 function promptWifi(ssid) {
-  pendingWifiSSID = ssid;
-  document.getElementById('wifiModalSSID').textContent = ssid;
+  // Decode HTML entities back to original characters
+  const decoded = ssid.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+  pendingWifiSSID = decoded;
+  document.getElementById('wifiModalSSID').textContent = decoded;
   document.getElementById('wifiPassword').value = '';
   document.getElementById('wifiModal').classList.add('show');
   document.getElementById('wifiPassword').focus();
@@ -1015,15 +1022,59 @@ async function connectWifi() {
   closeModal('wifiModal');
   toast('Saving WiFi credentials...', 'info');
   
+  // Show connecting status immediately
+  document.getElementById('wifiStatus').innerHTML = `
+    <div style="color:var(--primary);font-weight:600;margin-bottom:8px;">⏳ Connecting to ${pendingWifiSSID}...</div>
+    <div style="color:var(--text-muted);font-size:12px;">Please wait while SUMI connects to your network</div>
+  `;
+  
   const result = await api('/api/wifi/connect', 'POST', {ssid: pendingWifiSSID, password: pw});
   
   if (result?.status === 'connected' || result?.status === 'credentials_saved') {
-    toast('✓ WiFi credentials saved! Device connecting...', 'success');
+    toast('✓ WiFi credentials saved! Connecting...', 'success');
+    // Poll for connection status
+    pollWifiConnection(pendingWifiSSID);
   } else {
     toast('Failed to save credentials.', 'error');
+    loadWifiStatus();
+  }
+}
+
+// Poll for WiFi connection after saving credentials
+async function pollWifiConnection(ssid, attempts = 0) {
+  if (attempts >= 10) {
+    // Give up after 10 attempts (20 seconds)
+    document.getElementById('wifiStatus').innerHTML = `
+      <div style="color:var(--warning);font-weight:600;margin-bottom:8px;">⚠️ Connection taking longer than expected</div>
+      <div style="color:var(--text-muted);font-size:12px;">SUMI may still connect. Check the device screen or try again.</div>
+    `;
+    return;
   }
   
-  setTimeout(loadWifiStatus, 3000);
+  const d = await api('/api/status');
+  if (d?.wifi?.connected) {
+    // Connected! Show success with switch instructions
+    document.getElementById('wifiStatus').innerHTML = `
+      <div style="color:var(--success);font-weight:600;margin-bottom:8px;font-size:16px;">✓ SUMI Connected to ${d.wifi.ssid}!</div>
+      <div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border: 2px solid #28a745; border-radius: 8px; padding: 14px; margin: 12px 0;">
+        <div style="font-size: 13px; color: #155724; line-height: 1.6;">
+          <strong>✓ Safe to switch networks now!</strong><br><br>
+          1. Go to your WiFi settings<br>
+          2. Connect to <strong>${d.wifi.ssid}</strong><br>
+          3. Return here or visit: <a href="http://${d.wifi.ip}" style="color: #155724; font-weight: 600;">${d.wifi.ip}</a>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-secondary" style="margin-top:8px;" onclick="disconnectWifi()">📴 Disconnect</button>
+    `;
+    checkWifiWarnings();
+  } else {
+    // Still connecting, update status and try again
+    document.getElementById('wifiStatus').innerHTML = `
+      <div style="color:var(--primary);font-weight:600;margin-bottom:8px;">⏳ Connecting to ${ssid}...</div>
+      <div style="color:var(--text-muted);font-size:12px;">Attempt ${attempts + 1}/10 - Please wait...</div>
+    `;
+    setTimeout(() => pollWifiConnection(ssid, attempts + 1), 2000);
+  }
 }
 
 // =============================================================================
@@ -1461,11 +1512,18 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
   const metadata = parseMetadata(opfContent);
   const manifest = parseManifest(opfContent);
   const spine = parseSpine(opfContent);
+  const language = metadata.language || 'en';
   
   console.log('[PORTAL] Metadata:', metadata);
   console.log('[PORTAL] Spine items:', spine.length);
+  console.log('[PORTAL] Language:', language);
   
-  // Step 2: Extract cover
+  // Step 2: Extract TOC
+  onProgress('Extracting TOC...', 0.08);
+  const toc = await extractToc(zip, opfContent, opfDir, manifest);
+  console.log('[PORTAL] TOC entries:', toc.length);
+  
+  // Step 3: Extract cover
   onProgress('Extracting cover...', 0.1);
   const coverPath = await findCoverInEpub(zip, opfContent, opfDir);
   let thumbBlob = null, fullBlob = null;
@@ -1485,18 +1543,22 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
     }
   }
   
-  // Step 3: Extract and convert all chapters to plain text
+  // Step 4: Extract and convert all chapters with enhanced processing
   onProgress('Extracting chapters...', 0.15);
   const chapters = [];
   let totalChars = 0;
   let totalWords = 0;
+  let imageIndex = { count: 0 };  // Shared counter for all images in book
+  
+  // Ensure images directory exists
+  await ensureDirectory(cacheDir + '/images');
   
   for (let i = 0; i < spine.length; i++) {
     const idref = spine[i];
     const item = manifest[idref];
     if (!item) continue;
     
-    const progress = 0.15 + (i / spine.length) * 0.7;
+    const progress = 0.15 + (i / spine.length) * 0.65;
     onProgress(`Chapter ${i+1}/${spine.length}...`, progress);
     
     const chapterPath = resolveHref(item.href, opfDir);
@@ -1504,8 +1566,25 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
     
     if (chapterFile) {
       try {
-        const html = await chapterFile.async('string');
-        const text = htmlToPlainText(html);
+        let html = await chapterFile.async('string');
+        
+        // Extract inline images BEFORE converting to plain text
+        // This uploads images and returns markers to insert
+        const images = await extractInlineImages(zip, html, opfDir, cacheDir, imageIndex);
+        
+        // Replace <img> tags with markers
+        for (const img of images) {
+          html = html.replace(img.original, img.marker);
+        }
+        
+        // Convert HTML to plain text with rich markers
+        let text = htmlToPlainText(html);
+        
+        // Apply smart typography (quotes, em-dashes, ellipsis)
+        text = applySmartTypography(text);
+        
+        // Add soft hyphens for better line breaking
+        text = addSoftHyphens(text, language);
         
         if (text.trim().length > 0) {
           const charCount = text.length;
@@ -1531,27 +1610,50 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
     if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
   }
   
-  console.log('[PORTAL] Extracted', chapters.length, 'chapters,', totalWords, 'words');
+  console.log('[PORTAL] Extracted', chapters.length, 'chapters,', totalWords, 'words,', imageIndex.count, 'images');
   
   // Estimate pages: ~1800 chars per e-ink page (conservative estimate for 800x480)
   const CHARS_PER_PAGE = 1800;
   const estimatedPages = Math.ceil(totalChars / CHARS_PER_PAGE);
   
-  // Step 4: Build meta.json
+  // Step 5: Build meta.json with enhanced metadata
   const meta = {
-    version: 3,
+    version: 5,  // Bumped version for enhanced metadata extraction
     hash: hash,
     filename: file.name,
     fileSize: file.size,
+    
+    // Core metadata
     title: metadata.title || file.name.replace('.epub', ''),
     author: metadata.author || 'Unknown',
-    language: metadata.language || 'en',
+    language: language,
+    
+    // Extended metadata (if available)
+    publisher: metadata.publisher || null,
+    description: metadata.description || null,
+    pubYear: metadata.pubYear || null,
+    pubDate: metadata.pubDate || null,
+    subjects: metadata.subjects || null,
+    isbn: metadata.isbn || null,
+    series: metadata.series || null,
+    seriesPosition: metadata.seriesPosition || null,
+    epubVersion: metadata.epubVersion || null,
+    
+    // Content stats
     totalChapters: chapters.length,
     totalChars: totalChars,
     totalWords: totalWords,
+    totalImages: imageIndex.count,
     estimatedPages: estimatedPages,
-    estimatedReadingMins: Math.ceil(totalWords / 250), // ~250 wpm average
+    estimatedReadingMins: Math.ceil(totalWords / 250),
+    
+    // Processing info
+    hasToc: toc.length > 0,
+    hasHyphenation: true,
+    hasSmartTypography: true,
     processedAt: Date.now(),
+    
+    // Chapter details
     chapters: chapters.map((c, i) => ({
       index: i,
       file: `ch_${String(i).padStart(3, '0')}.txt`,
@@ -1560,14 +1662,36 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
     }))
   };
   
-  // Step 5: Upload everything
-  onProgress('Uploading...', 0.85);
+  // Map TOC entries to chapter indices
+  const tocMapped = toc.map((entry, i) => {
+    // Try to find matching chapter by href
+    let chapterIndex = i;
+    for (let j = 0; j < chapters.length; j++) {
+      if (chapters[j].href && entry.href && chapters[j].href.includes(entry.href)) {
+        chapterIndex = j;
+        break;
+      }
+    }
+    return {
+      title: entry.title,
+      chapter: Math.min(chapterIndex, chapters.length - 1)
+    };
+  });
+  
+  // Step 6: Upload everything
+  onProgress('Uploading...', 0.82);
   
   // Create cache directory
   await ensureDirectory(cacheDir);
   
   // Upload meta.json
   await uploadTextFile(cacheDir + '/meta.json', JSON.stringify(meta, null, 2));
+  
+  // Upload toc.json if we have TOC entries
+  if (tocMapped.length > 0) {
+    await uploadTextFile(cacheDir + '/toc.json', JSON.stringify(tocMapped, null, 2));
+    console.log('[PORTAL] Saved TOC with', tocMapped.length, 'entries');
+  }
   
   // Upload covers
   if (thumbBlob) {
@@ -1579,7 +1703,7 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
   
   // Upload chapters
   for (let i = 0; i < chapters.length; i++) {
-    const progress = 0.9 + (i / chapters.length) * 0.08;
+    const progress = 0.88 + (i / chapters.length) * 0.08;
     onProgress(`Saving ${i+1}/${chapters.length}...`, progress);
     
     const filename = `ch_${String(i).padStart(3, '0')}.txt`;
@@ -1639,13 +1763,81 @@ function parseMetadata(opf) {
   const titleMatch = opf.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/i);
   if (titleMatch) meta.title = decodeEntities(titleMatch[1].trim());
   
-  // Author
-  const authorMatch = opf.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/i);
-  if (authorMatch) meta.author = decodeEntities(authorMatch[1].trim());
+  // Author (may have multiple)
+  const authorMatches = opf.matchAll(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/gi);
+  const authors = [];
+  for (const m of authorMatches) {
+    authors.push(decodeEntities(m[1].trim()));
+  }
+  if (authors.length > 0) meta.author = authors.join(', ');
   
   // Language
   const langMatch = opf.match(/<dc:language[^>]*>([^<]+)<\/dc:language>/i);
-  if (langMatch) meta.language = langMatch[1].trim();
+  if (langMatch) meta.language = langMatch[1].trim().substring(0, 5); // "en-US" -> "en-US"
+  
+  // Publisher
+  const pubMatch = opf.match(/<dc:publisher[^>]*>([^<]+)<\/dc:publisher>/i);
+  if (pubMatch) meta.publisher = decodeEntities(pubMatch[1].trim());
+  
+  // Description (may contain CDATA or HTML)
+  const descMatch = opf.match(/<dc:description[^>]*>([\s\S]*?)<\/dc:description>/i);
+  if (descMatch) {
+    let desc = descMatch[1].trim();
+    // Remove CDATA wrapper if present
+    desc = desc.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+    // Strip HTML tags
+    desc = desc.replace(/<[^>]+>/g, ' ');
+    // Normalize whitespace
+    desc = desc.replace(/\s+/g, ' ').trim();
+    // Decode entities
+    desc = decodeEntities(desc);
+    // Truncate if very long
+    if (desc.length > 500) desc = desc.substring(0, 497) + '...';
+    meta.description = desc;
+  }
+  
+  // Publication date
+  const dateMatch = opf.match(/<dc:date[^>]*>([^<]+)<\/dc:date>/i);
+  if (dateMatch) {
+    const dateStr = dateMatch[1].trim();
+    // Extract year from various formats: "2023", "2023-01-15", "January 15, 2023"
+    const yearMatch = dateStr.match(/(\d{4})/);
+    if (yearMatch) meta.pubYear = parseInt(yearMatch[1]);
+    meta.pubDate = dateStr;
+  }
+  
+  // Subjects/genres (may have multiple)
+  const subjectMatches = opf.matchAll(/<dc:subject[^>]*>([^<]+)<\/dc:subject>/gi);
+  const subjects = [];
+  for (const m of subjectMatches) {
+    const subj = decodeEntities(m[1].trim());
+    if (subj && subj.length < 50) subjects.push(subj);
+  }
+  if (subjects.length > 0) meta.subjects = subjects.slice(0, 5); // Max 5
+  
+  // ISBN (identifier with scheme="ISBN" or type containing ISBN)
+  const identMatches = opf.matchAll(/<dc:identifier[^>]*>([^<]+)<\/dc:identifier>/gi);
+  for (const m of identMatches) {
+    const id = m[1].trim();
+    const tag = m[0];
+    // Check for ISBN in tag attributes or value
+    if (tag.toLowerCase().includes('isbn') || /^(97[89])?\d{9}[\dXx]$/.test(id.replace(/-/g, ''))) {
+      meta.isbn = id.replace(/-/g, '');
+      break;
+    }
+  }
+  
+  // Series info (EPUB3 meta properties)
+  const seriesMatch = opf.match(/<meta[^>]*property=["']belongs-to-collection["'][^>]*>([^<]+)<\/meta>/i);
+  if (seriesMatch) meta.series = decodeEntities(seriesMatch[1].trim());
+  
+  // Series position
+  const seriesPosMatch = opf.match(/<meta[^>]*property=["']group-position["'][^>]*>([^<]+)<\/meta>/i);
+  if (seriesPosMatch) meta.seriesPosition = parseInt(seriesPosMatch[1].trim());
+  
+  // EPUB version
+  const versionMatch = opf.match(/<package[^>]*version=["']([^"']+)["']/i);
+  if (versionMatch) meta.epubVersion = versionMatch[1];
   
   return meta;
 }
@@ -1684,6 +1876,254 @@ function parseSpine(opf) {
   }
   
   return spine;
+}
+
+// =============================================================================
+// TOC EXTRACTION
+// =============================================================================
+async function extractToc(zip, opfContent, opfDir, manifest) {
+  const toc = [];
+  
+  // Try NCX first (EPUB 2)
+  const ncxId = opfContent.match(/<spine[^>]*toc=["']([^"']+)["']/i)?.[1];
+  if (ncxId && manifest[ncxId]) {
+    const ncxPath = resolveHref(manifest[ncxId].href, opfDir);
+    const ncxFile = zip.file(ncxPath);
+    if (ncxFile) {
+      const ncx = await ncxFile.async('string');
+      const navPoints = ncx.match(/<navPoint[^>]*>[\s\S]*?<\/navPoint>/gi) || [];
+      
+      navPoints.forEach((np, i) => {
+        const labelMatch = np.match(/<text>([^<]+)<\/text>/i);
+        const srcMatch = np.match(/<content[^>]*src=["']([^"'#]+)/i);
+        if (labelMatch) {
+          toc.push({
+            title: decodeEntities(labelMatch[1].trim()),
+            href: srcMatch ? srcMatch[1] : '',
+            chapter: i
+          });
+        }
+      });
+    }
+  }
+  
+  // Try nav.xhtml (EPUB 3)
+  if (toc.length === 0) {
+    for (const [id, item] of Object.entries(manifest)) {
+      if (item.href.includes('nav') || item.mediaType === 'application/xhtml+xml') {
+        const navPath = resolveHref(item.href, opfDir);
+        const navFile = zip.file(navPath);
+        if (navFile) {
+          const nav = await navFile.async('string');
+          const tocMatch = nav.match(/<nav[^>]*epub:type=["']toc["'][^>]*>([\s\S]*?)<\/nav>/i);
+          if (tocMatch) {
+            const links = tocMatch[1].match(/<a[^>]*>[\s\S]*?<\/a>/gi) || [];
+            links.forEach((link, i) => {
+              const textMatch = link.match(/>([^<]+)</);
+              const hrefMatch = link.match(/href=["']([^"'#]+)/i);
+              if (textMatch) {
+                toc.push({
+                  title: decodeEntities(textMatch[1].trim()),
+                  href: hrefMatch ? hrefMatch[1] : '',
+                  chapter: i
+                });
+              }
+            });
+            if (toc.length > 0) break;
+          }
+        }
+      }
+    }
+  }
+  
+  return toc;
+}
+
+// =============================================================================
+// SMART TYPOGRAPHY
+// =============================================================================
+function applySmartTypography(text) {
+  // Smart quotes (straight to curly)
+  // Opening double quotes: after space, newline, or start
+  text = text.replace(/(^|[\s\n])"/g, "$1\u201C");
+  // Closing double quotes: before space, newline, punctuation, or end
+  text = text.replace(/"([\s\n.,;:!?\)]|$)/g, "\u201D$1");
+  // Remaining double quotes (likely closing)
+  text = text.replace(/"/g, "\u201D");
+  
+  // Single quotes / apostrophes
+  // Opening: after space or newline
+  text = text.replace(/(^|[\s\n])'/g, "$1\u2018");
+  // Apostrophes in contractions (don't, won't, etc)
+  text = text.replace(/(\w)'(\w)/g, "$1\u2019$2");
+  // Remaining single quotes (likely closing)
+  text = text.replace(/'/g, "\u2019");
+  
+  // Em-dashes
+  text = text.replace(/--/g, "\u2014");
+  text = text.replace(/ - /g, " \u2014 ");
+  
+  // Ellipsis
+  text = text.replace(/\.\.\./g, "\u2026");
+  
+  return text;
+}
+
+// =============================================================================
+// SOFT HYPHENATION
+// =============================================================================
+// Simple algorithmic hyphenation - inserts soft hyphens (U+00AD) at likely break points
+// Based on basic English syllable patterns
+function addSoftHyphens(text, language = 'en') {
+  // Only hyphenate words longer than 6 characters
+  const MIN_WORD_LENGTH = 6;
+  const MIN_PREFIX = 2;  // Minimum chars before hyphen
+  const MIN_SUFFIX = 3;  // Minimum chars after hyphen
+  
+  // Common English suffixes (break before these)
+  const suffixes = ['ing', 'tion', 'sion', 'ment', 'ness', 'able', 'ible', 'less', 'ful', 'ous', 'ive', 'ly'];
+  
+  // Common prefixes (break after these)
+  const prefixes = ['pre', 'pro', 'con', 'com', 'dis', 'mis', 'sub', 'super', 'inter', 'over', 'under', 'out', 'anti', 'auto', 'semi', 'multi', 'trans', 'non', 'un', 're', 'de'];
+  
+  // Vowels for syllable detection
+  const vowels = 'aeiouyAEIOUY';
+  const isVowel = c => vowels.includes(c);
+  
+  // Process each word
+  return text.replace(/[a-zA-Z]{7,}/g, word => {
+    if (word.length < MIN_WORD_LENGTH) return word;
+    
+    const breakPoints = [];
+    const lowerWord = word.toLowerCase();
+    
+    // Check prefixes
+    for (const prefix of prefixes) {
+      if (lowerWord.startsWith(prefix) && word.length > prefix.length + MIN_SUFFIX) {
+        breakPoints.push(prefix.length);
+        break;
+      }
+    }
+    
+    // Check suffixes
+    for (const suffix of suffixes) {
+      if (lowerWord.endsWith(suffix) && word.length > suffix.length + MIN_PREFIX) {
+        breakPoints.push(word.length - suffix.length);
+        break;
+      }
+    }
+    
+    // Simple syllable detection: break between consonant clusters
+    // Pattern: vowel + consonant(s) + vowel = break before last consonant
+    for (let i = MIN_PREFIX; i < word.length - MIN_SUFFIX; i++) {
+      if (!isVowel(word[i]) && isVowel(word[i-1]) && i + 1 < word.length && isVowel(word[i+1])) {
+        // consonant between vowels - potential break point
+        breakPoints.push(i);
+      } else if (!isVowel(word[i]) && !isVowel(word[i-1]) && i > MIN_PREFIX && isVowel(word[i-2])) {
+        // two consonants after vowel - break between them
+        breakPoints.push(i);
+      }
+    }
+    
+    // Remove duplicates and sort
+    const uniqueBreaks = [...new Set(breakPoints)]
+      .filter(p => p >= MIN_PREFIX && p <= word.length - MIN_SUFFIX)
+      .sort((a, b) => a - b);
+    
+    // Insert soft hyphens at break points
+    if (uniqueBreaks.length === 0) return word;
+    
+    let result = '';
+    let lastPos = 0;
+    for (const pos of uniqueBreaks) {
+      result += word.substring(lastPos, pos) + '\u00AD';
+      lastPos = pos;
+    }
+    result += word.substring(lastPos);
+    
+    return result;
+  });
+}
+
+// =============================================================================
+// INLINE IMAGE EXTRACTION
+// =============================================================================
+async function extractInlineImages(zip, html, opfDir, cacheDir, imageIndex) {
+  const images = [];
+  const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+  let match;
+  
+  // Target size for e-ink display (480x800 with margins)
+  // Leave room for status bar and comfortable margins
+  const MAX_IMG_WIDTH = 420;
+  const MAX_IMG_HEIGHT = 680;
+  const MIN_IMG_SIZE = 80;  // Skip icons/spacers smaller than this
+  
+  while ((match = imgRegex.exec(html)) !== null) {
+    const src = match[1];
+    
+    // Skip data: URLs and tiny embedded images
+    if (src.startsWith('data:')) continue;
+    
+    const imgPath = resolveHref(decodeURIComponent(src), opfDir);
+    const imgFile = zip.file(imgPath);
+    
+    if (imgFile) {
+      try {
+        const imgData = await imgFile.async('blob');
+        
+        // Check original dimensions first
+        const origDims = await getImageDimensions(imgData);
+        
+        // Skip tiny images (icons, spacers, decorations)
+        if (origDims.width < MIN_IMG_SIZE && origDims.height < MIN_IMG_SIZE) {
+          console.log('[PORTAL] Skipping tiny image:', imgPath, origDims);
+          continue;
+        }
+        
+        // Resize image for e-ink display
+        const resized = await processImage(imgData, MAX_IMG_WIDTH, MAX_IMG_HEIGHT, 0.8);
+        
+        if (resized && resized.size > 100) {
+          const imgFilename = `img_${String(imageIndex.count).padStart(3, '0')}.jpg`;
+          imageIndex.count++;
+          
+          // Upload image to cache directory
+          await uploadBlobFile(`${cacheDir}/images/${imgFilename}`, resized);
+          
+          // Get resized dimensions for marker
+          const dims = await getImageDimensions(resized);
+          
+          images.push({
+            original: match[0],
+            marker: `[!IMG:${imgFilename},w=${dims.width},h=${dims.height}]`,
+            filename: imgFilename
+          });
+          
+          console.log(`[PORTAL] Extracted image: ${imgFilename} (${dims.width}x${dims.height})`);
+        }
+      } catch (e) {
+        console.warn('[PORTAL] Failed to extract image:', imgPath, e);
+      }
+    }
+  }
+  
+  return images;
+}
+
+async function getImageDimensions(blob) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      resolve({ width: img.width, height: img.height });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src);
+      resolve({ width: 200, height: 150 }); // Default
+    };
+    img.src = URL.createObjectURL(blob);
+  });
 }
 
 function resolveHref(href, baseDir) {
@@ -1874,11 +2314,34 @@ async function processImage(blob, maxWidth, maxHeight, quality) {
       
       ctx.drawImage(img, 0, 0, width, height);
       
-      // Convert to grayscale
+      // Convert to grayscale with contrast enhancement for e-ink
       const imageData = ctx.getImageData(0, 0, width, height);
       const data = imageData.data;
+      
+      // First pass: find min/max for auto-levels
+      let minGray = 255, maxGray = 0;
       for (let i = 0; i < data.length; i += 4) {
         const gray = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
+        if (gray < minGray) minGray = gray;
+        if (gray > maxGray) maxGray = gray;
+      }
+      
+      // Second pass: apply grayscale + contrast stretch + slight boost
+      const range = maxGray - minGray || 1;
+      const contrast = 1.15;  // Slight contrast boost for e-ink
+      
+      for (let i = 0; i < data.length; i += 4) {
+        let gray = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
+        
+        // Auto-levels: stretch to full range
+        gray = ((gray - minGray) / range) * 255;
+        
+        // Apply contrast boost
+        gray = ((gray / 255 - 0.5) * contrast + 0.5) * 255;
+        
+        // Clamp
+        gray = Math.max(0, Math.min(255, Math.round(gray)));
+        
         data[i] = data[i+1] = data[i+2] = gray;
       }
       ctx.putImageData(imageData, 0, 0);
@@ -2000,6 +2463,14 @@ async function checkBooksNeedProcessing() {
   const warningEl = document.getElementById('coverWarning');
   if (!warningEl) return;
   
+  // If on hotspot, hide processing UI entirely
+  if (window.isOnHotspot) {
+    warningEl.style.display = 'none';
+    const tipEl = document.getElementById('processingTip');
+    if (tipEl) tipEl.style.display = 'none';
+    return;
+  }
+  
   try {
     // Add timeout to prevent hanging
     const controller = new AbortController();
@@ -2021,130 +2492,40 @@ async function checkBooksNeedProcessing() {
     if (data.unprocessed && data.unprocessed.length > 0) {
       const count = data.unprocessed.length;
       
-      // Check if browser is definitely on hotspot
-      const browserHost = window.location.hostname;
-      const isDefinitelyOnHotspot = (browserHost === '192.168.4.1');
-      
-      // If at sumi.local, we need to verify internet access to know which network we're on
-      let browserHasInternet = false;
-      if (!isDefinitelyOnHotspot) {
-        // Use image load to test internet - this actually fails without connectivity
-        browserHasInternet = await new Promise((resolve) => {
-          const img = new Image();
-          const timeout = setTimeout(() => {
-            img.onload = img.onerror = null;
-            resolve(false);
-          }, 3000);
-          img.onload = () => {
-            clearTimeout(timeout);
-            resolve(true);
-          };
-          img.onerror = () => {
-            clearTimeout(timeout);
-            resolve(false);
-          };
-          // Use a tiny favicon with cache-busting
-          img.src = 'https://www.google.com/favicon.ico?t=' + Date.now();
-        });
-      }
-      
-      if (browserHasInternet) {
-        // Good to go - on home network with internet
-        warningEl.style.display = 'block';
-        warningEl.innerHTML = `
-          <div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border: 2px solid #28a745; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <div style="font-size: 32px;">✅</div>
-              <div style="flex: 1;">
-                <div style="font-weight: 700; font-size: 14px; color: #155724; margin-bottom: 4px;">
-                  Ready to Process ${count} Book${count > 1 ? 's' : ''}
-                </div>
-                <div style="font-size: 12px; color: #155724; line-height: 1.4;">
-                  Extract chapters and covers for instant book loading
-                </div>
+      // We have internet (checked above) - show processing UI
+      warningEl.style.display = 'block';
+      warningEl.innerHTML = `
+        <div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border: 2px solid #28a745; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="font-size: 32px;">✅</div>
+            <div style="flex: 1;">
+              <div style="font-weight: 700; font-size: 14px; color: #155724; margin-bottom: 4px;">
+                Ready to Process ${count} Book${count > 1 ? 's' : ''}
               </div>
-              <button class="btn" style="background: #28a745; border: none; color: white; padding: 12px 24px; font-size: 14px; font-weight: 600; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(40,167,69,0.3);" 
-                      onclick="processExistingBooks()">
-                🚀 Process Now
-              </button>
+              <div style="font-size: 12px; color: #155724; line-height: 1.4;">
+                Extract chapters and covers for instant book loading
+              </div>
+            </div>
+            <button class="btn" style="background: #28a745; border: none; color: white; padding: 12px 24px; font-size: 14px; font-weight: 600; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(40,167,69,0.3);" 
+                    onclick="processExistingBooks()">
+              🚀 Process Now
+            </button>
+          </div>
+        </div>
+      `;
+      
+      // Show the lightbulb tip
+      const tipEl = document.getElementById('processingTip');
+      if (tipEl) {
+        tipEl.style.display = 'block';
+        tipEl.innerHTML = `
+          <div style="background: #fff9e6; border: 1px solid #ffc107; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; display: flex; align-items: flex-start; gap: 10px;">
+            <div style="font-size: 18px;">💡</div>
+            <div style="flex: 1; font-size: 12px; color: #856404; line-height: 1.5;">
+              <strong>Tip:</strong> Processing runs in the background! Hit "Process Now" and continue exploring settings while your books are prepared.
             </div>
           </div>
         `;
-        
-        // Show the lightbulb tip
-        const tipEl = document.getElementById('processingTip');
-        if (tipEl) {
-          tipEl.style.display = 'block';
-          tipEl.innerHTML = `
-            <div style="background: #fff9e6; border: 1px solid #ffc107; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; display: flex; align-items: flex-start; gap: 10px;">
-              <div style="font-size: 18px;">💡</div>
-              <div style="flex: 1; font-size: 12px; color: #856404; line-height: 1.5;">
-                <strong>Tip:</strong> Processing runs in the background! Hit "Process Now" and continue exploring settings while your books are prepared.
-              </div>
-            </div>
-          `;
-        }
-      } else {
-        // On hotspot - need to switch to home network
-        // First check if SUMI is connected to home WiFi
-        try {
-          const statusResp = await fetch('/api/status', { signal: AbortSignal.timeout(3000) });
-          const status = await statusResp.json();
-          const sumiIP = status.wifi?.ip;
-          const sumiSSID = status.wifi?.ssid;
-          const sumiConnected = status.wifi?.connected && sumiIP && sumiIP !== '192.168.4.1';
-          
-          warningEl.style.display = 'block';
-          if (sumiConnected) {
-            // SUMI is on home network, user needs to switch for internet access
-            warningEl.innerHTML = `
-              <div style="background: #e7f3ff; border: 2px solid #007bff; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
-                <div style="display: flex; align-items: flex-start; gap: 12px;">
-                  <div style="font-size: 28px;">📚</div>
-                  <div style="flex: 1;">
-                    <div style="font-weight: 700; font-size: 14px; color: #004085; margin-bottom: 6px;">
-                      ${count} Book${count > 1 ? 's' : ''} Ready to Process
-                    </div>
-                    <div style="font-size: 12px; color: #004085; line-height: 1.5; margin-bottom: 10px;">
-                      Processing requires internet. Switch to <strong>${sumiSSID}</strong>, then visit:
-                    </div>
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-                      <a href="http://sumi.local" style="background: #007bff; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 12px;">sumi.local</a>
-                      <span style="color: #666; font-size: 11px;">or</span>
-                      <a href="http://${sumiIP}" style="background: #6c757d; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 12px;">${sumiIP}</a>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            `;
-          } else {
-            // SUMI not connected to home WiFi yet
-            warningEl.innerHTML = `
-              <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 12px;">
-                <div style="display: flex; align-items: flex-start; gap: 10px;">
-                  <div style="font-size: 20px;">📶</div>
-                  <div style="flex: 1;">
-                    <div style="font-weight: 600; font-size: 12px; color: #856404; margin-bottom: 4px;">
-                      ${count} Book${count > 1 ? 's' : ''} Need Processing
-                    </div>
-                    <div style="font-size: 11px; color: #856404; line-height: 1.5;">
-                      First connect SUMI to your home WiFi, then connect your phone/laptop to the same network.
-                    </div>
-                    <button class="btn btn-sm" style="margin-top: 8px; background: #ffc107; border: none; color: #856404; font-weight: 600;" 
-                            onclick="showPage('wifi')">
-                      📶 Setup WiFi
-                    </button>
-                  </div>
-                </div>
-              </div>
-            `;
-          }
-        } catch (statusErr) {
-          console.log('[PORTAL] Status fetch failed:', statusErr);
-          warningEl.style.display = 'none';
-          const tipEl = document.getElementById('processingTip');
-          if (tipEl) tipEl.style.display = 'none';
-        }
       }
     } else {
       warningEl.style.display = 'none';
@@ -2363,21 +2744,54 @@ async function processExistingBooks() {
         // Update title with actual title from metadata
         if (meta && meta.title && titleEl) {
           titleEl.textContent = meta.title.substring(0, 25) + (meta.title.length > 25 ? '...' : '');
-          titleEl.title = meta.title;
+          titleEl.title = meta.title + (meta.author ? ` by ${meta.author}` : '');
         }
         
-        // Show metadata stats under the book
+        // Build rich metadata display
         const metaStats = [];
         if (meta) {
+          // Line 1: Basic stats
           metaStats.push(`${meta.totalChapters} ch`);
           metaStats.push(`~${meta.estimatedPages} pg`);
+          if (meta.totalImages > 0) {
+            metaStats.push(`${meta.totalImages} img`);
+          }
           if (meta.estimatedReadingMins) {
             const hrs = Math.floor(meta.estimatedReadingMins / 60);
             const mins = meta.estimatedReadingMins % 60;
-            metaStats.push(hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m read`);
+            metaStats.push(hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`);
           }
         }
-        if (statusEl) statusEl.innerHTML = `<span style="color: #28a745; font-size: 9px;">${metaStats.join(' • ')}</span>`;
+        
+        // Build tooltip with full book info
+        let tooltip = '';
+        if (meta) {
+          tooltip += `${meta.title}\\n`;
+          if (meta.author && meta.author !== 'Unknown') tooltip += `by ${meta.author}\\n`;
+          tooltip += `\\n${meta.totalChapters} chapters • ~${meta.estimatedPages} pages`;
+          if (meta.totalImages > 0) tooltip += ` • ${meta.totalImages} images`;
+          tooltip += `\\n${meta.totalWords?.toLocaleString() || '?'} words • ~${Math.floor((meta.estimatedReadingMins || 0) / 60)}h ${(meta.estimatedReadingMins || 0) % 60}m read\\n`;
+          if (meta.publisher) tooltip += `\\nPublisher: ${meta.publisher}`;
+          if (meta.pubYear) tooltip += `\\nPublished: ${meta.pubYear}`;
+          if (meta.language) tooltip += `\\nLanguage: ${meta.language.toUpperCase()}`;
+          if (meta.series) tooltip += `\\nSeries: ${meta.series}${meta.seriesPosition ? ` #${meta.seriesPosition}` : ''}`;
+          if (meta.subjects && meta.subjects.length > 0) tooltip += `\\nGenre: ${meta.subjects.slice(0, 3).join(', ')}`;
+          if (meta.description) tooltip += `\\n\\n${meta.description.substring(0, 200)}${meta.description.length > 200 ? '...' : ''}`;
+        }
+        
+        if (statusEl) {
+          statusEl.innerHTML = `<span style="color: #28a745; font-size: 9px; cursor: help;" title="${tooltip.replace(/"/g, '&quot;')}">${metaStats.join(' • ')}</span>`;
+        }
+        
+        // Store metadata on card for later access
+        if (card) {
+          card.dataset.bookMeta = JSON.stringify(meta);
+          card.style.cursor = 'pointer';
+          card.onclick = (e) => {
+            if (e.target.closest('button')) return; // Don't trigger on delete button
+            showBookInfoModal(meta);
+          };
+        }
         
         // Add checkmark badge over cover
         if (coverEl) {
@@ -2802,6 +3216,7 @@ async function saveFlashcardSettings() {
   const shuffle = document.getElementById('togFcShuffle')?.classList.contains('on') ?? true;
   const showProgressBar = document.getElementById('togFcProgress')?.classList.contains('on') ?? true;
   const showStats = document.getElementById('togFcStats')?.classList.contains('on') ?? true;
+  const autoFlip = document.getElementById('togFcAutoFlip')?.classList.contains('on') ?? false;
   
   try {
     await fetch('/api/flashcards/settings', {
@@ -2812,7 +3227,8 @@ async function saveFlashcardSettings() {
         centerText,
         shuffle,
         showProgressBar,
-        showStats
+        showStats,
+        autoFlip
       })
     });
   } catch (e) {
@@ -2839,6 +3255,9 @@ async function loadFlashcardSettings() {
     }
     if (document.getElementById('togFcStats')) {
       document.getElementById('togFcStats').classList.toggle('on', data.showStats ?? true);
+    }
+    if (document.getElementById('togFcAutoFlip')) {
+      document.getElementById('togFcAutoFlip').classList.toggle('on', data.autoFlip ?? false);
     }
     
     updateFlashcardPreview();
@@ -2874,6 +3293,109 @@ function showCreateDeckModal() {
     toast('Deck created: ' + name, 'success');
     refreshFiles('flashcards');
   }
+}
+
+// Book info modal - shows full metadata for a processed book
+function showBookInfoModal(meta) {
+  if (!meta) return;
+  
+  // Remove existing modal if any
+  const existing = document.getElementById('bookInfoModal');
+  if (existing) existing.remove();
+  
+  // Format reading time
+  const hrs = Math.floor((meta.estimatedReadingMins || 0) / 60);
+  const mins = (meta.estimatedReadingMins || 0) % 60;
+  const readTime = hrs > 0 ? `${hrs}h ${mins}m` : `${mins} min`;
+  
+  // Format file size
+  const sizeKB = Math.round((meta.fileSize || 0) / 1024);
+  const sizeMB = (sizeKB / 1024).toFixed(1);
+  const sizeStr = sizeKB > 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
+  
+  // Build modal HTML
+  const modal = document.createElement('div');
+  modal.id = 'bookInfoModal';
+  modal.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px; backdrop-filter: blur(4px);
+  `;
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  
+  modal.innerHTML = `
+    <div style="background: white; border-radius: 12px; max-width: 500px; width: 100%; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+      <div style="padding: 24px; border-bottom: 1px solid #eee;">
+        <div style="display: flex; justify-content: space-between; align-items: start;">
+          <div>
+            <h2 style="margin: 0 0 8px 0; font-size: 20px; color: #333;">${meta.title || 'Unknown Title'}</h2>
+            ${meta.author && meta.author !== 'Unknown' ? `<p style="margin: 0; color: #666; font-size: 14px;">by ${meta.author}</p>` : ''}
+          </div>
+          <button onclick="this.closest('#bookInfoModal').remove()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #999; padding: 0; line-height: 1;">&times;</button>
+        </div>
+        ${meta.series ? `<p style="margin: 8px 0 0 0; color: #888; font-size: 13px;">📚 ${meta.series}${meta.seriesPosition ? ` #${meta.seriesPosition}` : ''}</p>` : ''}
+      </div>
+      
+      <div style="padding: 20px;">
+        <!-- Stats Grid -->
+        <div style="display: grid; grid-template-columns: repeat(${meta.totalImages > 0 ? 4 : 3}, 1fr); gap: 12px; margin-bottom: 20px;">
+          <div style="text-align: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
+            <div style="font-size: 24px; font-weight: 600; color: #333;">${meta.totalChapters || '?'}</div>
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Chapters</div>
+          </div>
+          <div style="text-align: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
+            <div style="font-size: 24px; font-weight: 600; color: #333;">~${meta.estimatedPages || '?'}</div>
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Pages</div>
+          </div>
+          ${meta.totalImages > 0 ? `
+          <div style="text-align: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
+            <div style="font-size: 24px; font-weight: 600; color: #333;">${meta.totalImages}</div>
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Images</div>
+          </div>
+          ` : ''}
+          <div style="text-align: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
+            <div style="font-size: 24px; font-weight: 600; color: #333;">${readTime}</div>
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Read Time</div>
+          </div>
+        </div>
+        
+        <!-- Description -->
+        ${meta.description ? `
+          <div style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 8px 0; font-size: 13px; color: #888; text-transform: uppercase;">Description</h4>
+            <p style="margin: 0; font-size: 14px; color: #444; line-height: 1.5;">${meta.description}</p>
+          </div>
+        ` : ''}
+        
+        <!-- Details -->
+        <div style="border-top: 1px solid #eee; padding-top: 16px;">
+          <h4 style="margin: 0 0 12px 0; font-size: 13px; color: #888; text-transform: uppercase;">Details</h4>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px;">
+            ${meta.publisher ? `<div><span style="color: #888;">Publisher:</span> ${meta.publisher}</div>` : ''}
+            ${meta.pubYear ? `<div><span style="color: #888;">Published:</span> ${meta.pubYear}</div>` : ''}
+            ${meta.language ? `<div><span style="color: #888;">Language:</span> ${meta.language.toUpperCase()}</div>` : ''}
+            ${meta.isbn ? `<div><span style="color: #888;">ISBN:</span> ${meta.isbn}</div>` : ''}
+            <div><span style="color: #888;">Words:</span> ${(meta.totalWords || 0).toLocaleString()}</div>
+            <div><span style="color: #888;">Size:</span> ${sizeStr}</div>
+            ${meta.epubVersion ? `<div><span style="color: #888;">EPUB:</span> v${meta.epubVersion}</div>` : ''}
+          </div>
+        </div>
+        
+        <!-- Subjects/Genres -->
+        ${meta.subjects && meta.subjects.length > 0 ? `
+          <div style="margin-top: 16px;">
+            <h4 style="margin: 0 0 8px 0; font-size: 13px; color: #888; text-transform: uppercase;">Genres</h4>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+              ${meta.subjects.map(s => `<span style="background: #e9ecef; padding: 4px 10px; border-radius: 12px; font-size: 12px; color: #495057;">${s}</span>`).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
 }
 
 async function importAnkiDeck(file) {
@@ -3136,12 +3658,10 @@ async function loadSettings() {
     const lhEl = document.getElementById('readerLineHeight');
     const mgEl = document.getElementById('readerMargins');
     const justifyEl = document.getElementById('togJustify');
-    const reqPreEl = document.getElementById('togReqPreprocess');
     if (fsEl) { fsEl.value = r.fontSize || 18; updateSlider(fsEl, 'readerFontVal', 'px'); }
     if (lhEl) { lhEl.value = r.lineHeight || 150; updateSlider(lhEl, 'readerLineVal', '%'); }
     if (mgEl) { mgEl.value = r.margins || 20; updateSlider(mgEl, 'readerMarginVal', 'px'); }
     if (justifyEl) { justifyEl.classList.toggle('on', r.textAlign === 1 || r.textAlign === undefined); }
-    if (reqPreEl) { reqPreEl.classList.toggle('on', r.requirePreprocessed !== false); }  // Default true
   }
   
   // Update all UI elements to match loaded state
@@ -3451,40 +3971,40 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderPlugins();
   updateReaderPreview();
   
-  // Check if browser has internet - if so, default to Files tab
-  const browserHost = window.location.hostname;
-  const isDefinitelyOnHotspot = (browserHost === '192.168.4.1');
-  
-  if (!isDefinitelyOnHotspot) {
-    // Check for internet access
-    const hasInternet = await new Promise((resolve) => {
-      const img = new Image();
-      const timeout = setTimeout(() => {
-        img.onload = img.onerror = null;
-        resolve(false);
-      }, 3000);
-      img.onload = () => {
-        clearTimeout(timeout);
-        resolve(true);
-      };
-      img.onerror = () => {
-        clearTimeout(timeout);
-        resolve(false);
-      };
-      img.src = 'https://www.google.com/favicon.ico?t=' + Date.now();
-    });
-    
-    if (hasInternet) {
-      // On home network - show Files tab and books subtab
-      showPage('files');
-      setTimeout(() => showFileTab('books'), 100);
-    } else {
-      // No internet - show WiFi tab
-      loadWifiStatus();
+  // If hostname is 192.168.4.1, we already know we're on hotspot (set at top of file)
+  // Only do async detection for sumi.local case
+  if (window.location.hostname !== '192.168.4.1' && !window.isOnHotspot) {
+    // At sumi.local - try to reach hotspot IP to determine which network
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const resp = await fetch('http://192.168.4.1/api/status', { 
+        signal: controller.signal,
+        mode: 'cors'
+      });
+      clearTimeout(timeout);
+      if (resp.ok) {
+        window.isOnHotspot = true;
+        window.hasInternetAccess = false;
+        console.log('[PORTAL] Async check: can reach 192.168.4.1 - on hotspot');
+      }
+    } catch (e) {
+      // Can't reach hotspot IP = we're on home network
+      window.isOnHotspot = false;
+      window.hasInternetAccess = true;
+      console.log('[PORTAL] Async check: cannot reach 192.168.4.1 - on home network');
     }
+  }
+  
+  console.log('[PORTAL] Final detection: isOnHotspot =', window.isOnHotspot);
+  
+  if (window.isOnHotspot) {
+    // On hotspot - show WiFi setup first
+    showPage('wifi');
   } else {
-    // On hotspot - WiFi is default page
-    loadWifiStatus();
+    // On home network - show Files tab
+    showPage('files');
+    setTimeout(() => showFileTab('books'), 100);
   }
   
   setInterval(loadStatus, 30000);

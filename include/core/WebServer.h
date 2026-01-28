@@ -12,6 +12,8 @@
 // Global flags to signal main loop
 extern volatile bool g_settingsDeployed;
 extern volatile bool g_wifiJustConnected;
+extern volatile bool g_portalAccessed;  // Set when user opens portal page
+extern volatile bool g_portalAccessedOnHomeWiFi;  // Set when user opens portal while on home network
 
 // =============================================================================
 // Minimal Web Server - For ESP32-C3 Setup Portal

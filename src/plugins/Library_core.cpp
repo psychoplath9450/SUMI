@@ -1,13 +1,15 @@
 /**
  * @file Library.cpp
  * @brief Book Library & Reader - Complete Implementation
- * @version 1.4.2
+ * @version 1.5.0
  *
- * REFACTORED from 4200+ line header:
+ * All EPUB parsing now done via portal preprocessing.
+ * Device loads preprocessed text files for fast, reliable reading.
  * - SD-backed book index (no std::vector<BookEntry>)
  * - Fixed-size chapter title array (no std::vector<String>)
  * - Proper header/implementation separation
  * - Activity lifecycle integration
+ * - Page preloading for instant page turns
  */
 
 #include "plugins/Library.h"
@@ -16,8 +18,12 @@
 
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSans18pt7b.h>
+#include <Fonts/FreeSans24pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSansBold18pt7b.h>
+#include <Fonts/FreeSansBold24pt7b.h>
 #include <algorithm>
 #include <new>  // For std::nothrow
 
@@ -210,28 +216,33 @@ BookType detectBookType(const char* path) {
 // =============================================================================
 LibraryApp::LibraryApp() 
     : Activity("Library")
-    , state(ViewState::BROWSER)
+    , state(ViewState::MAIN_MENU)
     , bookCount(0), cursor(0), scrollOffset(0)
     , screenW(800), screenH(480), landscape(true), itemsPerPage(8)
+    , mainMenuCursor(0)
     , currentPage(0), totalPages(0), currentChapter(0), totalChapters(1)
+    , currentBookHash(0)
     , chapterCursor(0), chapterScrollOffset(0), settingsCursor(0)
     , pagesUntilFullRefresh(30), pagesUntilHalfRefresh(10)
     , updateRequired(false), renderTaskHandle(nullptr), renderMutex(nullptr)
     , buttonHoldStart(0), lastButtonState(BTN_NONE)
     , cacheValid(false), indexingProgress(0), preloadedPage(-1)
     , isEpub(false), chapterTitleCount(0)
+    , _preloadedChapter(-1), _preloadedPageNum(-1)
     , bookmarkCursor(0), bookmarkScrollOffset(0)
     , useFlipBrowser(true), bookIsOpen(false)
     , pendingChapterLoad(false), pendingChapterToLoad(-1), firstRenderAfterOpen(false)
+    , needsFullRedraw(true), _pendingRedraw(true)
 {
     strcpy(currentPath, "/books");
     memset(chapterTitle, 0, sizeof(chapterTitle));
     memset(currentBook, 0, sizeof(currentBook));
     memset(currentBookPath, 0, sizeof(currentBookPath));
+    memset(bookCacheDir, 0, sizeof(bookCacheDir));
     memset(chapterTitles, 0, sizeof(chapterTitles));
     
     // Allocate reader subsystems on-demand with error checking
-    // Note: EpubParser is embedded as 'epub' member, not allocated here
+    // All EPUB parsing now happens in portal - device just loads preprocessed text
     Serial.println("[LIBRARY] Allocating reader subsystems...");
     Serial.printf("[LIBRARY] Heap before: %d, largest block: %d\n", 
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -264,7 +275,7 @@ LibraryApp::~LibraryApp() {
     if (renderTaskHandle) { vTaskDelete(renderTaskHandle); renderTaskHandle = nullptr; }
     if (renderMutex) { vSemaphoreDelete(renderMutex); renderMutex = nullptr; }
     
-    // Free reader subsystems (Note: epub is embedded, not freed here)
+    // Free reader subsystems
     Serial.println("[LIBRARY] Freeing reader subsystems...");
     if (textLayout) { delete textLayout; textLayout = nullptr; }
     if (pageCache) { delete pageCache; pageCache = nullptr; }
@@ -420,6 +431,26 @@ void LibraryApp::init(int w, int h, bool autoResume) {
         }
     }
     
+    // Try to load portal-generated library index first (fastest)
+    if (loadPortalLibraryIndex()) {
+        Serial.printf("[LIBRARY] Using portal index: %d books\n", bookCount);
+        state = ViewState::BROWSER;
+        return;
+    }
+    
+    // Try to load existing binary library index
+    if (loadLibraryIndex() && bookCount > 0) {
+        Serial.printf("[LIBRARY] Using cached index: %d books\n", bookCount);
+        // Validate that current path matches
+        if (strcmp(currentPath, "/books") == 0) {
+            state = ViewState::BROWSER;
+            // Still need to update covers from portal-processed books
+            updateBooksFromPortal();
+            return;
+        }
+    }
+    
+    // No valid cache or path changed - full scan needed
     scanDirectory();
 }
 
@@ -430,8 +461,8 @@ const GFXfont* LibraryApp::getReaderFont() {
     switch (settings.fontSize) {
         case FontSize::SMALL:       return &FreeSans9pt7b;
         case FontSize::MEDIUM:      return &FreeSans12pt7b;
-        case FontSize::LARGE:       return &FreeSans12pt7b;
-        case FontSize::EXTRA_LARGE: return &FreeSans12pt7b;  // TODO: Add larger font
+        case FontSize::LARGE:       return &FreeSans18pt7b;
+        case FontSize::EXTRA_LARGE: return &FreeSans24pt7b;
         default:                    return &FreeSans12pt7b;
     }
 }
@@ -441,8 +472,8 @@ const GFXfont* LibraryApp::getReaderBoldFont() {
     switch (settings.fontSize) {
         case FontSize::SMALL:       return &FreeSansBold9pt7b;
         case FontSize::MEDIUM:      return &FreeSansBold12pt7b;
-        case FontSize::LARGE:       return &FreeSansBold12pt7b;
-        case FontSize::EXTRA_LARGE: return &FreeSansBold12pt7b;
+        case FontSize::LARGE:       return &FreeSansBold18pt7b;
+        case FontSize::EXTRA_LARGE: return &FreeSansBold24pt7b;
         default:                    return &FreeSansBold12pt7b;
     }
 }

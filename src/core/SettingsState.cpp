@@ -12,7 +12,6 @@
 #include "core/SettingsState.h"
 #include "core/SettingsManager.h"
 #include "core/WiFiManager.h"
-#include "core/ZipReader.h"
 #if FEATURE_WEBSERVER
 #include "core/WebServer.h"
 #endif
@@ -152,17 +151,10 @@ void settingsSelect() {
                 }
                 WiFi.mode(WIFI_OFF);
                 
-                // Reallocate ZIP buffers now that portal is closed
-                Serial.println("[SETTINGS] Reallocating ZIP buffers...");
-                ZipReader_preallocateBuffer();
                 Serial.println("[SETTINGS] Portal and WiFi fully stopped");
             } else {
                 // Portal not running - start based on selection
                 Serial.println("[SETTINGS] Starting Portal...");
-                
-                // Free ZIP buffers to reclaim ~43KB for portal
-                Serial.println("[SETTINGS] Freeing ZIP buffers for portal...");
-                ZipReader_freeBuffers();
                 
                 if (state.portalModeSelection == PORTAL_MODE_HOTSPOT) {
                     // Start in hotspot mode

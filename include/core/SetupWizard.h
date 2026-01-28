@@ -4,7 +4,7 @@
 /**
  * @file SetupWizard.h
  * @brief Setup screens, animations, and deployment flow
- * @version 1.3.0
+ * @version 1.5.0
  */
 
 #include <Arduino.h>
@@ -15,16 +15,37 @@
 // Setup Wizard Screens
 // =============================================================================
 
-// Show a single frame of the SUMI logo animation (frame 0-4)
+// Get current setup step (1-4 based on progress)
+int getSetupStep();
+
+// Draw one frame of the ripple animation (for logo area)
+void drawRippleFrame(int frame, int logoY, int logoH);
+
+// Start non-blocking ripple animation
+void startRippleAnimation();
+
+// Stop ripple animation
+void stopRippleAnimation();
+
+// Update ripple animation (call from main loop) - returns true if frame drawn
+bool updateRippleAnimation();
+
+// Check if ripple animation is active
+bool isRippleAnimationActive();
+
+// Show a single frame of the SUMI logo animation (legacy - kept for compatibility)
 void showAnimationFrame(int frame, bool firstFrame);
 
-// Play full deploy animation sequence
+// Play full deploy animation sequence (shows setup screen, starts ripple)
 void playDeployAnimation();
 
 // Show the "device is ready" screen with portal instructions
 void showDeployedScreen();
 
-// Show the WiFi setup screen (connect to AP, visit sumi.local)
+// Animate marching border until button pressed (call after loading complete)
+void animateDeployedBorder();
+
+// Show the WiFi setup screen with static ripple logo
 void showSetupScreen();
 
 // Show the "connected" confirmation screen

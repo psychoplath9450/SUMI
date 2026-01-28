@@ -26,8 +26,12 @@
 // =============================================================================
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSans18pt7b.h>
+#include <Fonts/FreeSans24pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSansBold18pt7b.h>
+#include <Fonts/FreeSansBold24pt7b.h>
 #include <Fonts/FreeMono9pt7b.h>
 
 // =============================================================================
@@ -37,7 +41,7 @@
 #define SUMI_TAGLINE    "Ink, simplified."
 
 #ifndef SUMI_VERSION
-#define SUMI_VERSION    "1.4.2"
+#define SUMI_VERSION    "1.5.0"
 #endif
 
 #define SUMI_VARIANT    "standard"

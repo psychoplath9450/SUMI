@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUMI - Custom Firmware for Xteink X4</title>
+    <style>
+        :root {
+            --mac-white: #ffffff;
+            --mac-black: #000000;
+            --mac-gray: #dddddd;
+            --mac-gray-dark: #999999;
+            --mac-gray-light: #eeeeee;
+            --mac-highlight: #3366cc;
+            --mac-desktop: #6699cc;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Chicago', 'Charcoal', 'Geneva', 'Helvetica Neue', Helvetica, sans-serif;
+            font-size: 12px;
+            background: var(--mac-desktop);
+            min-height: 100vh;
+            color: var(--mac-black);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .window {
+            width: 100%;
+            max-width: 360px;
+            background: var(--mac-white);
+            border: 2px solid var(--mac-black);
+            border-radius: 8px;
+            box-shadow: 4px 4px 0 rgba(0,0,0,0.3);
+        }
+        
+        .title-bar {
+            background: linear-gradient(180deg, #fff 0%, #fff 50%, #ccc 50%, #ccc 100%);
+            background-size: 100% 2px;
+            border-bottom: 1px solid var(--mac-black);
+            padding: 4px 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 6px 6px 0 0;
+        }
+        
+        .window-controls {
+            display: flex;
+            gap: 6px;
+        }
+        
+        .window-control {
+            width: 12px;
+            height: 12px;
+            border: 1px solid var(--mac-black);
+            background: var(--mac-white);
+        }
+        
+        .title-bar h1 {
+            flex: 1;
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .window-body {
+            padding: 20px;
+            background: var(--mac-gray-light);
+            text-align: center;
+        }
+        
+        .logo {
+            font-size: 48px;
+            font-weight: 300;
+            letter-spacing: 0.2em;
+            margin-bottom: 4px;
+        }
+        
+        .tagline {
+            color: var(--mac-gray-dark);
+            margin-bottom: 24px;
+            font-size: 11px;
+        }
+        
+        .links {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .link-btn {
+            display: block;
+            padding: 10px 16px;
+            background: linear-gradient(180deg, var(--mac-white), var(--mac-gray));
+            border: 1px solid var(--mac-black);
+            border-radius: 4px;
+            color: var(--mac-black);
+            text-decoration: none;
+            font-family: inherit;
+            font-size: 12px;
+            box-shadow: 0 1px 0 var(--mac-black);
+            transition: all 0.1s;
+        }
+        
+        .link-btn:hover {
+            background: linear-gradient(180deg, var(--mac-gray), var(--mac-white));
+        }
+        
+        .link-btn:active {
+            box-shadow: none;
+            transform: translateY(1px);
+        }
+        
+        .link-btn.primary {
+            background: linear-gradient(180deg, #4488ee, #2266cc);
+            color: white;
+            border-color: #1155aa;
+        }
+        
+        .link-btn.primary:hover {
+            background: linear-gradient(180deg, #5599ff, #3377dd);
+        }
+        
+        .link-title {
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+        
+        .link-desc {
+            font-size: 10px;
+            opacity: 0.8;
+        }
+        
+        footer {
+            margin-top: 20px;
+            padding-top: 12px;
+            border-top: 1px solid var(--mac-gray);
+            color: var(--mac-gray-dark);
+            font-size: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="window">
+        <div class="title-bar">
+            <div class="window-controls">
+                <div class="window-control"></div>
+            </div>
+            <h1>SUMI</h1>
+            <div style="width: 12px;"></div>
+        </div>
+        
+        <div class="window-body">
+            <div class="logo">SUMI</div>
+            <p class="tagline">Custom Firmware for Xteink X4</p>
+            
+            <div class="links">
+                <a href="flasher/" class="link-btn primary">
+                    <div class="link-title">⚡ Web Flasher</div>
+                    <div class="link-desc">Flash SUMI directly from your browser</div>
+                </a>
+                
+                <a href="https://github.com/psychoplath9450/SUMI" class="link-btn">
+                    <div class="link-title">📖 Documentation</div>
+                    <div class="link-desc">Setup guide, features, and more</div>
+                </a>
+                
+                <a href="https://github.com/psychoplath9450/SUMI/releases" class="link-btn">
+                    <div class="link-title">📦 Releases</div>
+                    <div class="link-desc">Download firmware and changelog</div>
+                </a>
+            </div>
+            
+            <footer>
+                An open source e-reader firmware project
+            </footer>
+        </div>
+    </div>
+</body>
+</html>

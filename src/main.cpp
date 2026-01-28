@@ -40,7 +40,6 @@
 #include "core/SettingsScreen.h"
 #include "core/AppLauncher.h"
 #include "core/SettingsState.h"
-#include "core/ZipReader.h"
 
 // Global RefreshManager instance
 RefreshManager refreshManager;
@@ -102,8 +101,8 @@ bool sd_card_present = false;
 bool setup_mode = false;
 bool portal_active = false;
 
-enum Screen { SCREEN_HOME, SCREEN_SETTINGS };
-Screen currentScreen = SCREEN_HOME;
+enum AppScreen { APP_SCREEN_HOME, APP_SCREEN_SETTINGS };
+AppScreen currentAppScreen = APP_SCREEN_HOME;
 
 // =============================================================================
 // Function Declarations
@@ -225,15 +224,6 @@ void setup() {
     // Check if setup is needed BEFORE allocating large buffers
     setup_mode = !settingsManager.isSetupComplete();
     
-    // Pre-allocate ZIP decompression buffer ONLY if not in setup mode
-    // This 43KB buffer is needed for EPUB reading but not for portal setup
-    if (!setup_mode) {
-        ZipReader_preallocateBuffer();
-        Serial.printf("[MEM:ZIP] Free: %d, Min: %d (after 43KB ZIP buffer)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
-    } else {
-        Serial.println("[MEM:ZIP] Skipping ZIP buffer - in setup mode");
-    }
-    
     // Initialize display (after SD)
     initDisplay();
     Serial.printf("[MEM:DISP] Free: %d, Min: %d (after display buffer)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
@@ -265,6 +255,9 @@ void setup() {
         // Build home screen items
         buildHomeScreenItems();
         updateGridLayout();
+        
+        // PRE-RENDER: Cache cover and calculate layout (makes showHomeScreen instant)
+        prepareHomeScreen();
         
         // Check if we should boot directly to last book
         bool bootedToBook = false;
@@ -388,6 +381,27 @@ void loop() {
     // Only process WiFi when portal is active
     if (portal_active) {
         wifiManager.update();
+        
+        // Track setup step changes and refresh screen when step changes
+        static int lastSetupStep = 0;
+        if (setup_mode) {
+            int currentStep = getSetupStep();
+            
+            if (currentStep != lastSetupStep) {
+                Serial.printf("[SUMI] Setup step changed: %d -> %d\n", lastSetupStep, currentStep);
+                lastSetupStep = currentStep;
+                
+                // Refresh screen with new step highlighted
+                stopRippleAnimation();
+                showSetupScreen();
+                startRippleAnimation();
+            }
+            
+            // Update ripple animation (non-blocking, 2Hz)
+            if (isRippleAnimationActive()) {
+                updateRippleAnimation();
+            }
+        }
     }
     
     // Check background time sync progress (non-blocking)
@@ -403,23 +417,21 @@ void loop() {
     if (g_wifiJustConnected) {
         g_wifiJustConnected = false;
         Serial.println("[SUMI] WiFi connected via portal");
-        // Refresh setup screen to show new connection status
+        // Refresh screen to update status bar (SUMI connected but step may not change)
         if (setup_mode) {
+            stopRippleAnimation();
             showSetupScreen();
+            startRippleAnimation();
         }
         // Time sync is handled by WebServer with proper timezone - don't override here
     }
     
     if (g_settingsDeployed) {
         g_settingsDeployed = false;
-        Serial.println("[SUMI] Settings deployed - starting background loading");
+        Serial.println("[SUMI] Settings deployed - transitioning to home screen");
         
-        // Show deployed screen FIRST (user sees "Press any button to continue")
-        showDeployedScreen();
-        
-        // NOW do all the heavy lifting while screen is displayed
-        // User can press button anytime - we'll check after loading
-        Serial.println("[SUMI] Loading in background while screen displays...");
+        // Stop ripple animation
+        stopRippleAnimation();
         
         // Clean up portal resources to free memory
         cleanupPortalResources();
@@ -431,36 +443,27 @@ void loop() {
         }
         WiFi.mode(WIFI_OFF);
         
-        // NOW allocate ZIP buffer - we skipped it during setup mode
-        Serial.println("[SUMI] Allocating ZIP buffer for reader");
-        ZipReader_preallocateBuffer();
-        
         // Reload settings and switch to normal mode
         settingsManager.load();
         setup_mode = false;
         
-        // Build home screen (this is the slow part)
+        // Set up display orientation
         bool isHorizontal = (settingsManager.display.orientation == 0);
         display.setRotation(isHorizontal ? 0 : 3);
         setButtonOrientation(isHorizontal);
         
+        // Build home screen items (loads widget data)
         buildHomeScreenItems();
         updateGridLayout();
         
-        Serial.println("[SUMI] Background loading complete - ready for input");
+        // Prepare home screen (caches cover, pre-calculates layout)
+        prepareHomeScreen();
+        
+        Serial.println("[SUMI] Background loading complete");
         printMemoryReport();
         
-        // Check if button was already pressed during loading
-        Button btn = readButton();
-        if (btn == BTN_NONE) {
-            // No button pressed yet - wait for one
-            waitForButtonPress();
-        } else {
-            Serial.println("[SUMI] Button already pressed during loading - continuing immediately");
-        }
-        
-        // Now show home screen
-        currentScreen = SCREEN_HOME;  // Reset screen state
+        // Go straight to home screen
+        currentAppScreen = APP_SCREEN_HOME;
         settingsInit();  // Reset settings state so next visit starts fresh
         showHomeScreen();
         
@@ -517,7 +520,7 @@ void handleButtons() {
             
             if (setup_mode) {
                 if (btn == BTN_BACK) showSetupScreen();
-            } else if (currentScreen == SCREEN_SETTINGS) {
+            } else if (currentAppScreen == APP_SCREEN_SETTINGS) {
                 Serial.printf("[MAIN] Settings screen, btn=%d\n", btn);
                 switch (btn) {
                     case BTN_UP:
@@ -543,7 +546,7 @@ void handleButtons() {
                             
                             // Exit settings check
                             if (settingsShouldExit()) {
-                                currentScreen = SCREEN_HOME;
+                                currentAppScreen = APP_SCREEN_HOME;
                                 showHomeScreen();
                             } else {
                                 showSettingsScreen();
@@ -555,7 +558,7 @@ void handleButtons() {
                         settingsBack();
                         if (settingsShouldExit()) {
                             Serial.println("[MAIN] Exiting to home screen");
-                            currentScreen = SCREEN_HOME;
+                            currentAppScreen = APP_SCREEN_HOME;
                             showHomeScreen();
                         } else {
                             Serial.println("[MAIN] Staying in settings");

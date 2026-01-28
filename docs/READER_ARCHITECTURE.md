@@ -1,24 +1,29 @@
 # SUMI E-Reader Architecture
 
-*Last updated: January 25, 2026*
+*Last updated: January 28, 2026*
 
 Technical documentation for SUMI's e-reader implementation.
 
 ## Overview
 
-SUMI's e-reader is designed for the ESP32-C3's memory constraints (384KB RAM) while supporting arbitrarily large EPUB files.
+SUMI's e-reader is designed for the ESP32-C3's memory constraints (380KB RAM) while supporting arbitrarily large EPUB files.
 
-### Pre-Processing Mode (Default)
+### Browser-Based Processing
 
-As of v1.4.2, SUMI uses **browser-based pre-processing** by default. EPUBs are processed in the portal (on your phone/computer) before they can be read. This approach was adopted because on-device ZIP decompression and XML parsing was consuming too much memory and causing reliability issues on the ESP32-C3.
+SUMI uses **browser-based pre-processing** for all books. EPUBs are processed in the portal (on your phone/computer) before they can be read. This design choice was made because:
+
+1. On-device ZIP decompression and XML parsing consumed too much RAM
+2. Complex EPUBs frequently crashed the embedded parser
+3. Browser processing enables features like smart typography and hyphenation
+4. Books load instantly with no parsing delay
 
 **How it works:**
 1. Upload EPUB to portal
 2. Portal extracts text chapters using JSZip (in browser)
 3. Rich text files saved to SD: `/.sumi/books/{hash}/ch_000.txt`, etc.
-4. Device reads text and applies formatting - no ZIP or XML parsing needed
+4. Device reads pre-extracted text - no ZIP or XML parsing needed
 
-**Rich Text Markers (v1.4.3+):**
+**Rich Text Markers:**
 The portal preprocessor outputs formatting markers that the device interprets:
 - `**bold text**` - Bold formatting (`<b>`, `<strong>`)
 - `*italic text*` - Italic formatting (`<i>`, `<em>`)
@@ -26,7 +31,7 @@ The portal preprocessor outputs formatting markers that the device interprets:
 - `• item` - List bullets (`<li>`)
 - `[Image]` or `[Image: alt text]` - Image placeholders
 - `[Table]` - Table placeholders
-- Soft hyphens (U+00AD) are preserved for better line breaking
+- Soft hyphens (U+00AD) preserved for better line breaking
 
 **Benefits:**
 - Much faster chapter loading (~200ms vs 2-5 seconds)
@@ -34,26 +39,25 @@ The portal preprocessor outputs formatting markers that the device interprets:
 - Simpler device code - just read text files
 - Better text quality - browser has full HTML parser
 - Rich text formatting preserved (bold, italic, headers)
-
-### Legacy Mode (Optional)
-
-On-device EPUB parsing can be re-enabled in Reader Settings by turning off "Require Pre-processing". This also outputs rich text markers and uses the same `addRichText()` rendering path, but is less reliable on complex EPUBs.
+- Smart typography (curly quotes, em-dashes, ellipses)
+- Soft hyphenation for better line wrapping
 
 ## Pre-Processed Cache Structure
 
 ```
 /.sumi/books/{hash}/
-├── meta.json          # Book metadata, chapter list
+├── meta.json          # Book metadata, chapter list, word count
+├── toc.json           # Table of contents with chapter titles
 ├── cover_full.jpg     # Full-size cover (300px wide)
-├── cover_thumb.jpg    # Thumbnail cover (80px wide)
+├── cover_thumb.jpg    # Thumbnail cover (120x180)
 ├── ch_000.txt         # Chapter 0 rich text (with markers)
 ├── ch_001.txt         # Chapter 1 rich text
 └── ...
 ```
 
-The hash is computed from the EPUB filename using a simple string hash function (must match between portal and device).
+The hash is computed from the EPUB filename using a simple string hash function (`hash * 31 + char`). This must match between portal and device.
 
-## Text Layout System (v1.4.3+)
+## Text Layout System
 
 The `TextLayout` class handles pagination with proper typography:
 
@@ -106,53 +110,44 @@ The `addRichText()` method parses markers and applies styling:
 
 Font variants are set via `setFont()`, `setBoldFont()`, `setItalicFont()`, `setBoldItalicFont()`.
 
-## Legacy Rendering Pipeline (when pre-processing disabled)
+## Rendering Pipeline
 
 ```
 User Opens Book
       │
       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 1. EPUB EXTRACTION (EpubParser.cpp)                         │
-│    - Opens .epub as ZIP via miniz                           │
-│    - Parses container.xml → finds content.opf               │
-│    - Extracts spine order (chapter list)                    │
-│    - Does NOT extract full content to RAM                   │
+│ 1. LOAD BOOK METADATA                                       │
+│    - Read meta.json from /.sumi/books/{hash}/               │
+│    - Get chapter count, title, author                       │
+│    - Load TOC if available                                  │
 │    - Memory: ~2KB for metadata                              │
 └─────────────────────────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 2. CHAPTER STREAMING (epub.streamChapterToFile)             │
-│    - Streams chapter HTML from ZIP to temp file on SD       │
-│    - Memory used: Only ~4KB buffer at a time                │
-│    - Temp file: /.sumi/temp_chX.html                        │
+│ 2. LOAD CHAPTER TEXT                                        │
+│    - Read ch_XXX.txt from cache directory                   │
+│    - Plain text with rich text markers                      │
+│    - Streamed in chunks to avoid memory spikes              │
+│    - Memory: ~4KB buffer at a time                          │
 └─────────────────────────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 3. HTML PARSING (ExpatHtmlParser.cpp)                       │
-│    - Streaming XML parser (expat library)                   │
-│    - Callback on each paragraph: onParagraph(text, isHeader)│
-│    - Handles: <p>, <div>, <br>, <h1-h6>, <hr>              │
-│    - HTML entities decoded inline                           │
-│    - Memory: ~8KB parser state                              │
-└─────────────────────────────────────────────────────────────┘
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 4. TEXT LAYOUT (TextLayout.cpp)                             │
-│    - Receives paragraphs one at a time                      │
-│    - Measures words using display.getTextBounds()           │
-│    - Performs line breaking (greedy algorithm)              │
-│    - Calculates justified positions (if enabled)            │
-│    - Emits CachedPage when page fills                       │
+│ 3. TEXT LAYOUT (TextLayout.cpp)                             │
+│    - Parse rich text markers (**bold**, *italic*, etc.)     │
+│    - Measure words using display.getTextBounds()            │
+│    - Perform line breaking (greedy algorithm)               │
+│    - Calculate justified positions (if enabled)             │
+│    - Cap justification gaps at 2x normal spacing            │
+│    - Emit CachedPage when page fills                        │
 │    - Memory: ~14KB per page being built                     │
 └─────────────────────────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 5. PAGE CACHING (PageCache.cpp)                             │
+│ 4. PAGE CACHING (PageCache.cpp)                             │
 │    - Each CachedPage saved to SD immediately                │
 │    - Format: Binary (word positions, line Y coords)         │
 │    - Path: /.sumi/books/{HASH}/pages/0_0.bin                │
@@ -162,70 +157,67 @@ User Opens Book
       │
       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 6. PAGE RENDERING (Library.h::drawReadingPage)              │
-│    - Load CachedPage from SD (~14KB)                        │
+│ 5. PAGE RENDERING (Library.h::drawReadingPage)              │
+│    - Load CachedPage from SD (~5KB)                         │
 │    - Iterate lines, draw each word at pre-computed X,Y      │
 │    - GxEPD2 paged rendering (firstPage/nextPage loop)       │
-│    - Handles images if present in cache                     │
+│    - Apply bold/italic fonts based on word style flags      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Memory Management
 
-Reader subsystems (TextLayout, PageCache, EpubParser) are allocated when the Library app opens and freed when it closes. They don't exist on the home screen or in other apps.
+Reader subsystems (TextLayout, PageCache) are allocated when the Library app opens and freed when it closes. They don't exist on the home screen or in other apps.
 
 ```
 HEAP USAGE BY CONTEXT:
 
 Home Screen (~5KB active)
 ├── Core systems only
-├── Widgets read from cache files (no plugins needed)
+├── Widgets read from cache files
 └── ~150KB+ free for other operations
 
-Library Open (~20KB active)
+Library Open (~15KB active)
 ├── LibraryApp: ~5KB
 ├── TextLayout: ~4KB (allocated by LibraryApp)
 ├── PageCache: ~2KB (allocated by LibraryApp)
-├── EpubParser: ~2KB (allocated by LibraryApp)
 ├── CachedPage: ~5KB (temporary, freed after render)
-└── ~130KB free
+└── ~135KB free
 
-Other Plugin Open (~varies)
-├── Only that plugin allocated
-├── Reader subsystems NOT loaded
-└── Maximum RAM available for the plugin
+Reading with WiFi Off (~30KB more free)
+├── WiFi suspended during reading
+├── Frees ~30-45KB of heap
+└── ~165KB+ available
 ```
 
 **Key Memory Optimizations:**
-1. **Streaming parsing** - Never loads full chapter to RAM
-2. **Immediate cache flush** - Pages saved to SD as built, then vector cleared
-3. **Heap allocation for large structs** - CachedPage uses `new` not stack
-4. **SD card as extended storage** - 32GB microSD acts as swap space
+1. **Portal preprocessing** - No ZIP/XML libraries needed on device
+2. **Streaming text loading** - Chapters read in chunks
+3. **Immediate cache flush** - Pages saved to SD as built, then freed
+4. **WiFi suspension** - WiFi turned off during reading to free memory
+5. **SD card as extended storage** - 32GB microSD acts as swap space
 
 ## Page Cache Structure
 
 ```
-/.sumi/
-├── books/
-│   └── A7F3C2B1/              # Hash of book path
-│       ├── meta.bin           # CacheKey + chapter count
-│       ├── progress.bin       # Last read position
-│       ├── bookmarks.bin      # User bookmarks
-│       └── pages/
-│           ├── 0_0.bin        # Chapter 0, Page 0
-│           ├── 0_1.bin        # Chapter 0, Page 1
-│           └── ...
-├── reading_stats.bin          # Global reading statistics
-├── lastbook.bin               # Last opened book info
-└── temp_ch0.html              # Temp file (deleted after use)
+/.sumi/books/{hash}/
+├── meta.bin           # CacheKey + chapter count
+├── progress.bin       # Last read position
+├── bookmarks.bin      # User bookmarks
+└── pages/
+    ├── 0_0.bin        # Chapter 0, Page 0
+    ├── 0_1.bin        # Chapter 0, Page 1
+    └── ...
 ```
+
+**Note:** The PageCache only manages its own files (meta.bin, progress.bin, pages/*). Portal's preprocessed files (ch_XXX.txt, meta.json, covers) are never modified by PageCache.
 
 ### CachedPage Binary Format
 
 ```cpp
 struct CachedWord {           // 24 bytes each
-    uint16_t xPos;            // X position (0-800)
-    uint8_t style;            // 0=normal, 1=bold, 2=italic
+    uint16_t xPos;            // X position (0-480)
+    uint8_t style;            // 0=normal, 1=bold, 2=italic, 3=bold+italic
     uint8_t length;           // Text length
     char text[20];            // Word text (truncated if longer)
 };
@@ -233,8 +225,8 @@ struct CachedWord {           // 24 bytes each
 struct CachedLine {           // ~244 bytes each (10 words max)
     uint16_t yPos;            // Y baseline position
     uint8_t wordCount;        // Words on this line (0-10)
-    uint8_t flags;            // isLastInPara, isImage
-    CachedWord words[10];     // Or ImageInfo if isImage
+    uint8_t flags;            // isLastInPara, isImage, isHeader
+    CachedWord words[10];
 };
 
 struct CachedPage {           // ~4.9KB each (20 lines max)
@@ -263,7 +255,7 @@ enum RefreshMode {
 
 // Configuration in ReaderSettings:
 - pagesPerHalfRefresh: 10
-- pagesPerFullRefresh: 30
+- pagesPerFullRefresh: 30 (configurable via portal)
 ```
 
 **Refresh Flow:**
@@ -287,14 +279,15 @@ Page Turn
 - **Font Size**: Small (22px), Medium (26px), Large (30px), Extra Large (34px)
 - **Line Spacing**: Tight (0.95x), Normal (1.0x), Wide (1.1x)
 - **Margins**: 0px, 5px, 10px, 15px, 20px (plus viewable edge compensation)
-- **Justification**: Left-aligned or Justified text
-- **Extra Paragraph Spacing**: Optional half-line-height spacing between paragraphs
+- **Justification**: Left-aligned or Justified text (with 2x gap cap)
+- **Paragraph Indent**: Automatic first-line indent for paragraphs
 - All settings configurable via reader menu or web portal
 - Settings changes invalidate cache (pages re-flow)
+- **Live preview**: Changes apply immediately when adjusted in reader menu
 
 ### Status Bar
-- Shows chapter name on left (truncated if too long)
-- Shows page number (X / Y) on right
+- Shows chapter info on left (e.g., "Ch 3 - 1/12")
+- Shows reading progress percentage on right
 - Horizontal separator line above
 
 ### Bookmarks
@@ -315,16 +308,10 @@ Page Turn
 - Press BACK to go to browser instead
 - Last book info stored in `/.sumi/lastbook.bin`
 
-### Scene Break Spacing
-- Detects `<hr>` tags in EPUB content
-- Adds configurable vertical spacing (0-60px)
-- Default: 30px
-
-### EPUB Images (Beta)
-- Images extracted from EPUB to cache
-- Stored as special "image lines" in page cache
-- Rendered using TJpgDec with dithering
-- Centered within page margins
+### Chapter Select
+- Shows extracted TOC with chapter titles
+- Navigate with UP/DOWN, select with OK
+- Chapter titles loaded from toc.json
 
 ## Performance
 
@@ -332,10 +319,9 @@ Page Turn
 |-----------|------|
 | Page turn (cached) | ~200ms |
 | Page turn (uncached) | ~800ms |
-| Chapter load | ~1500ms |
+| Chapter load (preprocessed) | ~500ms |
 | Full refresh | ~1200ms |
-| Book open (cached) | ~500ms |
-| Book open (first time) | ~3000ms |
+| Book open (preprocessed) | ~500ms |
 
 ## Button Mapping
 
@@ -367,19 +353,19 @@ Page Turn
 │  ┌────────────┬────────────┼────────────┬────────────┐        │
 │  ▼            ▼            ▼            ▼            ▼        │
 │ Library    Weather    Flashcards    Games      Settings       │
-│  │            │            │            │            │        │
-│  └────────────┴────────────┴────────────┴────────────┘        │
+│  │                                                              │
+│  └─► Reads pre-processed text from /.sumi/books/{hash}/        │
 │                            │                                   │
 │                            ▼                                   │
 │  ┌─────────────────────────────────────────────────────┐      │
 │  │                   Core Services                      │      │
 │  │  ┌──────────────┬──────────────┬──────────────┐     │      │
-│  │  │ PageCache    │ TextLayout   │ EpubParser   │     │      │
-│  │  │ (SD caching) │ (pagination) │ (ZIP + XML)  │     │      │
+│  │  │ PageCache    │ TextLayout   │ WebServer    │     │      │
+│  │  │ (SD caching) │ (pagination) │ (portal+API) │     │      │
 │  │  └──────────────┴──────────────┴──────────────┘     │      │
 │  │  ┌──────────────┬──────────────┬──────────────┐     │      │
-│  │  │ WiFiManager  │ WebServer    │ PowerManager │     │      │
-│  │  │ (credentials)│ (portal API) │ (deep sleep) │     │      │
+│  │  │ WiFiManager  │ PowerManager │ Settings     │     │      │
+│  │  │ (credentials)│ (deep sleep) │ (NVS + SD)   │     │      │
 │  │  └──────────────┴──────────────┴──────────────┘     │      │
 │  └─────────────────────────────────────────────────────┘      │
 │                            │                                   │
@@ -393,18 +379,22 @@ Page Turn
 
 ## Troubleshooting
 
+### Book Won't Open / "Process in portal" Error
+1. Book hasn't been preprocessed - use portal to process it
+2. Hash mismatch - clear cache and reprocess (portal has "Clear Cache" button)
+3. Filename too long - rename the EPUB to something shorter
+
 ### Blank Pages
-If pages appear blank:
-1. Check `draw()` is calling `drawReadingPage()` for READING state
+1. Check cache file exists: `/.sumi/books/{hash}/ch_XXX.txt`
 2. Verify `cacheValid` is true after chapter load
-3. Check cache file exists: `/.sumi/books/{hash}/pages/X_Y.bin`
+3. Check layout page files: `/.sumi/books/{hash}/pages/X_Y.bin`
 
 ### Slow Page Turns
-1. Cache may be invalidated - check settings haven't changed
+1. Layout cache may be invalidated - check settings haven't changed
 2. SD card may be slow - use Class 10 or better
-3. Large chapter being re-indexed
+3. Large chapter being re-laid-out
 
-### Memory Crashes
-1. Reduce concurrent operations
-2. Check heap before large allocations: `ESP.getFreeHeap()`
-3. Use streaming parser instead of loading full content
+### Cover Not Showing
+1. Check `cover_full.jpg` or `cover_thumb.jpg` exists in book cache
+2. Reprocess book through portal
+3. Some EPUBs don't include cover images

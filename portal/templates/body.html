@@ -383,18 +383,19 @@
           <p class="page-desc">Connect to your home network</p>
         </div>
         
-        <!-- Important info banner -->
-        <div class="card" style="background: linear-gradient(135deg, #e3f2fd 0%, #e8f5e9 100%); border: 1px solid #90caf9; margin-bottom: 12px;">
-          <div class="card-body" style="padding: 12px;">
-            <div style="display: flex; align-items: flex-start; gap: 10px;">
-              <div style="font-size: 24px;">💡</div>
+        <!-- Important info banner - emphasize book requirement -->
+        <div class="card" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%); border: 2px solid #ffc107; margin-bottom: 12px;">
+          <div class="card-body" style="padding: 14px;">
+            <div style="display: flex; align-items: flex-start; gap: 12px;">
+              <div style="font-size: 28px;">📶</div>
               <div style="flex: 1;">
-                <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px;">Why Connect to WiFi?</div>
-                <div style="font-size: 11px; color: #555; line-height: 1.5;">
-                  Internet access enables: <strong>Weather updates</strong>, <strong>time sync</strong>, <strong>KOSync reading progress</strong>, and <strong>EPUB pre-processing</strong> (extracts chapters and covers for instant book loading).
+                <div style="font-weight: 700; font-size: 14px; color: #856404; margin-bottom: 8px;">Home WiFi Required for Books</div>
+                <div style="font-size: 12px; color: #856404; line-height: 1.5; margin-bottom: 10px;">
+                  SUMI processes EPUB files in your browser, which requires internet access. Without home WiFi, you can only play games and use offline features.
                 </div>
-                <div style="font-size: 11px; color: #666; line-height: 1.5; margin-top: 8px; padding-top: 8px; border-top: 1px solid #ccc;">
-                  <strong>Steps:</strong> Enter your WiFi credentials below → After SUMI connects, switch your phone/laptop to the same WiFi → Access portal at the new IP address shown
+                <div style="font-size: 11px; color: #666; line-height: 1.5; padding: 10px; background: rgba(255,255,255,0.5); border-radius: 6px;">
+                  <strong>With WiFi:</strong> Upload & read books • Weather widget • Time sync • KOSync reading progress<br>
+                  <strong>Without WiFi:</strong> Games only (Sudoku, Chess, Minesweeper, etc.)
                 </div>
               </div>
             </div>
@@ -440,8 +441,27 @@
         
         <!-- Books Panel -->
         <div class="file-panel active" id="panel-books">
+          <!-- HOTSPOT MODE WARNING - Book processing unavailable -->
+          <div id="hotspotBookWarning" style="display: none;">
+            <div class="card" style="background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%); border: 2px solid #dc3545; margin-bottom: 12px;">
+              <div class="card-body" style="padding: 14px;">
+                <div style="display: flex; align-items: flex-start; gap: 12px;">
+                  <div style="font-size: 28px;">⚠️</div>
+                  <div style="flex: 1;">
+                    <div style="font-weight: 700; font-size: 14px; color: #721c24; margin-bottom: 6px;">Home WiFi Required for Book Processing</div>
+                    <div style="font-size: 12px; color: #721c24; line-height: 1.5;">
+                      You're connected via hotspot mode. To upload and process books, SUMI needs to be connected to your home WiFi network. 
+                      <strong>Games and offline features still work!</strong>
+                    </div>
+                    <a href="#" onclick="showPage('wifi'); return false;" style="display: inline-block; margin-top: 10px; background: #dc3545; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-size: 12px; font-weight: 600;">Setup Home WiFi →</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
           <!-- Cover Processing Info Card -->
-          <div class="card" style="background: linear-gradient(135deg, #e8f4fd 0%, #f0e6ff 100%); border: 1px solid #b8d4e8; margin-bottom: 12px;">
+          <div id="bookProcessingInfo" class="card" style="background: linear-gradient(135deg, #e8f4fd 0%, #f0e6ff 100%); border: 1px solid #b8d4e8; margin-bottom: 12px;">
             <div class="card-body" style="padding: 12px;">
               <div style="display: flex; align-items: flex-start; gap: 10px;">
                 <div style="font-size: 24px;">🚀</div>
@@ -519,10 +539,6 @@
                   <div class="toggle">
                     <span class="toggle-label">Justify Text</span>
                     <div class="toggle-switch on" id="togJustify" onclick="toggleReaderOpt(this,'textAlign');updateReaderPreview()"></div>
-                  </div>
-                  <div class="toggle" style="margin-top:8px;">
-                    <span class="toggle-label">Require Pre-processing</span>
-                    <div class="toggle-switch on" id="togReqPreprocess" onclick="toggleReaderOpt(this,'requirePreprocessed')" title="Books must be processed via portal to open (recommended)"></div>
                   </div>
                 </div>
                 <div>
@@ -644,6 +660,10 @@
                   <div class="toggle" style="margin-top:8px;">
                     <span class="toggle-label">Show Stats</span>
                     <div class="toggle-switch on" id="togFcStats" onclick="toggleSwitchSimple(this);updateFlashcardPreview();saveFlashcardSettings()"></div>
+                  </div>
+                  <div class="toggle" style="margin-top:8px;">
+                    <span class="toggle-label">Auto-advance</span>
+                    <div class="toggle-switch" id="togFcAutoFlip" onclick="toggleSwitchSimple(this);saveFlashcardSettings()"></div>
                   </div>
                 </div>
                 <div>

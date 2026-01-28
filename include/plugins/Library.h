@@ -1,15 +1,16 @@
 /**
  * @file Library.h
  * @brief Book Library & Reader - Header Declarations Only
- * @version 1.4.2
+ * @version 1.5.0
  *
  * Header declarations only - implementation in Library_*.cpp
  * 
  * Notes:
+ * - All books must be preprocessed via portal before reading
  * - Book list stored in SD-backed binary index
  * - Chapter titles use fixed-size array
  * - Extends Activity base class
-
+ * - Page preloading for instant page turns
  */
 
 #ifndef SUMI_PLUGIN_LIBRARY_H
@@ -26,9 +27,6 @@
 #include "freertos/semphr.h"
 #include "core/PageCache.h"
 #include "core/TextLayout.h"
-#include "core/ExpatHtmlParser.h"
-#include "core/EpubParser.h"
-#include "core/ZipReader.h"
 #include "core/ReaderSettings.h"
 #include "core/PluginHelpers.h"
 #include "core/BatteryMonitor.h"
@@ -144,6 +142,10 @@ struct BookEntry {
     char author[32];
     char coverPath[96];
     uint32_t size;
+    uint32_t totalWords;     // Word count (from meta.json)
+    uint32_t cacheHash;      // Hash for /.sumi/books/{hash}/ directory
+    uint16_t estimatedPages; // Estimated page count
+    uint16_t pubYear;        // Publication year (0 if unknown)
     bool isDirectory;
     bool isRegularDir;
     BookType bookType;
@@ -163,7 +165,7 @@ struct BookEntry {
 // Library Index Header
 // =============================================================================
 #define LIBRARY_INDEX_MAGIC     0x4C494258  // "LIBX"
-#define LIBRARY_INDEX_VERSION   3
+#define LIBRARY_INDEX_VERSION   4
 
 struct LibraryIndexHeader {
     uint32_t magic;
@@ -187,6 +189,7 @@ struct ChapterTitle {
 // View States
 // =============================================================================
 enum class ViewState {
+    MAIN_MENU,
     BROWSER,
     BROWSER_LIST,
     READING,
@@ -202,8 +205,7 @@ enum class ViewState {
 // Settings Menu Items
 // =============================================================================
 enum class SettingsItem {
-    ORIENTATION = 0,
-    FONT_SIZE,
+    FONT_SIZE = 0,
     MARGINS,
     LINE_SPACING,
     JUSTIFY,
@@ -247,10 +249,11 @@ public:
     
     // Directory/Book scanning
     void scanDirectory();
-    String findCoverInZip(ZipReader& zip);
-    void extractAllCoversLightweight();
+    void sortBooks(int sortMode = 0);  // 0=A-Z, 1=Z-A, 2=by type
+    void checkForCovers();
     bool isValidCoverFile(const char* path);
     void loadBookMetadata(BookEntry& book, const char* fullPath);
+    void updateBooksFromPortal();  // Quick update without full scan
     String getCoverCachePath(const char* bookPath);
     String getCoverCachePath(const char* bookPath, bool forWidget);
     
@@ -259,6 +262,7 @@ public:
     bool isReading() const;
     bool handleInput(Button btn);
     bool handleButtonPress(Button btn);
+    bool handleMainMenuInput(Button btn);
     bool handleBrowserInput(Button btn);
     bool handleFlipBrowserInput(Button btn);
     bool handleListBrowserInput(Button btn);
@@ -291,14 +295,10 @@ public:
     // Book operations
     void openBook(int index);
     void openTxtMetadata(const char* path);
-    bool openPreprocessedMetadata(const char* path);
-    bool openEpubMetadata(const char* path);
-    void cacheBookCover(const char* bookPath);
-    void extractCoverOnDemand(BookEntry& book, const char* fullPath);
+    bool openPreprocessedMetadata(uint32_t hash);
     void renderTaskLoop();
     void renderCurrentPage();
     void closeBook();
-    String getTempFilePath(int chapter);
     String getPreprocessedChapterPath(int chapter);
     bool loadChapterSync(int chapter);
     void loadChapter(int chapter);
@@ -306,10 +306,20 @@ public:
     void syncToKOReader();
     void syncFromKOReader();
     
+    // Page preloading for instant turns
+    void preloadNextPage();
+    void preloadPrevPage();
+    bool usePreloadedPage(int chapter, int page, CachedPage& outPage);
+    
     // Drawing
     void draw();
+    void drawPartial();           // Partial refresh for menu navigation
+    void drawFullScreen();        // Force full refresh
+    bool update();                // Called each frame - returns true if needs redraw
     bool needsFullRefresh();
+    bool needsRedraw();           // Returns true if draw() should be called
     void requestFullRefresh();
+    void drawMainMenu();
     void drawBrowser();
     void drawFlipBrowser();
     void drawCoverImage(const char* path, int x, int y, int maxW, int maxH);
@@ -343,10 +353,13 @@ private:
     int screenW, screenH;
     bool landscape;
     int itemsPerPage;
+    int mainMenuCursor;
     char currentPath[128];
     char currentBook[64];
     char currentBookPath[128];
+    char bookCacheDir[64];      // /.sumi/books/{hash} - for images
     char chapterTitle[48];
+    uint32_t currentBookHash;   // Hash of full filename (from scan, before truncation)
     int currentPage;
     int totalPages;
     int currentChapter;
@@ -356,6 +369,10 @@ private:
     int settingsCursor;
     int pagesUntilFullRefresh;
     int pagesUntilHalfRefresh;
+    
+public:
+    bool needsFullRedraw;       // Flag for partial vs full refresh
+    bool _pendingRedraw;        // Flag indicating draw() should be called
     
     // JPG decoding state (static for TJpgDec callback)
     static int _coverOffsetX;
@@ -380,12 +397,15 @@ private:
     int indexingProgress;
     int preloadedPage;
     
-    // EPUB state
+    // EPUB state (metadata only - parsing done by portal)
     bool isEpub;
-    EpubParser epub;
     ChapterTitle chapterTitles[MAX_CHAPTER_TITLES];  // Fixed array
     int chapterTitleCount;
-    ExpatHtmlParser expatParser;
+    
+    // Page preloading for instant page turns
+    CachedPage _preloadedPageData;
+    int _preloadedChapter;
+    int _preloadedPageNum;
     
     // Reading stats & bookmarks
     ReadingStats stats;
@@ -405,7 +425,15 @@ private:
     // SD-backed book list helpers
     bool saveLibraryIndex();
     bool loadLibraryIndex();
+    bool loadPortalLibraryIndex();  // Load from portal-generated /.sumi/library.json
     bool addBookToIndex(const BookEntry& book);
+    
+    // UI Drawing helpers
+    void drawHeader(const char* title, const char* subtitle = nullptr);
+    void drawFooter(const char* text);
+    void drawToggle(int x, int y, bool enabled);
+    void centerText(const char* text, int x, int y);
+    void drawMiniCover(int x, int y, int w, int h, const char* coverPath, const char* title);
 };
 
 // =============================================================================

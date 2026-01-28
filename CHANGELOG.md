@@ -2,132 +2,122 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-01-28
+
+### Breaking Changes
+- **All EPUBs must be preprocessed via portal** - On-device EPUB parsing removed
+- Old books will show "Process this book in the portal first" message
+- **Home WiFi required for book processing** - Hotspot mode is games-only
+
+### Added
+- **Web Flasher** - Flash SUMI directly from your browser at `docs/flasher/`
+  - Backup current firmware before flashing
+  - Flash latest SUMI (auto-downloads from GitHub)
+  - Flash custom .bin files (restore backups, other firmware)
+  - Erase flash option for clean installs
+  - Classic Mac OS-style UI matching the portal
+- **Ready-to-use SD card contents** (`sample_sd/` folder)
+  - 4 classic novels from Project Gutenberg
+  - 20+ language flashcard decks
+  - 10 e-ink optimized wallpapers
+  - Chess pieces and weather icons
+  - ASL alphabet images
+- **EPUB3 support** - Both EPUB2 and EPUB3 formats now work seamlessly
+- **Page preloading** - Next page pre-read into RAM for instant page turns
+- **TOC extraction** - Chapter titles extracted from NCX (EPUB2) or nav.xhtml (EPUB3)
+- **Smart typography** - Straight quotes → curly quotes, -- → em-dash, ... → ellipsis
+- **Soft hyphenation** - Words get automatic break points for better line wrapping
+- **Portal cache management** - New buttons to clear cache and reprocess all books
+- **Reader settings live preview** - Font size, margins, spacing changes apply immediately
+- **Chess piece rendering** - Newspaper diagram style (proper black/white piece contrast)
+- **GitHub Pages landing page** - Project info and quick links at `docs/index.html`
+
+### Changed
+- **Setup wizard** - Now emphasizes home WiFi requirement for books
+- **Portal banners** - Red warning when in hotspot mode (books unavailable)
+- **Library navigation** - Improved button debouncing for faster response
+- **Widget refresh** - Better partial refresh handling for weather widget borders
+- **Installation options** - Web Flasher now primary recommendation
+
+### Fixed
+- **Book loading failures** - Fixed critical bug where PageCache was deleting portal's preprocessed chapter files
+- **Hash mismatch for long filenames** - Books with 64+ character filenames now load correctly
+- **TOC href matching** - Chapter select now properly maps TOC entries to chapters
+- **Justification gaps** - Capped word spacing at 2x normal to prevent excessive gaps
+- **Reader settings cursor** - Menu cursor now aligns with displayed options
+- **Portal textAlign toggle** - Now accepts both boolean and integer values
+
+### Removed (Dead Code Cleanup)
+- `EpubParser.cpp/h` (1,148 lines) - On-device EPUB parsing
+- `ExpatHtmlParser.cpp/h` (531 lines) - XML parsing
+- `StreamingHtmlProcessor.h` (23KB) - Unused streaming processor
+- `ZipReader.cpp/h` + miniz library (~65KB) - ZIP decompression
+- `lib/expat/` - XML parsing library (~500KB source)
+- `lib/miniz/` - ZIP library (~100KB source)
+
+### Technical Improvements
+- **~45KB more RAM** for reading (no ZIP buffer, no parsing libraries)
+- **~110KB smaller firmware** (removed parsing code)
+- **Instant page turns** - Next page pre-cached in RAM
+- **Cleaner codebase** - 1,700+ lines of parsing code removed
+- **Portal preprocessing v4** - TOC, smart quotes, soft hyphens, language detection
+
 ## [1.4.3] - 2026-01-26
 
 ### Added
 - **Improved text layout** - better rendering for e-ink displays
   - Line height compression multiplier (Tight: 0.95x, Normal: 1.0x, Wide: 1.1x)
-  - Viewable margins that account for e-ink panel edges (Top: 9px, Right/Bottom/Left: 3px)
-  - Configurable screen margin added on top of viewable margins
+  - Viewable margins that account for e-ink panel edges
   - Extra Large font size option (4 sizes total)
-  - Status bar area properly reserved at bottom (22px)
 - **Rich text support** in preprocessed books
-  - **Bold** text preserved from EPUB (`<b>`, `<strong>`)
-  - *Italic* text preserved from EPUB (`<i>`, `<em>`)
-  - Headers centered and bold (`<h1>` - `<h6>`)
-  - List bullets preserved (`<li>` → • )
-  - Image placeholders shown (`[Image]` or `[Image: alt text]`)
-  - Table placeholders shown (`[Table]`)
-  - Soft hyphens preserved for better line breaking
-- **New TextAlign enum** - Justified, Left, Center, Right alignment options
-- **Paragraph indent mode** - when extra spacing disabled, uses em-dash indent instead
-- **Flashcard settings in portal** - configure flashcards from the web portal
-  - Font size: Small, Medium, Large, Extra Large (XL uses 2x scale)
-  - Center Text: vertically and horizontally center question/answer in their areas
-  - Shuffle Cards: randomize card order when loading deck
-  - Show Progress Bar: display session progress at top
-  - Show Stats: display correct/incorrect count
-  - Live preview in portal shows settings changes
-- **Memory fragmentation protection** - Library now checks for sufficient contiguous memory before launching, shows friendly "Memory fragmented - Please reboot" message instead of crashing
-- **Processing stuck detection** - Portal shows "Stuck - click to retry" after 30 seconds without progress
-- **Setup screen redesign** - single clean screen with card-style steps
-  - Dynamic status bar shows hotspot vs home network connection
-  - Larger text and better spacing for readability
-- **Smart portal default tab** - Files tab default when on home network, WiFi tab on hotspot
-- **Connection detection fix** - verifies actual internet access before showing "Connected" banner
+  - **Bold** text preserved from EPUB
+  - *Italic* text preserved from EPUB
+  - Headers centered and bold
+  - List bullets preserved
+- **Paragraph indent mode** - em-dash indent when extra spacing disabled
+- **Flashcard settings in portal** - configure from web interface
+- **Memory fragmentation protection** - friendly reboot message instead of crash
+- **Processing stuck detection** - Portal shows retry option after 30 seconds
 
 ### Changed
-- Portal preprocessor now outputs rich text markers instead of plain text
-- Margins now display as pixel values in settings (0px, 5px, 10px, 15px, 20px)
-- Font sizes: Small (22px), Medium (26px), Large (30px), Extra Large (34px)
-- Line spacing now affects actual line height via compression multiplier
-- Settings structure updated to v3 (auto-migrates from v2)
-- Books processed with older portal versions will still work (no markers = plain text)
-
-### Technical
-- `ReaderSettings.h` rewritten with proper viewable margin constants
-- `TextLayout` now uses `_lineHeightMultiplier` for proper line compression
-- New `addRichText()` method parses **bold**, *italic*, # headers, • bullets
-- `applyFontSettings()` uses new settings accessors
-- Cache key includes new margin format for proper invalidation
+- Portal preprocessor outputs rich text markers
+- Margins display as pixel values in settings
+- Settings structure updated to v3
 
 ### Fixed
-- **Book widget cover not displaying** - Cover JPEG was only being decoded on first page iteration of paged drawing, leaving it invisible
-- **Words concatenated in reader** - Rich text markers weren't followed by spaces, causing "wordwordword" instead of "word word word"
-- **Portal tag stripping** - Tags nested inside bold/italic/headers were stripped without preserving word boundaries
-- **On-device EPUB processing** - Updated to output rich text markers and use proper font measurement
-- **Font measurement warning** - Added debug logging when display not available for text measurement
-- **Text breaking too early** - Space width calculation reduced by 50% to pack more words per line before justification
-- **Home screen grid layout** - Portrait mode now always uses 2 columns (was incorrectly using 3 for 5-6 items)
-- **Portal processing state lost** - Processing UI now persists when switching tabs during book processing
-- **Widget defaults not syncing** - Portal now properly syncs widget visibility flags when switching preset sets
-- **Library crash after portal use** - Added memory check before launching Library to catch heap fragmentation
-
-### Improved
-- ExpatHtmlParser now outputs rich text markers (**bold**, *italic*, # headers) for on-device processing
-- On-device EPUB and TXT file processing now uses `addRichText()` for consistent formatting
-- applyFontSettings now sets bold font for rich text rendering
+- Book widget cover not displaying
+- Words concatenated in reader
+- Portal tag stripping
+- Home screen grid layout
+- Library crash after portal use
 
 ## [1.4.2] - 2026-01-25
 
 ### Added
-- **Browser-based EPUB processing** - EPUBs are now pre-processed in the browser
-  - Extracts metadata, chapters, and cover art using JSZip
-  - Converts HTML chapters to rich text with formatting markers
-  - Uploads processed files to `/.sumi/books/{hash}/` cache
-  - ESP32 reads rich text files instead of parsing complex EPUBs
-  - Dramatically faster book loading (~200ms vs 2-5s)
+- **Browser-based EPUB processing** - Pre-processed in browser using JSZip
 - **"Require Pre-processing" setting** (default: ON)
-  - On-device EPUB parsing was causing memory issues and reliability problems
-  - When enabled, only pre-processed books can be opened
-  - Friendly error message: "Process this book in the portal first"
-  - Can be disabled in Reader Settings if you want legacy behavior
 - **Rich book metadata** - word count, estimated pages, reading time
-  - `meta.json` now includes `totalWords`, `estimatedPages`, `estimatedReadingMins`
-  - Per-chapter word and character counts
-  - Displayed in portal library grid
-- **"My SUMI" summary page** - replaced dashboard with comprehensive config overview
-  - Six color-coded cards: Device Status, Connection, SD Contents, Home Screen, Settings
-  - Shows file counts, book processing status, all current settings
-  - Auto-refreshes on page navigation
-- **Connection status banner** - 3-state indicator for network status
-  - Hotspot mode (yellow): prompts to connect SUMI to WiFi
-  - Transitional (green): SUMI connected, suggests switching browser
-  - Home network (green): fully connected with checkmark
-- **Unified "Open Portal" menu** - merged WiFi and Portal into single option
-  - Choose connection mode: Create Hotspot or Use Home WiFi
-  - Shows `sumi.local` alongside IP address
-- **File download API** (`/api/download`) - proper chunked file streaming from SD card
+- **"My SUMI" summary page** - comprehensive config overview
+- **Connection status banner** - 3-state network indicator
+- **Unified "Open Portal" menu** - merged WiFi and Portal options
 
 ### Changed
-- Portal now requires internet access for book processing (JSZip loaded from CDN)
-- Library scan skips EPUB parsing when Require Pre-processing is enabled (faster scanning)
-- Upload handler auto-creates parent directories
-- 50ms delay between chapter uploads to prevent overwhelming ESP32
-- Improved `ensureDirectory()` creates `/.sumi` and `/.sumi/books` before book cache
-- After portal deploy, returns to home screen instead of staying in settings
+- Portal requires internet for book processing
+- Library scan skips EPUB parsing when preprocessing required
+- Improved directory creation
 
 ### Fixed
-- **File descriptor leak** in download endpoint - was causing "no free file descriptors" errors
-- **mkdir endpoint** returning 400 - now creates parent directories first
-- **Hostname detection** - `sumi.local` now correctly identified as home network (mDNS works from both)
-- **Upload paths** - files no longer end up in SD card root
-- **Route conflict** - `/api/files/download` was caught by `/api/files`, renamed to `/api/download`
-- **Cover art scaling** - fixed white squares/gaps in dithered cover images
-
-### Technical
-- Download endpoint uses static file handle to avoid memory leaks
-- Upload handler logs full path construction for debugging
-- Book cache structure: `/.sumi/books/{hash}/meta.json`, `cover_thumb.jpg`, `cover_full.jpg`, `ch_000.txt`...
-- Cover images pre-resized: 80×120 (widget), 300px wide (library)
-- Bayer dithering for smoother grayscale rendering on covers
+- File descriptor leak in download endpoint
+- mkdir endpoint returning 400
+- Upload paths going to SD root
+- Cover art scaling issues
 
 ## [1.4.1] - 2026-01-20
 
 ### Added
-- Soft hyphen and zero-width character filtering in HTML processor
+- Soft hyphen and zero-width character filtering
 - KOReader sync support (KOSync protocol)
-- Configurable full refresh frequency in reader settings
+- Configurable full refresh frequency
 
 ### Fixed
 - UTF-8 BOM handling in EPUB chapters
@@ -141,9 +131,9 @@ All notable changes to this project will be documented in this file.
 - Activity lifecycle for proper resource management
 
 ### Changed
-- Library split into multiple source files for faster compilation
-- Book list now stored as binary index on SD card
-- Chapter content streamed in 1KB chunks instead of loading entirely
+- Library split into multiple source files
+- Book list stored as binary index on SD card
+- Chapter content streamed in 1KB chunks
 
 ### Fixed
 - Memory fragmentation during long reading sessions
@@ -157,7 +147,7 @@ All notable changes to this project will be documented in this file.
 - Bookmark support with timestamps
 
 ### Changed
-- Improved EPUB 2 (NCX) and EPUB 3 (NAV) TOC parsing
+- Improved EPUB 2/3 TOC parsing
 - Better error handling for malformed EPUBs
 
 ### Fixed

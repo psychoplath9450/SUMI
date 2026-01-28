@@ -105,7 +105,7 @@ struct LibReaderSettings {
     void setDefaults() {
         magic = READER_SETTINGS_MAGIC;
         version = READER_SETTINGS_VERSION;
-        fontSize = FontSize::MEDIUM;
+        fontSize = FontSize::LARGE;  // Default to Large (18pt)
         lineSpacing = LineSpacing::NORMAL;
         textAlign = TextAlign::JUSTIFIED;
         screenMargin = 5;
@@ -119,13 +119,14 @@ struct LibReaderSettings {
     // === Computed Layout Values ===
     
     // Get base line height for font size (before compression)
+    // Based on actual FreeSans font heights (~1.2x font size)
     int getBaseFontHeight() const {
         switch (fontSize) {
-            case FontSize::SMALL:       return 22;  // ~12pt
-            case FontSize::MEDIUM:      return 26;  // ~14pt
-            case FontSize::LARGE:       return 30;  // ~16pt
-            case FontSize::EXTRA_LARGE: return 34;  // ~18pt
-            default: return 26;
+            case FontSize::SMALL:       return 22;  // 9pt font
+            case FontSize::MEDIUM:      return 28;  // 12pt font
+            case FontSize::LARGE:       return 40;  // 18pt font
+            case FontSize::EXTRA_LARGE: return 52;  // 24pt font
+            default: return 40;
         }
     }
     

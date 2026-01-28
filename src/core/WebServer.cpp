@@ -37,6 +37,43 @@ SumiWebServer webServer;
 // Global flags to signal main loop - checked in loop()
 volatile bool g_settingsDeployed = false;
 volatile bool g_wifiJustConnected = false;
+volatile bool g_portalAccessed = false;
+volatile bool g_portalAccessedOnHomeWiFi = false;
+
+// Helper function to recursively delete a directory
+static bool deleteDirectoryRecursive(const char* path) {
+    File dir = SD.open(path);
+    if (!dir || !dir.isDirectory()) {
+        if (dir) dir.close();
+        return SD.remove(path);  // It's a file, just delete it
+    }
+    
+    // Delete all files and subdirectories
+    File entry;
+    while ((entry = dir.openNextFile())) {
+        String entryPath = String(path) + "/" + entry.name();
+        bool isDir = entry.isDirectory();
+        entry.close();
+        
+        if (isDir) {
+            if (!deleteDirectoryRecursive(entryPath.c_str())) {
+                dir.close();
+                return false;
+            }
+        } else {
+            if (!SD.remove(entryPath.c_str())) {
+                Serial.printf("[WEB] Failed to delete: %s\n", entryPath.c_str());
+                dir.close();
+                return false;
+            }
+        }
+        yield();  // Let ESP32 handle background tasks
+    }
+    dir.close();
+    
+    // Now remove the empty directory
+    return SD.rmdir(path);
+}
 
 // =============================================================================
 // Constructor & Lifecycle
@@ -258,11 +295,36 @@ void SumiWebServer::setupAPIRoutes() {
                 return;
             }
             
-            if (SD.remove(path)) {
-                Serial.printf("[WEB] Deleted: %s\n", path);
-                sendSuccess(r, "deleted");
+            bool recursive = doc["recursive"] | false;
+            
+            // Check if it's a directory
+            File f = SD.open(path);
+            bool isDir = f.isDirectory();
+            f.close();
+            
+            if (isDir && recursive) {
+                // Recursive delete
+                if (deleteDirectoryRecursive(path)) {
+                    Serial.printf("[WEB] Deleted directory: %s\n", path);
+                    sendSuccess(r, "deleted");
+                } else {
+                    sendError(r, "Delete failed");
+                }
+            } else if (isDir) {
+                // Try to remove empty directory
+                if (SD.rmdir(path)) {
+                    Serial.printf("[WEB] Deleted empty dir: %s\n", path);
+                    sendSuccess(r, "deleted");
+                } else {
+                    sendError(r, "Directory not empty (use recursive:true)");
+                }
             } else {
-                sendError(r, "Delete failed");
+                if (SD.remove(path)) {
+                    Serial.printf("[WEB] Deleted: %s\n", path);
+                    sendSuccess(r, "deleted");
+                } else {
+                    sendError(r, "Delete failed");
+                }
             }
         });
     
@@ -444,6 +506,33 @@ void SumiWebServer::setupAPIRoutes() {
                 sendError(r, "Failed");
             }
         });
+    
+    // GET /api/files/exists - Check if file/directory exists
+    _server.on("/api/files/exists", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        if (!r->hasParam("path")) {
+            sendError(r, "Path required");
+            return;
+        }
+        
+        String path = r->getParam("path")->value();
+        if (path.indexOf("..") >= 0) {
+            sendError(r, "Invalid path");
+            return;
+        }
+        
+        bool exists = SD.exists(path);
+        
+        JsonDocument doc;
+        doc["exists"] = exists;
+        doc["path"] = path;
+        
+        String response;
+        serializeJson(doc, response);
+        
+        AsyncWebServerResponse* resp = r->beginResponse(200, "application/json", response);
+        addCORSHeaders(resp);
+        r->send(resp);
+    });
     
     // =========================================================================
     // Backup/Restore Settings API
@@ -666,7 +755,12 @@ void SumiWebServer::setupAPIRoutes() {
             if (doc["margins"].is<int>()) settingsManager.reader.margins = doc["margins"];
             if (doc["paraSpacing"].is<int>()) settingsManager.reader.paraSpacing = doc["paraSpacing"];
             if (doc["sceneBreakSpacing"].is<int>()) settingsManager.reader.sceneBreakSpacing = doc["sceneBreakSpacing"];
-            if (doc["textAlign"].is<int>()) settingsManager.reader.textAlign = doc["textAlign"];
+            // textAlign: accept bool (true=justified) or int (1=justified)
+            if (doc["textAlign"].is<bool>()) {
+                settingsManager.reader.textAlign = doc["textAlign"].as<bool>() ? 1 : 0;
+            } else if (doc["textAlign"].is<int>()) {
+                settingsManager.reader.textAlign = doc["textAlign"];
+            }
             if (doc["hyphenation"].is<bool>()) settingsManager.reader.hyphenation = doc["hyphenation"];
             if (doc["showProgress"].is<bool>()) settingsManager.reader.showProgress = doc["showProgress"];
             if (doc["showChapter"].is<bool>()) settingsManager.reader.showChapter = doc["showChapter"];
@@ -1157,6 +1251,14 @@ void SumiWebServer::setupPageRoutes() {
     // Main page - serve embedded portal from flash (no SD needed)
     // Serve portal HTML using chunked response to avoid memory issues
     _server.on("/", HTTP_GET, [](AsyncWebServerRequest* r) {
+        // Mark that portal has been accessed (for setup step tracking)
+        g_portalAccessed = true;
+        
+        // If SUMI is connected to home WiFi (not AP mode), mark that too
+        if (wifiManager.isConnected()) {
+            g_portalAccessedOnHomeWiFi = true;
+        }
+        
         // Use chunked response - sends data in small pieces without large RAM allocation
         size_t contentLen = strlen_P(PORTAL_HTML);
         AsyncWebServerResponse* response = r->beginChunkedResponse("text/html", 

@@ -268,8 +268,7 @@ Tests connection to sync server.
   "screenMargin": 5,
   "textAlign": 0,
   "extraParagraphSpacing": false,
-  "refreshFrequency": 15,
-  "requirePreprocessed": true
+  "refreshFrequency": 15
 }
 ```
 

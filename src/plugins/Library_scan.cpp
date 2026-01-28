@@ -1,13 +1,211 @@
 /**
  * @file Library_scan.cpp
  * @brief Library scanning, cover extraction, and book opening
- * @version 1.4.2
+ * @version 1.5.0
+ * 
+ * All books must be preprocessed via portal before reading.
+ * No on-device EPUB parsing - portal handles all extraction.
  */
 
 #include "plugins/Library.h"
 #include <ArduinoJson.h>
 
 #if FEATURE_READER
+
+// =============================================================================
+// Portal Library Index Loading
+// =============================================================================
+
+bool LibraryApp::loadPortalLibraryIndex() {
+    const char* indexPath = "/.sumi/library.json";
+    
+    if (!SD.exists(indexPath)) {
+        Serial.println("[LIBRARY] No portal index found");
+        return false;
+    }
+    
+    File f = SD.open(indexPath, FILE_READ);
+    if (!f) {
+        Serial.println("[LIBRARY] Failed to open portal index");
+        return false;
+    }
+    
+    // Use streaming JSON parser for memory efficiency
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    
+    if (err) {
+        Serial.printf("[LIBRARY] Portal index parse error: %s\n", err.c_str());
+        return false;
+    }
+    
+    int version = doc["version"] | 0;
+    if (version != 1) {
+        Serial.printf("[LIBRARY] Portal index version mismatch: %d\n", version);
+        return false;
+    }
+    
+    JsonArray books = doc["books"];
+    if (books.isNull() || books.size() == 0) {
+        Serial.println("[LIBRARY] Portal index has no books");
+        return false;
+    }
+    
+    // Clear existing books and create new index
+    clearBooks();
+    
+    // Create binary index file from JSON data
+    File indexFile = SD.open(LIBRARY_INDEX_PATH, FILE_WRITE);
+    if (!indexFile) {
+        Serial.println("[LIBRARY] Failed to create binary index");
+        return false;
+    }
+    
+    // Write header
+    LibraryIndexHeader header;
+    strncpy(header.currentPath, "/books", sizeof(header.currentPath) - 1);
+    header.timestamp = millis();
+    header.bookCount = 0;
+    indexFile.write((uint8_t*)&header, sizeof(header));
+    
+    int count = 0;
+    BookEntry book;
+    
+    for (JsonObject bookObj : books) {
+        if (count >= LIBRARY_MAX_BOOKS) break;
+        
+        memset(&book, 0, sizeof(book));
+        
+        // Copy data from JSON
+        const char* hash = bookObj["hash"] | "";
+        const char* filename = bookObj["filename"] | "";
+        const char* title = bookObj["title"] | "Unknown";
+        const char* author = bookObj["author"] | "";
+        const char* coverPath = bookObj["coverPath"] | "";
+        
+        strncpy(book.filename, filename, sizeof(book.filename) - 1);
+        strncpy(book.title, title, sizeof(book.title) - 1);
+        strncpy(book.author, author, sizeof(book.author) - 1);
+        strncpy(book.coverPath, coverPath, sizeof(book.coverPath) - 1);
+        
+        // Parse hash for cacheHash field
+        book.cacheHash = strtoul(hash, NULL, 16);
+        
+        book.totalChapters = bookObj["totalChapters"] | 0;
+        book.totalWords = bookObj["totalWords"] | 0;
+        book.estimatedPages = bookObj["estimatedPages"] | 0;
+        book.pubYear = bookObj["pubYear"] | 0;
+        book.hasCover = bookObj["hasCover"] | false;
+        book.hasCache = true;  // By definition, portal-indexed books are preprocessed
+        book.bookType = BookType::EPUB_FILE;
+        
+        // Write to binary index using proper serialization
+        book.serialize(indexFile);
+        count++;
+        
+        Serial.printf("[LIBRARY] Loaded: %s by %s\n", book.title, book.author);
+    }
+    
+    // Update header with final count
+    indexFile.seek(0);
+    header.bookCount = count;
+    indexFile.write((uint8_t*)&header, sizeof(header));
+    indexFile.close();
+    
+    bookCount = count;
+    strncpy(currentPath, "/books", sizeof(currentPath) - 1);
+    
+    Serial.printf("[LIBRARY] Portal index loaded: %d books\n", count);
+    return count > 0;
+}
+
+// =============================================================================
+// Book Sorting
+// =============================================================================
+
+// Simple case-insensitive string compare for sorting
+static int strcasecmp_title(const char* a, const char* b) {
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? (*a + 32) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? (*b + 32) : *b;
+        if (ca != cb) return ca - cb;
+        a++; b++;
+    }
+    return *a - *b;
+}
+
+void LibraryApp::sortBooks(int sortMode) {
+    // sortMode: 0 = by title (A-Z), 1 = by title (Z-A), 2 = by type
+    if (bookCount < 2) return;
+    
+    Serial.printf("[LIBRARY] Sorting %d books (mode=%d)\n", bookCount, sortMode);
+    
+    // Allocate array for all book entries
+    BookEntry* books = (BookEntry*)malloc(bookCount * sizeof(BookEntry));
+    if (!books) {
+        Serial.println("[LIBRARY] Sort failed: not enough memory");
+        return;
+    }
+    
+    // Read all books from index
+    File f = SD.open(LIBRARY_INDEX_PATH, FILE_READ);
+    if (!f) {
+        free(books);
+        return;
+    }
+    
+    f.seek(sizeof(LibraryIndexHeader));
+    for (int i = 0; i < bookCount; i++) {
+        books[i].deserialize(f);
+    }
+    f.close();
+    
+    // Simple bubble sort (books array is small, typically <100)
+    for (int i = 0; i < bookCount - 1; i++) {
+        for (int j = 0; j < bookCount - i - 1; j++) {
+            bool swap = false;
+            
+            // Directories always come first
+            if (books[j].isRegularDir != books[j+1].isRegularDir) {
+                swap = !books[j].isRegularDir && books[j+1].isRegularDir;
+            } else {
+                // Sort by title
+                int cmp = strcasecmp_title(books[j].title, books[j+1].title);
+                swap = (sortMode == 0) ? (cmp > 0) : (cmp < 0);
+            }
+            
+            if (swap) {
+                BookEntry temp = books[j];
+                books[j] = books[j+1];
+                books[j+1] = temp;
+            }
+        }
+    }
+    
+    // Write sorted books back to index
+    f = SD.open(LIBRARY_INDEX_PATH, FILE_WRITE);
+    if (!f) {
+        free(books);
+        return;
+    }
+    
+    // Write header
+    LibraryIndexHeader header;
+    header.magic = 0x4C494258; // "LIBX"
+    header.version = 1;
+    header.bookCount = bookCount;
+    f.write((uint8_t*)&header, sizeof(header));
+    
+    // Write sorted books
+    for (int i = 0; i < bookCount; i++) {
+        books[i].serialize(f);
+    }
+    f.close();
+    
+    free(books);
+    Serial.println("[LIBRARY] Sort complete");
+}
 
 // =============================================================================
 // Directory Scanning
@@ -49,7 +247,7 @@ void LibraryApp::scanDirectory() {
         return;
     }
     
-    // Process one book at a time - no temp array needed
+    // Process one book at a time - only include preprocessed books
     int count = 0;
     BookEntry book;  // Single entry, reused
     
@@ -59,118 +257,108 @@ void LibraryApp::scanDirectory() {
         const char* name = entry.name();
         if (name[0] == '.') { entry.close(); continue; }
         
-        book.clear();
+        bool isDir = entry.isDirectory();
+        String fileName = String(name);
+        fileName.toLowerCase();
+        bool isEpub = fileName.endsWith(".epub");
+        bool isTxt = fileName.endsWith(".txt");
         
-        strncpy(book.filename, name, sizeof(book.filename) - 1);
-        book.size = entry.size();
-        book.isDirectory = entry.isDirectory();
-        book.isRegularDir = false;
-        
-        // Default title from filename
-        strncpy(book.title, book.filename, sizeof(book.title) - 1);
-        char* dot = strrchr(book.title, '.');
-        if (dot && !book.isDirectory) *dot = '\0';
-        
-        // Build full path
-        char fullPath[192];
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", currentPath, name);
-        book.bookType = detectBookType(fullPath);
-        
-        bool isBook = (book.bookType == BookType::TXT || 
-                      book.bookType == BookType::EPUB_FILE || 
-                      book.bookType == BookType::EPUB_FOLDER);
-        bool isRegularDir = book.isDirectory && book.bookType == BookType::UNKNOWN;
-        
-        if (isBook || isRegularDir) {
-            // Check memory
-            if (ESP.getFreeHeap() < 8000) {
-                Serial.println("[LIBRARY] Low memory, stopping scan");
-                entry.close();
-                break;
-            }
-            
-            // Load metadata for EPUBs
-            if (book.bookType == BookType::EPUB_FILE || book.bookType == BookType::EPUB_FOLDER) {
-                loadBookMetadata(book, fullPath);
-            }
-            
-            book.isRegularDir = isRegularDir;
-            
-            // Write directly to index file
-            book.serialize(indexFile);
-            count++;
-            indexingProgress = count;
-            
-            Serial.printf("[LIBRARY] Found: %s (%s)\n", book.title, 
-                         book.bookType == BookType::EPUB_FILE ? "EPUB" : 
-                         book.bookType == BookType::TXT ? "TXT" : "DIR");
-        }
+        if (!isDir && !isEpub && !isTxt) { entry.close(); continue; }
         
         entry.close();
+        
+        // Compute hash matching portal's simpleHash(filename) algorithm
+        // JS: hash = ((hash << 5) - hash) + charCode; hash = hash >>> 0;
+        uint32_t hash = 0;
+        const char* p = name;  // Use filename only, not full path
+        while (*p) {
+            hash = ((hash << 5) - hash) + (uint8_t)*p++;
+        }
+        
+        char metaPath[80];
+        snprintf(metaPath, sizeof(metaPath), "/.sumi/books/%08x/meta.json", hash);
+        
+        // Check if meta.json exists
+        if (!SD.exists(metaPath)) {
+            Serial.printf("[SCAN] Skipping (no meta.json): %s\n", name);
+            continue;
+        }
+        
+        // Also verify at least one chapter file exists (ch_000.txt)
+        char chapterPath[80];
+        snprintf(chapterPath, sizeof(chapterPath), "/.sumi/books/%08x/ch_000.txt", hash);
+        if (!SD.exists(chapterPath)) {
+            Serial.printf("[SCAN] Skipping (no chapters): %s\n", name);
+            continue;
+        }
+        
+        // Initialize book entry
+        memset(&book, 0, sizeof(book));
+        strncpy(book.filename, name, sizeof(book.filename) - 1);
+        book.cacheHash = hash;  // Store hash computed from full filename
+        
+        if (isDir) {
+            book.bookType = BookType::EPUB_FOLDER;
+            strncpy(book.title, name, sizeof(book.title) - 1);
+        } else if (isEpub) {
+            book.bookType = BookType::EPUB_FILE;
+            String title = String(name);
+            title.replace(".epub", "");
+            title.replace("_", " ");
+            strncpy(book.title, title.c_str(), sizeof(book.title) - 1);
+        } else {
+            book.bookType = BookType::TXT;
+            String title = String(name);
+            title.replace(".txt", "");
+            title.replace("_", " ");
+            strncpy(book.title, title.c_str(), sizeof(book.title) - 1);
+        }
+        
+        // Build full path for metadata loading
+        char fullPath[192];
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", currentPath, name);
+        
+        // Load metadata from preprocessed cache
+        loadBookMetadata(book, fullPath);
+        
+        // Write to index
+        indexFile.write((uint8_t*)&book, sizeof(book));
+        count++;
+        
+        // Update progress
+        indexingProgress = (count * 100) / LIBRARY_MAX_BOOKS;
+        if (indexingProgress > 95) indexingProgress = 95;
+        
         yield();
     }
+    
     dir.close();
     
     // Update header with final count
-    header.bookCount = count;
     indexFile.seek(0);
+    header.bookCount = count;
     indexFile.write((uint8_t*)&header, sizeof(header));
     indexFile.close();
     
     bookCount = count;
-    cursor = 0;
-    scrollOffset = 0;
     
-    Serial.printf("[LIBRARY] Scan complete: %d items\n", count);
-    MEM_LOG("scan_complete");
+    // Find covers from preprocessed cache (portal extracts them)
+    checkForCovers();
     
-    // Extract covers in background
-    if (count > 0) {
-        extractAllCoversLightweight();
-    }
+    Serial.printf("[LIBRARY] Found %d books\n", bookCount);
+    MEM_LOG("scan_done");
     
+    // Auto-sort
+    sortBooks(0);
     state = ViewState::BROWSER;
 }
 
 // =============================================================================
-// Cover Extraction
+// Cover Handling - Portal extracts all covers during preprocessing
 // =============================================================================
-String LibraryApp::findCoverInZip(ZipReader& zip) {
-    const char* coverPaths[] = {
-        "cover.jpg", "cover.jpeg", "cover.png",
-        "OEBPS/cover.jpg", "OEBPS/cover.jpeg", "OEBPS/cover.png",
-        "OEBPS/images/cover.jpg", "OEBPS/Images/cover.jpg",
-        "images/cover.jpg", "Images/cover.jpg",
-        nullptr
-    };
-    
-    for (int i = 0; coverPaths[i]; i++) {
-        if (zip.fileExists(coverPaths[i])) return String(coverPaths[i]);
-    }
-    
-    // Search for any file with "cover" in name
-    char filename[128];
-    int count = zip.getFileCount();
-    for (int i = 0; i < count && i < 100; i++) {
-        if (zip.getFilename(i, filename, sizeof(filename))) {
-            String f = String(filename);
-            f.toLowerCase();
-            if (f.indexOf("cover") >= 0 && 
-                (f.endsWith(".jpg") || f.endsWith(".jpeg") || f.endsWith(".png"))) {
-                return String(filename);
-            }
-        }
-    }
-    
-    return "";
-}
-
-void LibraryApp::extractAllCoversLightweight() {
-    Serial.println("[LIBRARY] Checking for covers...");
+void LibraryApp::checkForCovers() {
+    Serial.println("[LIBRARY] Checking for portal-extracted covers...");
     MEM_LOG("covers_start");
-    
-    // Ensure cover directory exists
-    SD.mkdir(COVER_CACHE_DIR);
     
     int found = 0, missing = 0;
     
@@ -183,29 +371,23 @@ void LibraryApp::extractAllCoversLightweight() {
         snprintf(fullPath, sizeof(fullPath), "%s/%s", currentPath, book.filename);
         
         // Check for portal-uploaded cover (full size for library)
-        String cachePath = getCoverCachePath(fullPath, false);  // false = full size
-        Serial.printf("[COVER] Book %d: %s -> %s\n", i, book.title, cachePath.c_str());
+        String cachePath = getCoverCachePath(fullPath, false);
         
-        // Check if portal uploaded a cover
         if (isValidCoverFile(cachePath.c_str())) {
-            Serial.printf("[COVER] Found portal cover: %s\n", cachePath.c_str());
             strncpy(book.coverPath, cachePath.c_str(), sizeof(book.coverPath) - 1);
             book.hasCover = true;
             updateBook(i, book);
             found++;
-            continue;
+        } else {
+            book.hasCover = false;
+            updateBook(i, book);
+            missing++;
         }
-        
-        // No cover found - user needs to re-upload via portal
-        Serial.printf("[COVER] No cover for: %s (upload via portal to add)\n", book.title);
-        book.hasCover = false;
-        updateBook(i, book);
-        missing++;
         
         yield();
     }
     
-    Serial.printf("[LIBRARY] Covers: %d found, %d missing (upload via portal)\n", found, missing);
+    Serial.printf("[LIBRARY] Covers: %d found, %d without covers\n", found, missing);
     MEM_LOG("covers_done");
 }
 
@@ -220,7 +402,7 @@ bool LibraryApp::isValidCoverFile(const char* path) {
 }
 
 void LibraryApp::loadBookMetadata(BookEntry& book, const char* fullPath) {
-    // Check for pre-processed metadata first (from portal)
+    // Check for pre-processed metadata (from portal)
     const char* filename = book.filename;
     uint32_t hash = 0;
     for (const char* p = filename; *p; p++) {
@@ -234,7 +416,7 @@ void LibraryApp::loadBookMetadata(BookEntry& book, const char* fullPath) {
     char metaPath[80];
     snprintf(metaPath, sizeof(metaPath), "%s/meta.json", preprocessedDir);
     
-    // Try pre-processed metadata first
+    // Try pre-processed metadata
     if (SD.exists(metaPath)) {
         Serial.printf("[SCAN] Using pre-processed metadata: %s\n", metaPath);
         
@@ -243,81 +425,75 @@ void LibraryApp::loadBookMetadata(BookEntry& book, const char* fullPath) {
             String json = metaFile.readString();
             metaFile.close();
             
-            // Simple JSON parsing for title and author
-            int titleStart = json.indexOf("\"title\":");
-            if (titleStart > 0) {
-                int valueStart = json.indexOf("\"", titleStart + 8);
-                int valueEnd = json.indexOf("\"", valueStart + 1);
-                if (valueStart > 0 && valueEnd > valueStart) {
-                    String title = json.substring(valueStart + 1, valueEnd);
-                    title.trim();
-                    if (title.length() > 0) {
-                        strncpy(book.title, title.c_str(), sizeof(book.title) - 1);
+            // Helper lambda to extract string value
+            auto extractString = [&json](const char* key, char* dest, size_t maxLen) {
+                String searchKey = String("\"") + key + "\":";
+                int keyPos = json.indexOf(searchKey);
+                if (keyPos > 0) {
+                    int valueStart = json.indexOf("\"", keyPos + searchKey.length());
+                    int valueEnd = json.indexOf("\"", valueStart + 1);
+                    if (valueStart > 0 && valueEnd > valueStart) {
+                        String value = json.substring(valueStart + 1, valueEnd);
+                        value.trim();
+                        if (value.length() > 0 && value != "null") {
+                            strncpy(dest, value.c_str(), maxLen - 1);
+                            dest[maxLen - 1] = '\0';
+                        }
                     }
                 }
-            }
+            };
             
-            int authorStart = json.indexOf("\"author\":");
-            if (authorStart > 0) {
-                int valueStart = json.indexOf("\"", authorStart + 9);
-                int valueEnd = json.indexOf("\"", valueStart + 1);
-                if (valueStart > 0 && valueEnd > valueStart) {
-                    String author = json.substring(valueStart + 1, valueEnd);
-                    author.trim();
-                    if (author.length() > 0) {
-                        strncpy(book.author, author.c_str(), sizeof(book.author) - 1);
+            // Helper lambda to extract int value
+            auto extractInt = [&json](const char* key) -> int {
+                String searchKey = String("\"") + key + "\":";
+                int keyPos = json.indexOf(searchKey);
+                if (keyPos > 0) {
+                    int valueStart = keyPos + searchKey.length();
+                    // Skip whitespace
+                    while (valueStart < json.length() && (json[valueStart] == ' ' || json[valueStart] == '\t')) {
+                        valueStart++;
+                    }
+                    int valueEnd = valueStart;
+                    while (valueEnd < json.length() && (isdigit(json[valueEnd]) || json[valueEnd] == '-')) {
+                        valueEnd++;
+                    }
+                    if (valueEnd > valueStart) {
+                        return json.substring(valueStart, valueEnd).toInt();
                     }
                 }
-            }
+                return 0;
+            };
             
-            int chaptersStart = json.indexOf("\"totalChapters\":");
-            if (chaptersStart > 0) {
-                int valueStart = chaptersStart + 16;
-                book.totalChapters = atoi(json.c_str() + valueStart);
-            }
+            // Extract core metadata
+            extractString("title", book.title, sizeof(book.title));
+            extractString("author", book.author, sizeof(book.author));
             
-            book.hasCache = true;  // Mark that this book has pre-processed cache
-        }
-        
-        // Check for pre-processed cover
-        char coverPath[80];
-        snprintf(coverPath, sizeof(coverPath), "%s/cover_full.jpg", preprocessedDir);
-        if (SD.exists(coverPath)) {
-            strncpy(book.coverPath, coverPath, sizeof(book.coverPath) - 1);
-            book.hasCover = true;
-            Serial.printf("[SCAN] Found pre-processed cover: %s\n", coverPath);
-        } else {
-            book.hasCover = false;
-        }
-        
-        // Load saved progress
-        PageCache tempCache;
-        tempCache.init(fullPath);
-        int savedChapter, savedPage;
-        if (tempCache.loadProgress(savedChapter, savedPage)) {
-            book.lastChapter = savedChapter;
-            book.lastPage = savedPage;
-            if (book.totalChapters > 0) {
-                book.progress = (float)savedChapter / (float)book.totalChapters;
-            } else {
-                book.progress = (float)savedChapter / 10.0f;
+            // Extract extended metadata
+            book.totalChapters = extractInt("totalChapters");
+            book.totalWords = extractInt("totalWords");
+            book.estimatedPages = extractInt("estimatedPages");
+            book.pubYear = extractInt("pubYear");
+            
+            // Mark as cached
+            book.hasCache = true;
+            
+            Serial.printf("[SCAN] Loaded: %s by %s (%d ch, %d words, ~%d pg)\n", 
+                book.title, book.author, book.totalChapters, book.totalWords, book.estimatedPages);
+            
+            // Check for cover - prefer thumbnail for library view (faster loading)
+            String thumbPath = String(preprocessedDir) + "/cover_thumb.jpg";
+            String fullPath = String(preprocessedDir) + "/cover_full.jpg";
+            if (SD.exists(thumbPath)) {
+                strncpy(book.coverPath, thumbPath.c_str(), sizeof(book.coverPath) - 1);
+                book.hasCover = true;
+            } else if (SD.exists(fullPath)) {
+                strncpy(book.coverPath, fullPath.c_str(), sizeof(book.coverPath) - 1);
+                book.hasCover = true;
             }
-            if (book.progress > 1.0f) book.progress = 1.0f;
         }
-        tempCache.close();
-        
-        return;  // Done - used pre-processed data
-    }
-    
-    // Fallback: Generate cover cache path (old-style)
-    String cachePath = getCoverCachePath(fullPath);
-    
-    if (isValidCoverFile(cachePath.c_str())) {
-        strncpy(book.coverPath, cachePath.c_str(), sizeof(book.coverPath) - 1);
-        book.hasCover = true;
     } else {
-        strncpy(book.coverPath, cachePath.c_str(), sizeof(book.coverPath) - 1);
-        book.hasCover = false;
+        // No preprocessing - book needs to be uploaded via portal
+        Serial.printf("[SCAN] Book not preprocessed: %s\n", book.filename);
     }
     
     // Try to load saved progress
@@ -331,56 +507,6 @@ void LibraryApp::loadBookMetadata(BookEntry& book, const char* fullPath) {
         if (book.progress > 1.0f) book.progress = 1.0f;
     }
     tempCache.close();
-    
-    // Quick metadata extraction from EPUB (fallback - no pre-processed cache)
-    // Only try this if requirePreprocessed is disabled
-    if (book.bookType == BookType::EPUB_FILE && !settingsManager.reader.requirePreprocessed) {
-        Serial.println("[SCAN] No pre-processed cache, parsing EPUB metadata...");
-        ZipReader zip;
-        if (zip.open(fullPath)) {
-            String container = zip.readFileToString("META-INF/container.xml", 4096);
-            if (container.length() > 0) {
-                int fpStart = container.indexOf("full-path=\"");
-                if (fpStart > 0) {
-                    fpStart += 11;
-                    int fpEnd = container.indexOf("\"", fpStart);
-                    if (fpEnd > fpStart) {
-                        String opfPath = container.substring(fpStart, fpEnd);
-                        String opf = zip.readFileToString(opfPath, 16384);
-                        
-                        // Extract title
-                        int titleStart = opf.indexOf("<dc:title");
-                        if (titleStart > 0) {
-                            int tagEnd = opf.indexOf(">", titleStart);
-                            int closeTag = opf.indexOf("</dc:title>", tagEnd);
-                            if (tagEnd > 0 && closeTag > tagEnd) {
-                                String title = opf.substring(tagEnd + 1, closeTag);
-                                title.trim();
-                                if (title.length() > 0) {
-                                    strncpy(book.title, title.c_str(), sizeof(book.title) - 1);
-                                }
-                            }
-                        }
-                        
-                        // Extract author
-                        int authorStart = opf.indexOf("<dc:creator");
-                        if (authorStart > 0) {
-                            int tagEnd = opf.indexOf(">", authorStart);
-                            int closeTag = opf.indexOf("</dc:creator>", tagEnd);
-                            if (tagEnd > 0 && closeTag > tagEnd) {
-                                String author = opf.substring(tagEnd + 1, closeTag);
-                                author.trim();
-                                if (author.length() > 0) {
-                                    strncpy(book.author, author.c_str(), sizeof(book.author) - 1);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            zip.close();;
-        }
-    }
 }
 
 String LibraryApp::getCoverCachePath(const char* bookPath, bool forWidget) {
@@ -395,7 +521,7 @@ String LibraryApp::getCoverCachePath(const char* bookPath, bool forWidget) {
         uint32_t charCode = (uint8_t)*p;
         hash = ((hash << 5) - hash) + charCode;
     }
-    hash = hash & 0xFFFFFFFF;  // Ensure 32-bit
+    hash = hash & 0xFFFFFFFF;
     
     // Portal saves covers to /.sumi/books/{hash}/cover_thumb.jpg or cover_full.jpg
     char path[96];
@@ -404,41 +530,13 @@ String LibraryApp::getCoverCachePath(const char* bookPath, bool forWidget) {
     return String(path);
 }
 
-// Legacy overload for backward compatibility
+// Legacy overload
 String LibraryApp::getCoverCachePath(const char* bookPath) {
     return getCoverCachePath(bookPath, false);
 }
 
-void LibraryApp::cacheBookCover(const char* bookPath) {
-    // Cover extraction happens in extractAllCoversLightweight
-}
-
-void LibraryApp::extractCoverOnDemand(BookEntry& book, const char* fullPath) {
-    if (book.hasCover) return;
-    
-    String cachePath = getCoverCachePath(fullPath);
-    
-    ZipReader zip;
-    if (!zip.open(fullPath)) return;
-    
-    String coverInZip = findCoverInZip(zip);
-    if (coverInZip.length() == 0) { zip.close(); return; }
-    
-    File outFile = SD.open(cachePath, FILE_WRITE);
-    if (!outFile) { zip.close(); return; }
-    
-    bool success = zip.streamFileTo(coverInZip, outFile, 1024);
-    outFile.close();
-    zip.close();
-    
-    if (success) {
-        strncpy(book.coverPath, cachePath.c_str(), sizeof(book.coverPath) - 1);
-        book.hasCover = true;
-    }
-}
-
 // =============================================================================
-// Book Opening
+// Book Opening - All books must be preprocessed
 // =============================================================================
 void LibraryApp::openBook(int index) {
     Serial.printf("[LIBRARY] openBook(%d)\n", index);
@@ -453,7 +551,6 @@ void LibraryApp::openBook(int index) {
     
     // Suspend WiFi for memory
     suspendForReading();
-    ZipReader_preallocateBuffer();
     stats.load();
     
     BookEntry book;
@@ -465,34 +562,25 @@ void LibraryApp::openBook(int index) {
     
     snprintf(currentBookPath, sizeof(currentBookPath), "%s/%s", currentPath, book.filename);
     strncpy(currentBook, book.title, sizeof(currentBook) - 1);
+    currentBookHash = book.cacheHash;  // Use stored hash (computed from full filename before truncation)
     
-    // Note: Cover extraction skipped here - large covers (100KB+) don't fit in memory
-    // Widget and library views show title as fallback
+    // Build and store the preprocessed directory path - this is used for chapter loading
+    snprintf(bookCacheDir, sizeof(bookCacheDir), "/.sumi/books/%08x", book.cacheHash);
     
     Serial.printf("[LIBRARY] Book: %s\n", currentBook);
     Serial.printf("[LIBRARY] Path: %s\n", currentBookPath);
+    Serial.printf("[LIBRARY] Cache dir: %s (hash=%08x)\n", bookCacheDir, currentBookHash);
     
     isEpub = (book.bookType == BookType::EPUB_FOLDER || book.bookType == BookType::EPUB_FILE);
     
     if (isEpub) {
-        // Try to load from pre-processed cache first (FAST!)
-        if (!openPreprocessedMetadata(currentBookPath)) {
-            // Check if we should try fallback EPUB parsing
-            if (settingsManager.reader.requirePreprocessed) {
-                // Pre-processing required but not found - show friendly error
-                Serial.println("[LIBRARY] Pre-processing required but book not processed");
-                showErrorScreen("Process this book\nin the portal first");
-                state = ViewState::BROWSER;
-                return;
-            }
-            
-            // Fall back to EPUB parsing (SLOW, unreliable)
-            Serial.println("[LIBRARY] No pre-processed cache, parsing EPUB...");
-            if (!openEpubMetadata(currentBookPath)) {
-                showErrorScreen("Failed to open EPUB");
-                state = ViewState::BROWSER;
-                return;
-            }
+        // Load from pre-processed cache (required)
+        // Use stored cacheHash to avoid issues with truncated filenames
+        if (!openPreprocessedMetadata(book.cacheHash)) {
+            Serial.println("[LIBRARY] Book not preprocessed - upload via portal first");
+            showErrorScreen("Process this book\nin the portal first");
+            state = ViewState::BROWSER;
+            return;
         }
     } else {
         openTxtMetadata(currentBookPath);
@@ -532,7 +620,7 @@ void LibraryApp::openBook(int index) {
     pendingChapterToLoad = currentChapter;
     cacheValid = false;
     
-    // Always use synchronous loading (render task uses too much stack for miniz)
+    // Use synchronous loading for reliability
     renderTaskHandle = nullptr;
     renderMutex = nullptr;
     
@@ -550,125 +638,146 @@ void LibraryApp::openBook(int index) {
                 updateRequired = true;
                 break;
             }
-            Serial.printf("[LIBRARY] Sync: Chapter %d empty, trying next\n", chapToLoad);
-        } else {
-            Serial.printf("[LIBRARY] Sync: Chapter %d load FAILED\n", chapToLoad);
         }
         chapToLoad++;
     }
+    
     if (!cacheValid) {
-        Serial.println("[LIBRARY] Sync: No loadable chapters found!");
+        showErrorScreen("No readable content");
+        state = ViewState::BROWSER;
+        return;
     }
     
-    stats.startSession();
+    // Clamp page
+    if (currentPage >= totalPages) currentPage = totalPages - 1;
+    if (currentPage < 0) currentPage = 0;
+    
+    pendingChapterLoad = false;
     bookIsOpen = true;
     firstRenderAfterOpen = true;
     state = ViewState::READING;
-    pagesUntilFullRefresh = settings.pagesPerFullRefresh();
-    pagesUntilHalfRefresh = settings.pagesPerFullRefresh() / 3;  // Half refresh every ~5 pages
     
-    loadBookmarks();
-    saveLastBookInfo();
+    // Start preloading next page
+    preloadNextPage();
     
+    Serial.printf("[LIBRARY] Book open: ch=%d pg=%d/%d (heap=%d)\n",
+                  currentChapter, currentPage, totalPages, ESP.getFreeHeap());
     MEM_LOG("openBook_done");
 }
 
 void LibraryApp::openTxtMetadata(const char* path) {
     totalChapters = 1;
     currentChapter = 0;
-    strncpy(chapterTitle, currentBook, sizeof(chapterTitle) - 1);
-    chapterTitleCount = 0;
-    strncpy(chapterTitles[chapterTitleCount++].title, currentBook, sizeof(ChapterTitle::title) - 1);
+    chapterTitleCount = 1;
+    
+    const char* filename = path;
+    const char* lastSlash = strrchr(path, '/');
+    if (lastSlash) filename = lastSlash + 1;
+    
+    String title = String(filename);
+    title.replace(".txt", "");
+    title.replace("_", " ");
+    strncpy(chapterTitles[0].title, title.c_str(), sizeof(ChapterTitle::title) - 1);
+    strncpy(chapterTitle, chapterTitles[0].title, sizeof(chapterTitle) - 1);
 }
 
-bool LibraryApp::openPreprocessedMetadata(const char* path) {
-    // Calculate hash from filename (same as portal's simpleHash)
-    const char* filename = strrchr(path, '/');
-    if (filename) filename++; else filename = path;
+bool LibraryApp::openPreprocessedMetadata(uint32_t hash) {
+    // Use pre-computed hash from BookEntry to find cache directory
+    char cacheDir[64];
+    snprintf(cacheDir, sizeof(cacheDir), "/.sumi/books/%08x", hash);
     
-    uint32_t hash = 0;
-    for (const char* p = filename; *p; p++) {
-        hash = ((hash << 5) - hash) + (uint8_t)*p;
-    }
+    // Store for later use (image loading)
+    strncpy(bookCacheDir, cacheDir, sizeof(bookCacheDir) - 1);
+    bookCacheDir[sizeof(bookCacheDir) - 1] = '\0';
     
-    Serial.printf("[LIBRARY] openPreprocessedMetadata: filename='%s' hash=%08x\n", filename, hash);
-    
-    // Check for pre-processed meta.json
-    char metaPath[64];
-    snprintf(metaPath, sizeof(metaPath), "/.sumi/books/%08x/meta.json", hash);
+    char metaPath[80];
+    snprintf(metaPath, sizeof(metaPath), "%s/meta.json", cacheDir);
     
     if (!SD.exists(metaPath)) {
-        Serial.printf("[LIBRARY] No pre-processed cache at %s\n", metaPath);
+        Serial.printf("[LIBRARY] No pre-processed cache: %s\n", metaPath);
         return false;
     }
     
-    Serial.printf("[LIBRARY] Found pre-processed cache: %s\n", metaPath);
+    Serial.printf("[LIBRARY] Loading pre-processed: %s\n", cacheDir);
     
-    File metaFile = SD.open(metaPath);
-    if (!metaFile) return false;
+    // Load meta.json
+    File metaFile = SD.open(metaPath, FILE_READ);
+    if (!metaFile) {
+        Serial.println("[LIBRARY] Failed to open meta.json");
+        return false;
+    }
     
-    // Parse JSON
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, metaFile);
+    String json = metaFile.readString();
     metaFile.close();
     
-    if (err) {
-        Serial.printf("[LIBRARY] Failed to parse meta.json: %s\n", err.c_str());
+    Serial.printf("[LIBRARY] meta.json length: %d\n", json.length());
+    
+    // Parse chapter count - portal outputs "totalChapters"
+    int chaptersStart = json.indexOf("\"totalChapters\":");
+    Serial.printf("[LIBRARY] totalChapters pos: %d\n", chaptersStart);
+    if (chaptersStart < 0) {
+        // Fallback for legacy format
+        chaptersStart = json.indexOf("\"chapters\":");
+        Serial.printf("[LIBRARY] chapters pos: %d\n", chaptersStart);
+    }
+    if (chaptersStart < 0) {
+        Serial.println("[LIBRARY] No chapters key in meta.json");
+        Serial.printf("[LIBRARY] JSON preview: %.200s\n", json.c_str());
         return false;
     }
     
-    totalChapters = doc["totalChapters"] | 1;
-    Serial.printf("[LIBRARY] Loaded from pre-processed cache: %d chapters\n", totalChapters);
+    int chaptersValue = json.indexOf(":", chaptersStart);
+    int chaptersEnd = json.indexOf(",", chaptersValue);
+    if (chaptersEnd < 0) chaptersEnd = json.indexOf("}", chaptersValue);
     
-    // Build chapter titles
-    chapterTitleCount = 0;
-    JsonArray chapters = doc["chapters"].as<JsonArray>();
-    if (chapters) {
-        for (JsonObject ch : chapters) {
-            if (chapterTitleCount >= MAX_CHAPTER_TITLES) break;
-            // Use index+1 as chapter title (we don't store titles in meta.json)
-            snprintf(chapterTitles[chapterTitleCount].title, sizeof(ChapterTitle::title), 
-                     "Chapter %d", chapterTitleCount + 1);
-            chapterTitleCount++;
-        }
-    } else {
-        // Fallback: just use the totalChapters count
-        for (int i = 0; i < totalChapters && chapterTitleCount < MAX_CHAPTER_TITLES; i++) {
-            snprintf(chapterTitles[chapterTitleCount].title, sizeof(ChapterTitle::title), 
-                     "Chapter %d", i + 1);
-            chapterTitleCount++;
-        }
-    }
+    String chaptersStr = json.substring(chaptersValue + 1, chaptersEnd);
+    chaptersStr.trim();
+    Serial.printf("[LIBRARY] Parsed chapters string: '%s'\n", chaptersStr.c_str());
+    totalChapters = chaptersStr.toInt();
     
-    if (currentChapter < chapterTitleCount) {
-        strncpy(chapterTitle, chapterTitles[currentChapter].title, sizeof(chapterTitle) - 1);
-    }
-    
-    return true;
-}
-
-bool LibraryApp::openEpubMetadata(const char* path) {
-    if (!epub.open(path)) {
-        Serial.printf("[LIBRARY] EPUB open failed: %s\n", epub.getError().c_str());
+    if (totalChapters <= 0 || totalChapters > 500) {
+        Serial.printf("[LIBRARY] Invalid chapter count: %d\n", totalChapters);
         return false;
     }
     
-    totalChapters = epub.getChapterCount();
-    if (totalChapters == 0) totalChapters = 1;
+    Serial.printf("[LIBRARY] Pre-processed book: %d chapters\n", totalChapters);
     
-    // Build chapter title list from TOC or spine
+    // Load chapter titles from toc.json
+    char tocPath[80];
+    snprintf(tocPath, sizeof(tocPath), "%s/toc.json", cacheDir);
+    
     chapterTitleCount = 0;
-    int tocCount = epub.getTocCount();
+    if (SD.exists(tocPath)) {
+        File tocFile = SD.open(tocPath, FILE_READ);
+        if (tocFile) {
+            String tocJson = tocFile.readString();
+            tocFile.close();
+            
+            // Parse TOC array - format: [{"title":"...","chapter":0},...]
+            int pos = 0;
+            while (chapterTitleCount < MAX_CHAPTER_TITLES && chapterTitleCount < totalChapters) {
+                int titlePos = tocJson.indexOf("\"title\":", pos);
+                if (titlePos < 0) break;
+                
+                int valueStart = tocJson.indexOf("\"", titlePos + 8);
+                int valueEnd = tocJson.indexOf("\"", valueStart + 1);
+                if (valueStart < 0 || valueEnd < 0) break;
+                
+                String title = tocJson.substring(valueStart + 1, valueEnd);
+                // Unescape basic JSON escapes
+                title.replace("\\\"", "\"");
+                title.replace("\\n", " ");
+                
+                strncpy(chapterTitles[chapterTitleCount++].title, title.c_str(), sizeof(ChapterTitle::title) - 1);
+                pos = valueEnd + 1;
+            }
+        }
+    }
     
-    if (tocCount > 0) {
-        for (int i = 0; i < tocCount && chapterTitleCount < MAX_CHAPTER_TITLES; i++) {
-            const TocEntry& toc = epub.getTocEntry(i);
-            strncpy(chapterTitles[chapterTitleCount++].title, toc.title, sizeof(ChapterTitle::title) - 1);
-        }
-    } else {
-        for (int i = 0; i < totalChapters && chapterTitleCount < MAX_CHAPTER_TITLES; i++) {
-            snprintf(chapterTitles[chapterTitleCount++].title, sizeof(ChapterTitle::title), "Chapter %d", i + 1);
-        }
+    // Fill remaining with generic titles
+    for (int i = chapterTitleCount; i < totalChapters && i < MAX_CHAPTER_TITLES; i++) {
+        snprintf(chapterTitles[i].title, sizeof(ChapterTitle::title), "Chapter %d", i + 1);
+        chapterTitleCount++;
     }
     
     if (currentChapter < chapterTitleCount) {
@@ -696,8 +805,11 @@ void LibraryApp::closeBook() {
         renderMutex = nullptr;
     }
     
-    epub.close();
     pageCache->close();
+    
+    // Clear preloaded page
+    _preloadedChapter = -1;
+    _preloadedPageNum = -1;
     
     bookIsOpen = false;
     cacheValid = false;
@@ -705,6 +817,132 @@ void LibraryApp::closeBook() {
     totalPages = 0;
     
     MEM_LOG("closeBook_done");
+}
+
+// =============================================================================
+// Page Preloading - Read next/prev page in background for instant turns
+// =============================================================================
+void LibraryApp::preloadNextPage() {
+    if (!pageCache || !cacheValid) return;
+    
+    int nextPage = currentPage + 1;
+    int nextChapter = currentChapter;
+    
+    // Wrap to next chapter if needed
+    if (nextPage >= totalPages && nextChapter + 1 < totalChapters) {
+        nextPage = 0;
+        nextChapter++;
+    }
+    
+    // Don't preload if we're at the end
+    if (nextChapter >= totalChapters || (nextChapter == currentChapter && nextPage >= totalPages)) {
+        _preloadedChapter = -1;
+        _preloadedPageNum = -1;
+        return;
+    }
+    
+    // Check if already preloaded
+    if (_preloadedChapter == nextChapter && _preloadedPageNum == nextPage) {
+        return;
+    }
+    
+    // Load the page
+    if (pageCache->loadPage(nextChapter, nextPage, _preloadedPageData)) {
+        _preloadedChapter = nextChapter;
+        _preloadedPageNum = nextPage;
+        Serial.printf("[PRELOAD] Loaded ch%d pg%d\n", nextChapter, nextPage);
+    }
+}
+
+void LibraryApp::preloadPrevPage() {
+    if (!pageCache || !cacheValid) return;
+    
+    int prevPage = currentPage - 1;
+    int prevChapter = currentChapter;
+    
+    // Wrap to previous chapter if needed
+    if (prevPage < 0 && prevChapter > 0) {
+        prevChapter--;
+        // Get page count for previous chapter
+        int prevChapterPages = pageCache->getPageCount(prevChapter);
+        prevPage = prevChapterPages > 0 ? prevChapterPages - 1 : 0;
+    }
+    
+    // Don't preload if we're at the beginning
+    if (prevChapter < 0 || (prevChapter == currentChapter && prevPage < 0)) {
+        _preloadedChapter = -1;
+        _preloadedPageNum = -1;
+        return;
+    }
+    
+    // Check if already preloaded
+    if (_preloadedChapter == prevChapter && _preloadedPageNum == prevPage) {
+        return;
+    }
+    
+    // Load the page
+    if (pageCache->loadPage(prevChapter, prevPage, _preloadedPageData)) {
+        _preloadedChapter = prevChapter;
+        _preloadedPageNum = prevPage;
+        Serial.printf("[PRELOAD] Loaded ch%d pg%d\n", prevChapter, prevPage);
+    }
+}
+
+bool LibraryApp::usePreloadedPage(int chapter, int page, CachedPage& outPage) {
+    if (_preloadedChapter == chapter && _preloadedPageNum == page) {
+        // Copy preloaded data
+        memcpy(&outPage, &_preloadedPageData, sizeof(CachedPage));
+        Serial.printf("[PRELOAD] Using cached ch%d pg%d\n", chapter, page);
+        return true;
+    }
+    return false;
+}
+
+// =============================================================================
+// Quick Update from Portal (without full directory scan)
+// =============================================================================
+void LibraryApp::updateBooksFromPortal() {
+    Serial.println("[LIBRARY] Quick update from portal cache...");
+    
+    // Just update covers and metadata from portal without rescanning
+    for (int i = 0; i < bookCount; i++) {
+        BookEntry book;
+        if (!getBook(i, book)) continue;
+        if (book.bookType != BookType::EPUB_FILE) continue;
+        
+        char fullPath[192];
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", currentPath, book.filename);
+        
+        // Check for portal cover
+        String cachePath = getCoverCachePath(fullPath, false);
+        if (isValidCoverFile(cachePath.c_str())) {
+            if (!book.hasCover || strcmp(book.coverPath, cachePath.c_str()) != 0) {
+                strncpy(book.coverPath, cachePath.c_str(), sizeof(book.coverPath) - 1);
+                book.hasCover = true;
+                updateBook(i, book);
+            }
+        }
+        
+        // Check for updated metadata from portal
+        const char* filename = book.filename;
+        uint32_t hash = 0;
+        for (const char* p = filename; *p; p++) {
+            hash = ((hash << 5) - hash) + (uint8_t)*p;
+        }
+        
+        char metaPath[80];
+        snprintf(metaPath, sizeof(metaPath), "/.sumi/books/%08x/meta.json", hash);
+        
+        if (SD.exists(metaPath) && book.totalChapters == 0) {
+            // Portal has processed this book - reload metadata
+            loadBookMetadata(book, fullPath);
+            updateBook(i, book);
+        }
+        
+        yield();
+    }
+    
+    Serial.println("[LIBRARY] Quick update complete");
 }
 
 #endif // FEATURE_READER

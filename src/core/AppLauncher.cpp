@@ -17,8 +17,8 @@
 #include <Fonts/FreeSans9pt7b.h>
 
 // External state from main.cpp
-enum Screen { SCREEN_HOME, SCREEN_SETTINGS };
-extern Screen currentScreen;
+enum AppScreen { APP_SCREEN_HOME, APP_SCREEN_SETTINGS };
+extern AppScreen currentAppScreen;
 
 // Plugin headers only - no global instances!
 #if FEATURE_READER
@@ -65,7 +65,7 @@ void openAppByItemIndex(uint8_t itemIndex) {
     
     // Settings screen (part of core, not allocated)
     if (itemIndex == HOME_ITEM_SETTINGS) {
-        currentScreen = SCREEN_SETTINGS;
+        currentAppScreen = APP_SCREEN_SETTINGS;
         settingsInit();
         showSettingsScreen();
         return;
@@ -110,7 +110,7 @@ void openAppByItemIndex(uint8_t itemIndex) {
     // Flashcards - allocated on demand
 #if FEATURE_FLASHCARDS
     if (itemIndex == HOME_ITEM_FLASHCARDS) {
-        runPluginAllocSimple<FlashcardsApp>("Flashcards");
+        runPluginAllocSelfRefresh<FlashcardsApp>("Flashcards");
         return;
     }
 #endif
@@ -139,7 +139,7 @@ void openAppByItemIndex(uint8_t itemIndex) {
             return;
             
         case HOME_ITEM_SUDOKU:
-            runPluginAllocSimple<SudokuGame>("Sudoku");
+            runPluginAllocSelfRefresh<SudokuGame>("Sudoku");
             return;
             
         case HOME_ITEM_MINESWEEPER:
@@ -176,7 +176,7 @@ void openAppByItemIndex(uint8_t itemIndex) {
 #endif
     
     // Fallback - show placeholder for unimplemented apps
-    currentScreen = SCREEN_HOME;
+    currentAppScreen = APP_SCREEN_HOME;
     showAppPlaceholder(appName);
     
     while (true) {

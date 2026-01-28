@@ -109,7 +109,6 @@ void SettingsManager::loadDefaults() {
     reader.showPages = true;
     reader.pageTurn = 0;
     reader.tapZones = 0;
-    reader.requirePreprocessed = true;  // Only open pre-processed books by default
     
     // Flashcard defaults
     flashcards.newPerDay = 20;
@@ -255,7 +254,6 @@ void SettingsManager::save() {
     _prefs.putBool("r_pgs", reader.showPages);
     _prefs.putUChar("r_pt", reader.pageTurn);
     _prefs.putUChar("r_tap", reader.tapZones);
-    _prefs.putBool("r_reqpp", reader.requirePreprocessed);
     
     // Flashcards
     _prefs.putUChar("fc_new", flashcards.newPerDay);
@@ -435,7 +433,6 @@ void SettingsManager::load() {
     reader.showPages = _prefs.getBool("r_pgs", true);
     reader.pageTurn = _prefs.getUChar("r_pt", 0);
     reader.tapZones = _prefs.getUChar("r_tap", 0);
-    reader.requirePreprocessed = _prefs.getBool("r_reqpp", true);
     
     // Flashcards
     flashcards.newPerDay = _prefs.getUChar("fc_new", 20);
@@ -778,7 +775,6 @@ void SettingsManager::toJSON(JsonObject doc) {
     rd["showPages"] = reader.showPages;
     rd["pageTurn"] = reader.pageTurn;
     rd["tapZones"] = reader.tapZones;
-    rd["requirePreprocessed"] = reader.requirePreprocessed;
     
     // Flashcards
     JsonObject fc = doc["flashcards"].to<JsonObject>();
@@ -968,7 +964,6 @@ bool SettingsManager::fromJSON(JsonObjectConst doc) {
         if (r["showPages"].is<bool>()) reader.showPages = r["showPages"];
         if (r["pageTurn"].is<int>()) reader.pageTurn = clampValue((int)r["pageTurn"], 0, 1);
         if (r["tapZones"].is<int>()) reader.tapZones = clampValue((int)r["tapZones"], 0, 2);
-        if (r["requirePreprocessed"].is<bool>()) reader.requirePreprocessed = r["requirePreprocessed"];
         
         // Sync portal reader settings to Library's internal settings file
         syncReaderSettings();

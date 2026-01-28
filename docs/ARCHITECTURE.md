@@ -46,9 +46,7 @@ Close Chess:     Freed, back to ~5KB
 
 **Feature flags:** `SUMI_LOW_MEMORY=1` reduces buffer sizes everywhere. Disabling games saves another ~100KB.
 
-**Portal preprocessing:** EPUBs are pre-processed in the browser by default, converting HTML to rich text files on the SD card. This eliminates on-device parsing entirely for much faster loading.
-
-**Streaming parsers (legacy):** On-device EPUB parsing (when enabled) uses Expat to parse HTML in chunks, not all at once.
+**Portal preprocessing:** EPUBs are pre-processed in the browser, converting HTML to rich text files on the SD card. This eliminates on-device parsing entirely for much faster loading and better reliability.
 
 **Portal cleanup:** After setup, the web server resources get freed to reclaim 30-40KB.
 

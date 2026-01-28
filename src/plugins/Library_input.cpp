@@ -1,7 +1,7 @@
 /**
  * @file Library_input.cpp
  * @brief Library input handling
- * @version 1.4.2
+ * @version 1.5.0
  */
 
 #include "plugins/Library.h"
@@ -33,11 +33,17 @@ bool LibraryApp::handleKeyboardKey(uint8_t keyCode, bool pressed) {
 
 bool LibraryApp::handleInput(Button btn) {
     if (btn == BTN_NONE) return false;
-    return handleButtonPress(btn);
+    bool handled = handleButtonPress(btn);
+    if (handled) {
+        _pendingRedraw = true;
+    }
+    return handled;
 }
 
 bool LibraryApp::handleButtonPress(Button btn) {
     switch (state) {
+        case ViewState::MAIN_MENU:
+            return handleMainMenuInput(btn);
         case ViewState::BROWSER:
             return useFlipBrowser ? handleFlipBrowserInput(btn) : handleListBrowserInput(btn);
         case ViewState::BROWSER_LIST:
@@ -61,6 +67,68 @@ bool LibraryApp::handleBrowserInput(Button btn) {
     return useFlipBrowser ? handleFlipBrowserInput(btn) : handleListBrowserInput(btn);
 }
 
+bool LibraryApp::handleMainMenuInput(Button btn) {
+    LastBookInfo lastBook;
+    bool hasLastBook = getLastBookInfo(lastBook);
+    int maxItems = hasLastBook ? 4 : 3;
+    
+    switch (btn) {
+        case BTN_UP:
+            if (mainMenuCursor > 0) mainMenuCursor--;  // Partial refresh
+            return true;
+            
+        case BTN_DOWN:
+            if (mainMenuCursor < maxItems - 1) mainMenuCursor++;  // Partial refresh
+            return true;
+            
+        case BTN_CONFIRM:
+            if (hasLastBook) {
+                switch (mainMenuCursor) {
+                    case 0: // Continue Reading
+                        resumeLastBook();
+                        needsFullRedraw = true;  // Screen change
+                        break;
+                    case 1: // Browse Library
+                        state = ViewState::BROWSER;
+                        needsFullRedraw = true;  // Screen change
+                        break;
+                    case 2: // Reading Statistics
+                        state = ViewState::READING_STATS;
+                        needsFullRedraw = true;  // Screen change
+                        break;
+                    case 3: // Reader Settings
+                        settingsCursor = 0;
+                        state = ViewState::SETTINGS_MENU;
+                        needsFullRedraw = true;  // Screen change
+                        break;
+                }
+            } else {
+                switch (mainMenuCursor) {
+                    case 0: // Browse Library
+                        state = ViewState::BROWSER;
+                        needsFullRedraw = true;  // Screen change
+                        break;
+                    case 1: // Reading Statistics
+                        state = ViewState::READING_STATS;
+                        needsFullRedraw = true;  // Screen change
+                        break;
+                    case 2: // Reader Settings
+                        settingsCursor = 0;
+                        state = ViewState::SETTINGS_MENU;
+                        needsFullRedraw = true;  // Screen change
+                        break;
+                }
+            }
+            return true;
+            
+        case BTN_BACK:
+            return false;  // Exit to home
+            
+        default:
+            return false;
+    }
+}
+
 bool LibraryApp::handleFlipBrowserInput(Button btn) {
     switch (btn) {
         case BTN_LEFT:
@@ -69,6 +137,7 @@ bool LibraryApp::handleFlipBrowserInput(Button btn) {
                 do { cursor--; } while (cursor > 0 && ({
                     BookEntry b; getBook(cursor, b); b.isRegularDir;
                 }));
+                _pendingRedraw = true;
             }
             return true;
             
@@ -77,6 +146,7 @@ bool LibraryApp::handleFlipBrowserInput(Button btn) {
                 do { cursor++; } while (cursor < bookCount - 1 && ({
                     BookEntry b; getBook(cursor, b); b.isRegularDir;
                 }));
+                _pendingRedraw = true;
             }
             return true;
             
@@ -87,9 +157,12 @@ bool LibraryApp::handleFlipBrowserInput(Button btn) {
                     // Enter directory
                     snprintf(currentPath, sizeof(currentPath), "%s/%s", currentPath, book.filename);
                     scanDirectory();
+                    needsFullRedraw = true;  // Directory change
                 } else {
                     openBook(cursor);
+                    needsFullRedraw = true;  // Screen change
                 }
+                _pendingRedraw = true;
             }
             return true;
         }
@@ -97,24 +170,34 @@ bool LibraryApp::handleFlipBrowserInput(Button btn) {
         case BTN_UP:
             // Switch to list view
             state = ViewState::BROWSER_LIST;
+            needsFullRedraw = true;  // Screen change
+            _pendingRedraw = true;
             return true;
             
         case BTN_DOWN:
             // Switch to list view
             state = ViewState::BROWSER_LIST;
+            needsFullRedraw = true;  // Screen change
+            _pendingRedraw = true;
             return true;
             
         case BTN_BACK:
-            // Go up directory, or exit if at root
+            // Go up directory, or back to main menu if at root
             if (strcmp(currentPath, "/books") != 0) {
                 char* lastSlash = strrchr(currentPath, '/');
                 if (lastSlash && lastSlash != currentPath) {
                     *lastSlash = '\0';
                     scanDirectory();
+                    needsFullRedraw = true;  // Directory change
+                    _pendingRedraw = true;
                 }
                 return true;  // Consumed - navigated up
             }
-            return false;  // Not consumed - at root, allow exit to home
+            state = ViewState::MAIN_MENU;
+            mainMenuCursor = 0;
+            needsFullRedraw = true;  // Screen change
+            _pendingRedraw = true;
+            return true;
             
         default:
             return false;
@@ -127,14 +210,14 @@ bool LibraryApp::handleListBrowserInput(Button btn) {
             if (cursor > 0) {
                 cursor--;
                 if (cursor < scrollOffset) scrollOffset = cursor;
-            }
+            }  // Partial refresh
             return true;
             
         case BTN_DOWN:
             if (cursor < bookCount - 1) {
                 cursor++;
                 if (cursor >= scrollOffset + itemsPerPage) scrollOffset = cursor - itemsPerPage + 1;
-            }
+            }  // Partial refresh
             return true;
             
         case BTN_CONFIRM: {
@@ -143,8 +226,10 @@ bool LibraryApp::handleListBrowserInput(Button btn) {
                 if (book.isDirectory) {
                     snprintf(currentPath, sizeof(currentPath), "%s/%s", currentPath, book.filename);
                     scanDirectory();
+                    needsFullRedraw = true;  // Directory change
                 } else {
                     openBook(cursor);
+                    needsFullRedraw = true;  // Screen change
                 }
             }
             return true;
@@ -152,10 +237,12 @@ bool LibraryApp::handleListBrowserInput(Button btn) {
         
         case BTN_LEFT:
             state = ViewState::BROWSER;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         case BTN_RIGHT:
             state = ViewState::BROWSER;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         case BTN_BACK:
@@ -164,10 +251,14 @@ bool LibraryApp::handleListBrowserInput(Button btn) {
                 if (lastSlash && lastSlash != currentPath) {
                     *lastSlash = '\0';
                     scanDirectory();
+                    needsFullRedraw = true;  // Directory change
                 }
                 return true;  // Consumed - navigated up
             }
-            return false;  // Not consumed - at root, allow exit to home
+            state = ViewState::MAIN_MENU;
+            mainMenuCursor = 0;
+            needsFullRedraw = true;  // Screen change
+            return true;
             
         default:
             return false;
@@ -184,6 +275,7 @@ bool LibraryApp::handleReadingInput(Button btn) {
                 pagesUntilFullRefresh--;
                 pagesUntilHalfRefresh--;
                 updateRequired = true;
+                preloadNextPage();  // Preload upcoming page
             } else if (currentChapter < totalChapters - 1) {
                 currentChapter++;
                 currentPage = 0;
@@ -200,6 +292,7 @@ bool LibraryApp::handleReadingInput(Button btn) {
                 pagesUntilFullRefresh--;
                 pagesUntilHalfRefresh--;
                 updateRequired = true;
+                preloadPrevPage();  // Preload previous page
             } else if (currentChapter > 0) {
                 currentChapter--;
                 currentPage = -1; // Will be set to last page of chapter
@@ -213,6 +306,7 @@ bool LibraryApp::handleReadingInput(Button btn) {
             // Settings menu
             settingsCursor = 0;
             state = ViewState::SETTINGS_MENU;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         case BTN_DOWN:
@@ -220,12 +314,14 @@ bool LibraryApp::handleReadingInput(Button btn) {
             chapterCursor = currentChapter;
             chapterScrollOffset = max(0, currentChapter - 3);
             state = ViewState::CHAPTER_SELECT;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         case BTN_CONFIRM:
             // Toggle settings menu
             settingsCursor = 0;
             state = ViewState::SETTINGS_MENU;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         case BTN_BACK:
@@ -233,6 +329,7 @@ bool LibraryApp::handleReadingInput(Button btn) {
             saveProgress();
             closeBook();
             state = ViewState::BROWSER;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         default:
@@ -249,7 +346,7 @@ bool LibraryApp::handleChapterSelectInput(Button btn) {
             if (chapterCursor > 0) {
                 chapterCursor--;
                 if (chapterCursor < chapterScrollOffset) chapterScrollOffset = chapterCursor;
-            }
+            }  // Partial refresh
             return true;
             
         case BTN_DOWN:
@@ -258,7 +355,7 @@ bool LibraryApp::handleChapterSelectInput(Button btn) {
                 if (chapterCursor >= chapterScrollOffset + maxVisible) {
                     chapterScrollOffset = chapterCursor - maxVisible + 1;
                 }
-            }
+            }  // Partial refresh
             return true;
             
         case BTN_CONFIRM:
@@ -270,10 +367,12 @@ bool LibraryApp::handleChapterSelectInput(Button btn) {
                 cacheValid = false;
             }
             state = ViewState::READING;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         case BTN_BACK:
             state = ViewState::READING;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         default:
@@ -286,21 +385,17 @@ bool LibraryApp::handleSettingsInput(Button btn) {
     
     switch (btn) {
         case BTN_UP:
-            if (settingsCursor > 0) settingsCursor--;
+            if (settingsCursor > 0) settingsCursor--;  // Partial refresh
             return true;
             
         case BTN_DOWN:
-            if (settingsCursor < itemCount - 1) settingsCursor++;
+            if (settingsCursor < itemCount - 1) settingsCursor++;  // Partial refresh
             return true;
             
         case BTN_CONFIRM: {
             LibReaderSettings& settings = readerSettings.get();
             
             switch ((SettingsItem)settingsCursor) {
-                case SettingsItem::ORIENTATION:
-                    // Toggle orientation - TODO
-                    break;
-                    
                 case SettingsItem::FONT_SIZE:
                     // Cycle through 4 font sizes: Small, Medium, Large, Extra Large
                     settings.fontSize = (FontSize)(((int)settings.fontSize + 1) % 4);
@@ -309,6 +404,7 @@ bool LibraryApp::handleSettingsInput(Button btn) {
                     cacheValid = false;
                     pendingChapterLoad = true;
                     pendingChapterToLoad = currentChapter;
+                    needsFullRedraw = true;  // Redraw menu to show new value
                     break;
                     
                 case SettingsItem::MARGINS:
@@ -323,6 +419,7 @@ bool LibraryApp::handleSettingsInput(Button btn) {
                     cacheValid = false;
                     pendingChapterLoad = true;
                     pendingChapterToLoad = currentChapter;
+                    needsFullRedraw = true;  // Redraw menu to show new value
                     break;
                     
                 case SettingsItem::LINE_SPACING:
@@ -332,6 +429,7 @@ bool LibraryApp::handleSettingsInput(Button btn) {
                     cacheValid = false;
                     pendingChapterLoad = true;
                     pendingChapterToLoad = currentChapter;
+                    needsFullRedraw = true;  // Redraw menu to show new value
                     break;
                     
                 case SettingsItem::JUSTIFY:
@@ -346,6 +444,7 @@ bool LibraryApp::handleSettingsInput(Button btn) {
                     cacheValid = false;
                     pendingChapterLoad = true;
                     pendingChapterToLoad = currentChapter;
+                    needsFullRedraw = true;  // Redraw menu to show new value
                     break;
                     
                 case SettingsItem::REFRESH_FREQ:
@@ -356,17 +455,20 @@ bool LibraryApp::handleSettingsInput(Button btn) {
                     else if (settings.refreshFrequency <= 20) settings.refreshFrequency = 30;
                     else settings.refreshFrequency = 5;
                     pagesUntilFullRefresh = settings.refreshFrequency;
+                    needsFullRedraw = true;  // Redraw menu to show new value
                     break;
                     
                 case SettingsItem::CHAPTERS:
                     chapterCursor = currentChapter;
                     state = ViewState::CHAPTER_SELECT;
+                    needsFullRedraw = true;  // Screen change
                     return true;
                     
                 case SettingsItem::BOOKMARKS:
                     bookmarkCursor = 0;
                     bookmarkScrollOffset = 0;
                     state = ViewState::BOOKMARK_SELECT;
+                    needsFullRedraw = true;  // Screen change
                     return true;
                     
                 case SettingsItem::ADD_BOOKMARK:
@@ -376,6 +478,7 @@ bool LibraryApp::handleSettingsInput(Button btn) {
                     
                 case SettingsItem::STATS:
                     state = ViewState::READING_STATS;
+                    needsFullRedraw = true;  // Screen change
                     return true;
                     
                 case SettingsItem::CLEAR_CACHE:
@@ -388,6 +491,7 @@ bool LibraryApp::handleSettingsInput(Button btn) {
                 case SettingsItem::BACK:
                     readerSettings.save();
                     state = ViewState::READING;
+                    needsFullRedraw = true;  // Screen change
                     return true;
                     
                 default:
@@ -400,6 +504,7 @@ bool LibraryApp::handleSettingsInput(Button btn) {
         case BTN_BACK:
             readerSettings.saveIfDirty();
             state = ViewState::READING;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         default:
@@ -415,7 +520,7 @@ bool LibraryApp::handleBookmarkSelectInput(Button btn) {
             if (bookmarkCursor > 0) {
                 bookmarkCursor--;
                 if (bookmarkCursor < bookmarkScrollOffset) bookmarkScrollOffset = bookmarkCursor;
-            }
+            }  // Partial refresh
             return true;
             
         case BTN_DOWN:
@@ -424,7 +529,7 @@ bool LibraryApp::handleBookmarkSelectInput(Button btn) {
                 if (bookmarkCursor >= bookmarkScrollOffset + maxVisible) {
                     bookmarkScrollOffset = bookmarkCursor - maxVisible + 1;
                 }
-            }
+            }  // Partial refresh
             return true;
             
         case BTN_CONFIRM:
@@ -438,6 +543,7 @@ bool LibraryApp::handleBookmarkSelectInput(Button btn) {
                 }
                 currentPage = bm.page;
                 state = ViewState::READING;
+                needsFullRedraw = true;  // Screen change
             }
             return true;
             
@@ -449,11 +555,12 @@ bool LibraryApp::handleBookmarkSelectInput(Button btn) {
                 if (bookmarkCursor >= bookmarks.count && bookmarks.count > 0) {
                     bookmarkCursor = bookmarks.count - 1;
                 }
-            }
+            }  // Partial refresh for deletion
             return true;
             
         case BTN_BACK:
             state = ViewState::SETTINGS_MENU;
+            needsFullRedraw = true;  // Screen change
             return true;
             
         default:
@@ -464,6 +571,7 @@ bool LibraryApp::handleBookmarkSelectInput(Button btn) {
 bool LibraryApp::handleReadingStatsInput(Button btn) {
     if (btn == BTN_BACK || btn == BTN_CONFIRM) {
         state = ViewState::SETTINGS_MENU;
+        needsFullRedraw = true;  // Screen change
         return true;
     }
     return false;
@@ -540,14 +648,10 @@ void LibraryApp::saveLastBookInfo() {
     info.magic = 0x4C415354;  // "LAST"
     strncpy(info.title, currentBook, sizeof(info.title) - 1);
     
-    // Get author from epub if available
-    if (isEpub && epub.isOpen()) {
-        strncpy(info.author, epub.getAuthor().c_str(), sizeof(info.author) - 1);
-    }
-    
-    // Get cover path
+    // Get author and cover path from book entry
     BookEntry book;
     if (getBook(cursor, book)) {
+        strncpy(info.author, book.author, sizeof(info.author) - 1);
         strncpy(info.coverPath, book.coverPath, sizeof(info.coverPath) - 1);
     }
     
@@ -589,10 +693,23 @@ bool LibraryApp::resumeLastBook() {
     
     showLoadingScreen("Resuming...");
     suspendForReading();
-    ZipReader_preallocateBuffer();
     
     if (isEpub) {
-        if (!openEpubMetadata(currentBookPath)) return false;
+        // Compute hash from filename only (not full path)
+        const char* filename = strrchr(currentBookPath, '/');
+        filename = filename ? filename + 1 : currentBookPath;
+        
+        uint32_t hash = 0;
+        for (const char* p = filename; *p; p++) {
+            hash = ((hash << 5) - hash) + (uint8_t)*p;
+        }
+        
+        // Use preprocessed metadata only
+        if (!openPreprocessedMetadata(hash)) {
+            showErrorScreen("Process this book\nin the portal first");
+            state = ViewState::BROWSER;
+            return false;
+        }
     } else {
         openTxtMetadata(currentBookPath);
     }
@@ -604,13 +721,18 @@ bool LibraryApp::resumeLastBook() {
     currentChapter = info.chapter;
     currentPage = info.page;
     
+    // Use synchronous loading (no render task)
     pendingChapterLoad = true;
     pendingChapterToLoad = currentChapter;
     cacheValid = false;
+    renderTaskHandle = nullptr;
+    renderMutex = nullptr;
     
-    if (!renderTaskHandle) {
-        renderMutex = xSemaphoreCreateMutex();
-        xTaskCreate(renderTaskTrampoline, "ReaderRender", 24576, this, 1, &renderTaskHandle);
+    // Load chapter synchronously
+    if (loadChapterSync(currentChapter)) {
+        cacheValid = true;
+        if (currentPage >= totalPages) currentPage = totalPages - 1;
+        if (currentPage < 0) currentPage = 0;
     }
     
     stats.load();
@@ -620,6 +742,7 @@ bool LibraryApp::resumeLastBook() {
     state = ViewState::READING;
     
     loadBookmarks();
+    preloadNextPage();
     
     return true;
 }

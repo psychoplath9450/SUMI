@@ -572,13 +572,18 @@ void runPluginAllocDirect(const char* title) {
     plugin->draw();
     
     Button lastBtn = BTN_NONE;
+    unsigned long lastBtnTime = 0;
+    const unsigned long debounceMs = 150;  // Debounce time
     
     while (true) {
         Button btn = readButton();
+        unsigned long now = millis();
         
-        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
+        // Only process button if it's new AND enough time has passed
+        if (btn != BTN_NONE && lastBtn == BTN_NONE && (now - lastBtnTime >= debounceMs)) {
             Serial.printf("[PLUGIN] Button: %d\n", btn);
             powerManager.resetActivityTimer();
+            lastBtnTime = now;
             
             if (btn == BTN_POWER) {
                 delete plugin;
@@ -595,8 +600,11 @@ void runPluginAllocDirect(const char* title) {
                 plugin->handleInput(btn);
             }
             
-            // Plugin handles its own refresh
-            plugin->draw();
+            // Plugin handles its own refresh in handleInput or draw
+            // Only call draw if plugin indicates it needs redraw
+            if (plugin->needsRedraw()) {
+                plugin->draw();
+            }
         }
         
         lastBtn = btn;

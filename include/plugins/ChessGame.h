@@ -3,18 +3,21 @@
 
 /**
  * @file ChessGame.h
- * @brief Full-featured Chess for Sumi e-reader with bitmap pieces
- * @version 1.3.0
+ * @brief Full-featured Chess for Sumi e-reader
+ * @version 2.0.0
  *
  * Features:
- * - 16x16 bitmap piece graphics
- * - Board coordinates (a-h, 1-8)
- * - Partial refresh (no black flash on moves)
- * - Valid move indicators (dots for moves, rings for captures)
- * - Minimax AI with alpha-beta pruning (depth 3)
- * - Full chess rules: castling, en passant, promotion
- * - Check/checkmate/stalemate detection
- * - Save/Resume game functionality
+ * - Main menu with New Game, Load Game, Settings
+ * - Play as Black (default) or White
+ * - 3 difficulty levels: Beginner, Intermediate, Advanced
+ * - Captured pieces display
+ * - Move history in algebraic notation
+ * - Undo move (toggleable in settings)
+ * - Piece animation (sliding)
+ * - Board styles: Classic, High Contrast
+ * - Game history with win/loss/draw stats
+ * - In-game menu
+ * - Save/Resume functionality
  */
 
 #include "config.h"
@@ -28,128 +31,48 @@
 extern GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display;
 
 // =============================================================================
-// 16x16 PIECE BITMAPS (1 = black pixel, 0 = transparent)
-// White pieces drawn with outline, Black pieces drawn filled
+// 16x16 PIECE BITMAPS
 // =============================================================================
-
-// PAWN - Simple rounded shape
 static const uint8_t BITMAP_PAWN[] PROGMEM = {
-    0x00, 0x00,  // ................
-    0x03, 0xC0,  // ......####......
-    0x07, 0xE0,  // .....######.....
-    0x07, 0xE0,  // .....######.....
-    0x07, 0xE0,  // .....######.....
-    0x03, 0xC0,  // ......####......
-    0x01, 0x80,  // .......##.......
-    0x03, 0xC0,  // ......####......
-    0x03, 0xC0,  // ......####......
-    0x07, 0xE0,  // .....######.....
-    0x07, 0xE0,  // .....######.....
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x1F, 0xF8,  // ...##########...
-    0x1F, 0xF8,  // ...##########...
-    0x00, 0x00   // ................
+    0x00, 0x00, 0x03, 0xC0, 0x07, 0xE0, 0x07, 0xE0,
+    0x07, 0xE0, 0x03, 0xC0, 0x01, 0x80, 0x03, 0xC0,
+    0x03, 0xC0, 0x07, 0xE0, 0x07, 0xE0, 0x0F, 0xF0,
+    0x0F, 0xF0, 0x1F, 0xF8, 0x1F, 0xF8, 0x00, 0x00
 };
 
-// ROOK - Castle tower with crenellations  
 static const uint8_t BITMAP_ROOK[] PROGMEM = {
-    0x00, 0x00,  // ................
-    0x6D, 0xB6,  // .##.##.##.##.##.
-    0x6D, 0xB6,  // .##.##.##.##.##.
-    0x7F, 0xFE,  // .##############.
-    0x3F, 0xFC,  // ..############..
-    0x1F, 0xF8,  // ...##########...
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x1F, 0xF8,  // ...##########...
-    0x3F, 0xFC,  // ..############..
-    0x7F, 0xFE,  // .##############.
-    0x7F, 0xFE,  // .##############.
-    0x00, 0x00   // ................
+    0x00, 0x00, 0x6D, 0xB6, 0x6D, 0xB6, 0x7F, 0xFE,
+    0x3F, 0xFC, 0x1F, 0xF8, 0x0F, 0xF0, 0x0F, 0xF0,
+    0x0F, 0xF0, 0x0F, 0xF0, 0x0F, 0xF0, 0x1F, 0xF8,
+    0x3F, 0xFC, 0x7F, 0xFE, 0x7F, 0xFE, 0x00, 0x00
 };
 
-// KNIGHT - Horse head profile
 static const uint8_t BITMAP_KNIGHT[] PROGMEM = {
-    0x00, 0x00,  // ................
-    0x01, 0xC0,  // .......###......
-    0x03, 0xE0,  // ......#####.....
-    0x07, 0xF0,  // .....#######....
-    0x0F, 0xF0,  // ....########....
-    0x1F, 0xE0,  // ...########.....
-    0x3F, 0xC0,  // ..########......
-    0x3F, 0x80,  // ..#######.......
-    0x1F, 0xC0,  // ...#######......
-    0x0F, 0xE0,  // ....#######.....
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x1F, 0xF8,  // ...##########...
-    0x3F, 0xFC,  // ..############..
-    0x3F, 0xFC,  // ..############..
-    0x00, 0x00   // ................
+    0x00, 0x00, 0x01, 0xC0, 0x03, 0xE0, 0x07, 0xF0,
+    0x0F, 0xF0, 0x1F, 0xE0, 0x3F, 0xC0, 0x3F, 0x80,
+    0x1F, 0xC0, 0x0F, 0xE0, 0x0F, 0xF0, 0x0F, 0xF0,
+    0x1F, 0xF8, 0x3F, 0xFC, 0x3F, 0xFC, 0x00, 0x00
 };
 
-// BISHOP - Mitre/hat shape with slit
 static const uint8_t BITMAP_BISHOP[] PROGMEM = {
-    0x00, 0x00,  // ................
-    0x01, 0x80,  // .......##.......
-    0x03, 0xC0,  // ......####......
-    0x07, 0xE0,  // .....######.....
-    0x07, 0xE0,  // .....######.....
-    0x0F, 0xF0,  // ....########....
-    0x0E, 0x70,  // ....###..###....
-    0x0F, 0xF0,  // ....########....
-    0x07, 0xE0,  // .....######.....
-    0x03, 0xC0,  // ......####......
-    0x03, 0xC0,  // ......####......
-    0x07, 0xE0,  // .....######.....
-    0x0F, 0xF0,  // ....########....
-    0x1F, 0xF8,  // ...##########...
-    0x1F, 0xF8,  // ...##########...
-    0x00, 0x00   // ................
+    0x00, 0x00, 0x01, 0x80, 0x03, 0xC0, 0x07, 0xE0,
+    0x07, 0xE0, 0x0F, 0xF0, 0x0E, 0x70, 0x0F, 0xF0,
+    0x07, 0xE0, 0x03, 0xC0, 0x03, 0xC0, 0x07, 0xE0,
+    0x0F, 0xF0, 0x1F, 0xF8, 0x1F, 0xF8, 0x00, 0x00
 };
 
-// QUEEN - Crown with multiple points
 static const uint8_t BITMAP_QUEEN[] PROGMEM = {
-    0x01, 0x80,  // .......##.......
-    0x01, 0x80,  // .......##.......
-    0x49, 0x92,  // .#..#..##..#..#.
-    0x6D, 0xB6,  // .##.##.##.##.##.
-    0x7F, 0xFE,  // .##############.
-    0x3F, 0xFC,  // ..############..
-    0x1F, 0xF8,  // ...##########...
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x1F, 0xF8,  // ...##########...
-    0x3F, 0xFC,  // ..############..
-    0x7F, 0xFE,  // .##############.
-    0x7F, 0xFE,  // .##############.
-    0x00, 0x00   // ................
+    0x01, 0x80, 0x01, 0x80, 0x49, 0x92, 0x6D, 0xB6,
+    0x7F, 0xFE, 0x3F, 0xFC, 0x1F, 0xF8, 0x0F, 0xF0,
+    0x0F, 0xF0, 0x0F, 0xF0, 0x0F, 0xF0, 0x1F, 0xF8,
+    0x3F, 0xFC, 0x7F, 0xFE, 0x7F, 0xFE, 0x00, 0x00
 };
 
-// KING - Crown with cross on top
 static const uint8_t BITMAP_KING[] PROGMEM = {
-    0x01, 0x80,  // .......##.......
-    0x01, 0x80,  // .......##.......
-    0x07, 0xE0,  // .....######.....
-    0x01, 0x80,  // .......##.......
-    0x01, 0x80,  // .......##.......
-    0x79, 0x9E,  // .####..##..####.
-    0x7F, 0xFE,  // .##############.
-    0x3F, 0xFC,  // ..############..
-    0x1F, 0xF8,  // ...##########...
-    0x0F, 0xF0,  // ....########....
-    0x0F, 0xF0,  // ....########....
-    0x1F, 0xF8,  // ...##########...
-    0x3F, 0xFC,  // ..############..
-    0x7F, 0xFE,  // .##############.
-    0x7F, 0xFE,  // .##############.
-    0x00, 0x00   // ................
+    0x01, 0x80, 0x01, 0x80, 0x07, 0xE0, 0x01, 0x80,
+    0x01, 0x80, 0x79, 0x9E, 0x7F, 0xFE, 0x3F, 0xFC,
+    0x1F, 0xF8, 0x0F, 0xF0, 0x0F, 0xF0, 0x1F, 0xF8,
+    0x3F, 0xFC, 0x7F, 0xFE, 0x7F, 0xFE, 0x00, 0x00
 };
 
 static const uint8_t* PIECE_BITMAPS[] = {
@@ -157,8 +80,19 @@ static const uint8_t* PIECE_BITMAPS[] = {
     BITMAP_BISHOP, BITMAP_QUEEN, BITMAP_KING
 };
 
+// Piece names for BMP loading
+static const char* PIECE_NAMES[] = {
+    nullptr, "pawn", "rook", "knight", "bishop", "queen", "king"
+};
+
+// Try to draw piece from BMP file on SD card
+// DISABLED - BMP files have visibility issues on e-ink, use embedded bitmaps instead
+inline bool drawPieceBMP(int x, int y, int8_t piece, int targetSize, bool onDark, bool flipVertical = false) {
+    return false;  // Always fall back to embedded bitmaps
+}
+
 // =============================================================================
-// Chess Pieces & Move
+// Constants & Enums
 // =============================================================================
 enum Piece : int8_t {
     EMPTY = 0,
@@ -168,32 +102,86 @@ enum Piece : int8_t {
 
 static const int PIECE_VALUES[] = { 0, 100, 500, 320, 330, 900, 20000 };
 
+enum Difficulty : uint8_t { DIFF_BEGINNER = 1, DIFF_INTERMEDIATE = 2, DIFF_ADVANCED = 3 };
+enum BoardStyle : uint8_t { STYLE_CLASSIC = 0, STYLE_HIGH_CONTRAST = 1 };
+
+enum GameScreen : uint8_t {
+    CHESS_SCREEN_MAIN_MENU,
+    CHESS_SCREEN_NEW_GAME,
+    CHESS_SCREEN_PLAYING,
+    CHESS_SCREEN_IN_GAME_MENU,
+    CHESS_SCREEN_SETTINGS,
+    CHESS_SCREEN_GAME_OVER
+};
+
 struct Move {
     int8_t fr, fc, tr, tc;
     int8_t captured;
     int8_t special;  // 0=normal, 1=OO, 2=OOO, 3=ep, 4=promo
-    Move() : fr(-1), fc(-1), tr(-1), tc(-1), captured(0), special(0) {}
-    Move(int a, int b, int c, int d) : fr(a), fc(b), tr(c), tc(d), captured(0), special(0) {}
+    int8_t movedPiece;
+    Move() : fr(-1), fc(-1), tr(-1), tc(-1), captured(0), special(0), movedPiece(0) {}
+    Move(int a, int b, int c, int d) : fr(a), fc(b), tr(c), tc(d), captured(0), special(0), movedPiece(0) {}
     bool valid() const { return fr >= 0; }
 };
 
+struct MoveRecord {
+    char notation[8];
+    Move move;
+};
+
 // =============================================================================
-// Saved Game Structure
+// Save Data Structures
 // =============================================================================
 #define CHESS_SAVE_PATH "/.sumi/chess_save.bin"
+#define CHESS_SETTINGS_PATH "/.sumi/chess_settings.bin"
+#define CHESS_STATS_PATH "/.sumi/chess_stats.bin"
 
 struct ChessSaveData {
-    uint32_t magic = 0x43485353;  // "CHSS"
-    uint8_t version = 1;
+    uint32_t magic = 0x43485332;  // "CHS2"
+    uint8_t version = 2;
     int8_t board[8][8];
     bool whiteTurn;
+    bool playerIsWhite;
     bool wCastleK, wCastleQ, bCastleK, bCastleQ;
     int8_t epCol;
     int16_t moveNum;
     Move lastMove;
+    uint8_t difficulty;
+    int8_t whiteCaptured[16];
+    int8_t blackCaptured[16];
+    uint8_t whiteCapturedCount;
+    uint8_t blackCapturedCount;
+    MoveRecord moveHistory[50];
+    uint8_t moveHistoryCount;
+    uint8_t reserved[32];
+    
+    bool isValid() const { return magic == 0x43485332 && version == 2; }
+};
+
+struct ChessSettings {
+    uint32_t magic = 0x43485345;  // "CHSE"
+    uint8_t difficulty = DIFF_INTERMEDIATE;
+    uint8_t boardStyle = STYLE_CLASSIC;
+    bool allowUndo = true;
+    bool showLegalMoves = true;
+    bool showCoordinates = true;
+    bool highlightLastMove = true;
+    bool animatePieces = false;  // Off by default - too slow on e-ink
+    bool playerDefaultBlack = true;
     uint8_t reserved[16];
     
-    bool isValid() const { return magic == 0x43485353 && version == 1; }
+    bool isValid() const { return magic == 0x43485345; }
+};
+
+struct ChessStats {
+    uint32_t magic = 0x43485354;  // "CHST"
+    uint16_t wins = 0;
+    uint16_t losses = 0;
+    uint16_t draws = 0;
+    uint16_t gamesPlayed = 0;
+    uint8_t reserved[16];
+    
+    bool isValid() const { return magic == 0x43485354; }
 };
 
 // =============================================================================
@@ -201,95 +189,189 @@ struct ChessSaveData {
 // =============================================================================
 class ChessGame {
 public:
-    // Screen layout
+    // Screen dimensions
     int screenW, screenH;
     int boardX, boardY, cellSize;
-    bool landscape;
+    
+    // Current screen/state
+    GameScreen currentScreen;
+    int menuCursor;
+    int settingsScroll;
+    
+    // Game settings
+    ChessSettings settings;
+    ChessStats stats;
+    
+    // New game options
+    bool newGamePlayerWhite;
+    Difficulty newGameDifficulty;
     
     // Board state
     int8_t board[8][8];
     bool whiteTurn;
+    bool playerIsWhite;
     bool wCastleK, wCastleQ, bCastleK, bCastleQ;
-    int8_t epCol;  // en passant column, -1 if none
-    bool inCheck, gameOver, checkmate, stalemate;
+    int8_t epCol;
+    bool inCheck, gameOver, checkmate, stalemate, resigned;
     
     // UI state
-    int curR, curC;              // cursor position
-    int selR, selC;              // selected piece (-1 if none)
-    bool hasSel;                 // piece is selected
+    int curR, curC;
+    int selR, selC;
+    bool hasSel;
     Move lastMove;
     int moveNum;
     
-    // Valid moves for selected piece
+    // Captured pieces
+    int8_t whiteCaptured[16];
+    int8_t blackCaptured[16];
+    int whiteCapturedCount;
+    int blackCapturedCount;
+    
+    // Move history
+    MoveRecord moveHistory[50];
+    int moveHistoryCount;
+    
+    // Undo support
+    Move undoMove;
+    int8_t undoBoard[8][8];
+    bool undoCastleK[2], undoCastleQ[2];
+    int8_t undoEpCol;
+    int8_t undoCaptured[16];
+    int undoCapturedCount;
+    bool canUndo;
+    
+    // Valid moves
     bool validMoves[8][8];
     
+    // Animation
+    bool animating;
+    int animFromX, animFromY, animToX, animToY;
+    int8_t animPiece;
+    int animFrame;
+    static const int ANIM_FRAMES = 6;   // Fewer frames for smoother feel
+    static const int ANIM_DELAY = 50;   // ~20Hz for e-ink partial refresh
+    unsigned long lastAnimTime;
+    
     // Refresh control
-    int prevCurR, prevCurC;
     bool needsFullRedraw;
     bool aiThinking;
+    bool hasSavedGame;
     
-    // Dirty tracking for partial refresh
-    bool dirtySquares[8][8];
-    bool anyDirty;
-    
-    // Save/Resume state
-    enum MenuState { MENU_NONE, MENU_RESUME_PROMPT };
-    MenuState menuState;
-    int menuCursor;  // 0 = Yes, 1 = No
-    
-    ChessGame() { menuState = MENU_NONE; menuCursor = 0; newGame(); }
+    // ==========================================================================
+    // Constructor & Initialization
+    // ==========================================================================
+    ChessGame() {
+        currentScreen = CHESS_SCREEN_MAIN_MENU;
+        menuCursor = 0;
+        settingsScroll = 0;
+        needsFullRedraw = true;
+        animating = false;
+        loadSettings();
+        loadStats();
+        hasSavedGame = SD.exists(CHESS_SAVE_PATH);
+    }
     
     void init(int w, int h) {
         screenW = w;
         screenH = h;
-        landscape = (w > h);
         
-        // Layout: maximize board size
-        int headerH = 50;
-        int footerH = 30;
-        int coordMargin = 18;
+        // Calculate board layout - maximize board size and center it
+        int headerH = 40;       // Slightly smaller header
+        int capturedH = 24;     // Slightly smaller captured row
+        int historyH = 24;      // Move history area
+        int footerH = 50;       // Footer with buttons
+        int coordMargin = 14;   // Space for coordinates
         
-        int availH = screenH - headerH - footerH - coordMargin;
-        int availW = screenW - coordMargin - 10;
+        // Calculate available space for board
+        int topSpace = headerH + capturedH;
+        int bottomSpace = capturedH + historyH + footerH;
+        int availH = screenH - topSpace - bottomSpace - 16;  // 16px padding
+        int availW = screenW - coordMargin - 8;
         
+        // Calculate cell size - allow larger cells
         cellSize = min(availH, availW) / 8;
-        if (cellSize < 30) cellSize = 30;
-        if (cellSize > 50) cellSize = 50;
+        cellSize = constrain(cellSize, 32, 48);  // Allow up to 48px cells
         
         int boardSize = cellSize * 8;
-        boardX = coordMargin + (availW - boardSize) / 2 + 5;
-        boardY = headerH + (availH - boardSize) / 2;
         
-        Serial.printf("[CHESS] Cell: %d, Board at: %d,%d\n", cellSize, boardX, boardY);
+        // Center board horizontally
+        boardX = coordMargin + (screenW - coordMargin - boardSize) / 2;
         
-        // Check for saved game
-        if (hasSavedGame()) {
-            menuState = MENU_RESUME_PROMPT;
-            menuCursor = 0;
-            needsFullRedraw = true;
-        } else {
-            newGame();
+        // Center board vertically in available space
+        int totalBoardArea = boardSize + capturedH * 2;  // Board + captured pieces rows
+        int verticalSpace = screenH - headerH - historyH - footerH;
+        boardY = headerH + (verticalSpace - totalBoardArea) / 2 + capturedH;
+        
+        Serial.printf("[CHESS] Init: %dx%d, cell=%d, board at (%d,%d)\n",
+                      screenW, screenH, cellSize, boardX, boardY);
+        
+        hasSavedGame = SD.exists(CHESS_SAVE_PATH);
+        currentScreen = CHESS_SCREEN_MAIN_MENU;
+        menuCursor = 0;
+        needsFullRedraw = true;
+    }
+    
+    // ==========================================================================
+    // Settings & Stats
+    // ==========================================================================
+    void loadSettings() {
+        settings = ChessSettings();
+        File f = SD.open(CHESS_SETTINGS_PATH, FILE_READ);
+        if (f) {
+            f.read((uint8_t*)&settings, sizeof(ChessSettings));
+            f.close();
+            if (!settings.isValid()) settings = ChessSettings();
         }
     }
     
-    // =========================================================================
-    // Save/Load Functions
-    // =========================================================================
-    bool hasSavedGame() {
-        return SD.exists(CHESS_SAVE_PATH);
+    void saveSettings() {
+        SD.mkdir("/.sumi");
+        File f = SD.open(CHESS_SETTINGS_PATH, FILE_WRITE);
+        if (f) {
+            f.write((uint8_t*)&settings, sizeof(ChessSettings));
+            f.close();
+        }
     }
     
+    void loadStats() {
+        stats = ChessStats();
+        File f = SD.open(CHESS_STATS_PATH, FILE_READ);
+        if (f) {
+            f.read((uint8_t*)&stats, sizeof(ChessStats));
+            f.close();
+            if (!stats.isValid()) stats = ChessStats();
+        }
+    }
+    
+    void saveStats() {
+        SD.mkdir("/.sumi");
+        File f = SD.open(CHESS_STATS_PATH, FILE_WRITE);
+        if (f) {
+            f.write((uint8_t*)&stats, sizeof(ChessStats));
+            f.close();
+        }
+    }
+    
+    void recordGameResult(int result) {
+        stats.gamesPlayed++;
+        if (result > 0) stats.wins++;
+        else if (result < 0) stats.losses++;
+        else stats.draws++;
+        saveStats();
+    }
+    
+    // ==========================================================================
+    // Game Save/Load
+    // ==========================================================================
     bool saveGame() {
         SD.mkdir("/.sumi");
         File f = SD.open(CHESS_SAVE_PATH, FILE_WRITE);
-        if (!f) {
-            Serial.println("[CHESS] Failed to open save file");
-            return false;
-        }
+        if (!f) return false;
         
         ChessSaveData save;
         memcpy(save.board, board, sizeof(board));
         save.whiteTurn = whiteTurn;
+        save.playerIsWhite = playerIsWhite;
         save.wCastleK = wCastleK;
         save.wCastleQ = wCastleQ;
         save.bCastleK = bCastleK;
@@ -297,34 +379,36 @@ public:
         save.epCol = epCol;
         save.moveNum = moveNum;
         save.lastMove = lastMove;
-        memset(save.reserved, 0, sizeof(save.reserved));
+        save.difficulty = settings.difficulty;
+        memcpy(save.whiteCaptured, whiteCaptured, sizeof(whiteCaptured));
+        memcpy(save.blackCaptured, blackCaptured, sizeof(blackCaptured));
+        save.whiteCapturedCount = whiteCapturedCount;
+        save.blackCapturedCount = blackCapturedCount;
+        save.moveHistoryCount = min(moveHistoryCount, 50);
+        memcpy(save.moveHistory, moveHistory, sizeof(MoveRecord) * save.moveHistoryCount);
         
         f.write((uint8_t*)&save, sizeof(ChessSaveData));
         f.close();
-        
-        Serial.printf("[CHESS] Game saved (move %d)\n", moveNum);
+        hasSavedGame = true;
         return true;
     }
     
     bool loadGame() {
         File f = SD.open(CHESS_SAVE_PATH, FILE_READ);
-        if (!f) {
-            Serial.println("[CHESS] No save file found");
-            return false;
-        }
+        if (!f) return false;
         
         ChessSaveData save;
         f.read((uint8_t*)&save, sizeof(ChessSaveData));
         f.close();
         
         if (!save.isValid()) {
-            Serial.println("[CHESS] Invalid save file");
             deleteSavedGame();
             return false;
         }
         
         memcpy(board, save.board, sizeof(board));
         whiteTurn = save.whiteTurn;
+        playerIsWhite = save.playerIsWhite;
         wCastleK = save.wCastleK;
         wCastleQ = save.wCastleQ;
         bCastleK = save.bCastleK;
@@ -332,39 +416,41 @@ public:
         epCol = save.epCol;
         moveNum = save.moveNum;
         lastMove = save.lastMove;
+        settings.difficulty = (Difficulty)save.difficulty;
+        memcpy(whiteCaptured, save.whiteCaptured, sizeof(whiteCaptured));
+        memcpy(blackCaptured, save.blackCaptured, sizeof(blackCaptured));
+        whiteCapturedCount = save.whiteCapturedCount;
+        blackCapturedCount = save.blackCapturedCount;
+        moveHistoryCount = save.moveHistoryCount;
+        memcpy(moveHistory, save.moveHistory, sizeof(MoveRecord) * moveHistoryCount);
         
-        // Reset UI state
-        curR = 6; curC = 4;
-        prevCurR = curR; prevCurC = curC;
+        curR = playerIsWhite ? 6 : 1;
+        curC = 4;
         selR = selC = -1;
         hasSel = false;
+        canUndo = false;
         aiThinking = false;
-        inCheck = gameOver = checkmate = stalemate = false;
-        
+        animating = false;
+        inCheck = gameOver = checkmate = stalemate = resigned = false;
         memset(validMoves, 0, sizeof(validMoves));
-        memset(dirtySquares, 0, sizeof(dirtySquares));
-        anyDirty = false;
-        needsFullRedraw = true;
         
-        // Update game state (check detection)
         updateGameState();
-        
-        Serial.printf("[CHESS] Game loaded (move %d, %s to move)\n", 
-                      moveNum, whiteTurn ? "white" : "black");
         return true;
     }
     
     void deleteSavedGame() {
         if (SD.exists(CHESS_SAVE_PATH)) {
             SD.remove(CHESS_SAVE_PATH);
-            Serial.println("[CHESS] Save file deleted");
+            hasSavedGame = false;
         }
     }
     
-    void newGame() {
+    // ==========================================================================
+    // New Game Setup
+    // ==========================================================================
+    void setupNewGame() {
         memset(board, 0, sizeof(board));
         
-        // Setup starting position
         board[0][0] = B_ROOK;  board[0][1] = B_KNIGHT; board[0][2] = B_BISHOP;
         board[0][3] = B_QUEEN; board[0][4] = B_KING;   board[0][5] = B_BISHOP;
         board[0][6] = B_KNIGHT; board[0][7] = B_ROOK;
@@ -376,513 +462,1009 @@ public:
         for (int c = 0; c < 8; c++) board[6][c] = W_PAWN;
         
         whiteTurn = true;
+        playerIsWhite = newGamePlayerWhite;
+        settings.difficulty = newGameDifficulty;
         wCastleK = wCastleQ = bCastleK = bCastleQ = true;
         epCol = -1;
-        inCheck = gameOver = checkmate = stalemate = false;
+        inCheck = gameOver = checkmate = stalemate = resigned = false;
         
-        curR = 6; curC = 4;  // Start at e2
-        prevCurR = curR; prevCurC = curC;
+        curR = playerIsWhite ? 6 : 1;
+        curC = 4;
         selR = selC = -1;
         hasSel = false;
         lastMove = Move();
         moveNum = 1;
         aiThinking = false;
+        canUndo = false;
+        animating = false;
         
         memset(validMoves, 0, sizeof(validMoves));
-        memset(dirtySquares, 0, sizeof(dirtySquares));
-        anyDirty = false;
-        needsFullRedraw = true;
+        memset(whiteCaptured, 0, sizeof(whiteCaptured));
+        memset(blackCaptured, 0, sizeof(blackCaptured));
+        whiteCapturedCount = blackCapturedCount = 0;
+        moveHistoryCount = 0;
+        
+        deleteSavedGame();
+        
+        // If player is black, AI moves first
+        if (!playerIsWhite) {
+            aiThinking = true;
+        }
     }
     
-    // =========================================================================
-    // Input
-    // =========================================================================
+    // ==========================================================================
+    // Input Handling
+    // ==========================================================================
     bool handleInput(Button btn) {
-        if (aiThinking) {
-            Serial.println("[CHESS] AI thinking, ignoring input");
-            return false;
-        }
+        if (animating) return true;
         
-        Serial.printf("[CHESS] handleInput: btn=%d, menuState=%d, curR=%d, curC=%d\n", 
-                      btn, (int)menuState, curR, curC);
-        
-        // Handle menu states first
-        if (menuState == MENU_RESUME_PROMPT) {
-            switch (btn) {
-                case BTN_LEFT:
-                case BTN_RIGHT:
-                    menuCursor = 1 - menuCursor;  // Toggle Yes/No
-                    needsFullRedraw = true;
-                    return true;
-                case BTN_CONFIRM:
-                    if (menuCursor == 0) {
-                        // Resume saved game
-                        loadGame();
-                        deleteSavedGame();  // Delete after loading
-                    } else {
-                        // Start new game
-                        deleteSavedGame();
-                        newGame();
-                    }
-                    menuState = MENU_NONE;
-                    needsFullRedraw = true;
-                    return true;
-                case BTN_BACK:
-                    // Start new game on back
-                    deleteSavedGame();
-                    newGame();
-                    menuState = MENU_NONE;
-                    needsFullRedraw = true;
-                    return true;
-                default:
-                    return true;
-            }
-        }
-        
-        // Normal game input
-        if (gameOver) {
-            if (btn == BTN_CONFIRM) { 
-                deleteSavedGame();  // Clear any old save
-                newGame(); 
-                return true; 
-            }
-            if (btn == BTN_BACK) return false;
-            return true;
-        }
-        
-        prevCurR = curR;
-        prevCurC = curC;
-        
-        switch (btn) {
-            case BTN_UP:    
-                if (curR > 0) { curR--; markCursorDirty(); Serial.printf("[CHESS] Cursor UP to row %d\n", curR); } 
-                return true;
-            case BTN_DOWN:  
-                if (curR < 7) { curR++; markCursorDirty(); Serial.printf("[CHESS] Cursor DOWN to row %d\n", curR); } 
-                return true;
-            case BTN_LEFT:  
-                if (curC > 0) { curC--; markCursorDirty(); Serial.printf("[CHESS] Cursor LEFT to col %d\n", curC); } 
-                return true;
-            case BTN_RIGHT: 
-                if (curC < 7) { curC++; markCursorDirty(); Serial.printf("[CHESS] Cursor RIGHT to col %d\n", curC); } 
-                return true;
-            case BTN_CONFIRM: return handleSelect();
-            case BTN_BACK:
-                if (hasSel) {
-                    // Deselect
-                    Serial.println("[CHESS] BACK pressed, deselecting");
-                    markSquareDirty(selR, selC);
-                    for (int r = 0; r < 8; r++)
-                        for (int c = 0; c < 8; c++)
-                            if (validMoves[r][c]) markSquareDirty(r, c);
-                    hasSel = false;
-                    selR = selC = -1;
-                    memset(validMoves, 0, sizeof(validMoves));
-                    return true;
-                }
-                // Just exit - game is auto-saved after every move
-                Serial.println("[CHESS] BACK pressed, exiting (auto-saved)");
-                return false;
+        switch (currentScreen) {
+            case CHESS_SCREEN_MAIN_MENU: return handleMainMenuInput(btn);
+            case CHESS_SCREEN_NEW_GAME: return handleNewGameInput(btn);
+            case CHESS_SCREEN_PLAYING: return handlePlayingInput(btn);
+            case CHESS_SCREEN_IN_GAME_MENU: return handleInGameMenuInput(btn);
+            case CHESS_SCREEN_SETTINGS: return handleSettingsInput(btn);
+            case CHESS_SCREEN_GAME_OVER: return handleGameOverInput(btn);
             default: return false;
         }
     }
     
-    bool handleSelect() {
-        Serial.printf("[CHESS] handleSelect: hasSel=%d, cur=(%d,%d), sel=(%d,%d)\n", 
-                      hasSel, curR, curC, selR, selC);
+    bool handleMainMenuInput(Button btn) {
+        int itemCount = hasSavedGame ? 3 : 2;
         
+        switch (btn) {
+            case BTN_UP:
+                if (menuCursor > 0) { menuCursor--; }  // Partial refresh
+                return true;
+            case BTN_DOWN:
+                if (menuCursor < itemCount - 1) { menuCursor++; }  // Partial refresh
+                return true;
+            case BTN_CONFIRM: {
+                int action = menuCursor;
+                if (!hasSavedGame && action >= 1) action++;
+                
+                if (action == 0) {
+                    newGamePlayerWhite = !settings.playerDefaultBlack;
+                    newGameDifficulty = (Difficulty)settings.difficulty;
+                    menuCursor = 4;  // Default to Start Game button
+                    currentScreen = CHESS_SCREEN_NEW_GAME;
+                } else if (action == 1) {
+                    if (loadGame()) {
+                        currentScreen = CHESS_SCREEN_PLAYING;
+                    }
+                } else if (action == 2) {
+                    menuCursor = 0;
+                    currentScreen = CHESS_SCREEN_SETTINGS;
+                }
+                needsFullRedraw = true;  // Screen change needs full refresh
+                return true;
+            }
+            case BTN_BACK:
+                return false;
+            default:
+                return true;
+        }
+    }
+    
+    bool handleNewGameInput(Button btn) {
+        // 0: color selection, 1-3: difficulty, 4: start button
+        switch (btn) {
+            case BTN_UP:
+                if (menuCursor > 0) { menuCursor--; }  // Partial refresh
+                return true;
+            case BTN_DOWN:
+                if (menuCursor < 4) { menuCursor++; }  // Partial refresh
+                return true;
+            case BTN_LEFT:
+            case BTN_RIGHT:
+                if (menuCursor == 0) {
+                    newGamePlayerWhite = !newGamePlayerWhite;
+                }  // Partial refresh
+                return true;
+            case BTN_CONFIRM:
+                if (menuCursor == 0) {
+                    newGamePlayerWhite = !newGamePlayerWhite;
+                } else if (menuCursor >= 1 && menuCursor <= 3) {
+                    newGameDifficulty = (Difficulty)menuCursor;
+                } else if (menuCursor == 4) {
+                    setupNewGame();
+                    currentScreen = CHESS_SCREEN_PLAYING;
+                    needsFullRedraw = true;  // Screen change
+                    return true;
+                }
+                // Partial refresh for settings changes
+                return true;
+            case BTN_BACK:
+                menuCursor = 0;
+                currentScreen = CHESS_SCREEN_MAIN_MENU;
+                needsFullRedraw = true;  // Screen change
+                return true;
+            default:
+                return true;
+        }
+    }
+    
+    bool handlePlayingInput(Button btn) {
+        if (aiThinking) return true;
+        
+        if (gameOver) {
+            if (btn == BTN_CONFIRM || btn == BTN_BACK) {
+                currentScreen = CHESS_SCREEN_GAME_OVER;
+                menuCursor = 0;
+                needsFullRedraw = true;
+            }
+            return true;
+        }
+        
+        bool isPlayerTurn = (whiteTurn == playerIsWhite);
+        if (!isPlayerTurn) return true;
+        
+        switch (btn) {
+            case BTN_UP:
+                if (curR > 0) { curR--; }  // Partial refresh for cursor
+                return true;
+            case BTN_DOWN:
+                if (curR < 7) { curR++; }  // Partial refresh for cursor
+                return true;
+            case BTN_LEFT:
+                if (curC > 0) { curC--; }  // Partial refresh for cursor
+                return true;
+            case BTN_RIGHT:
+                if (curC < 7) { curC++; }  // Partial refresh for cursor
+                return true;
+            case BTN_CONFIRM:
+                return handleSelect();
+            case BTN_BACK:
+                if (hasSel) {
+                    hasSel = false;
+                    selR = selC = -1;
+                    memset(validMoves, 0, sizeof(validMoves));
+                } else {
+                    menuCursor = 0;
+                    currentScreen = CHESS_SCREEN_IN_GAME_MENU;
+                    needsFullRedraw = true;  // Screen change
+                    return true;
+                }
+                return true;
+            default:
+                return true;
+        }
+    }
+    
+    bool handleInGameMenuInput(Button btn) {
+        int itemCount = settings.allowUndo && canUndo ? 4 : 3;
+        
+        switch (btn) {
+            case BTN_UP:
+                if (menuCursor > 0) { menuCursor--; }  // Partial refresh
+                return true;
+            case BTN_DOWN:
+                if (menuCursor < itemCount - 1) { menuCursor++; }  // Partial refresh
+                return true;
+            case BTN_CONFIRM: {
+                int action = menuCursor;
+                // Adjust if undo not available
+                if (!(settings.allowUndo && canUndo) && action >= 1) action++;
+                
+                if (action == 0) {
+                    // Resume
+                    currentScreen = CHESS_SCREEN_PLAYING;
+                } else if (action == 1) {
+                    // Undo
+                    performUndo();
+                    currentScreen = CHESS_SCREEN_PLAYING;
+                } else if (action == 2) {
+                    // Resign
+                    gameOver = true;
+                    resigned = true;
+                    recordGameResult(-1);
+                    deleteSavedGame();
+                    currentScreen = CHESS_SCREEN_GAME_OVER;
+                    menuCursor = 0;
+                } else if (action == 3) {
+                    // Save & Exit
+                    saveGame();
+                    currentScreen = CHESS_SCREEN_MAIN_MENU;
+                    menuCursor = 0;
+                }
+                needsFullRedraw = true;
+                return true;
+            }
+            case BTN_BACK:
+                currentScreen = CHESS_SCREEN_PLAYING;
+                needsFullRedraw = true;
+                return true;
+            default:
+                return true;
+        }
+    }
+    
+    bool handleSettingsInput(Button btn) {
+        const int ITEM_COUNT = 6;
+        
+        switch (btn) {
+            case BTN_UP:
+                if (menuCursor > 0) { menuCursor--; }  // Partial refresh
+                return true;
+            case BTN_DOWN:
+                if (menuCursor < ITEM_COUNT - 1) { menuCursor++; }  // Partial refresh
+                return true;
+            case BTN_LEFT:
+            case BTN_RIGHT:
+            case BTN_CONFIRM:
+                if (menuCursor == 0) {
+                    settings.difficulty = (settings.difficulty % 3) + 1;
+                } else if (menuCursor == 1) {
+                    settings.boardStyle = 1 - settings.boardStyle;
+                } else if (menuCursor == 2) {
+                    settings.allowUndo = !settings.allowUndo;
+                } else if (menuCursor == 3) {
+                    settings.showLegalMoves = !settings.showLegalMoves;
+                } else if (menuCursor == 4) {
+                    settings.animatePieces = !settings.animatePieces;
+                } else if (menuCursor == 5) {
+                    settings.highlightLastMove = !settings.highlightLastMove;
+                }
+                saveSettings();
+                // Partial refresh for settings changes
+                return true;
+            case BTN_BACK:
+                menuCursor = hasSavedGame ? 2 : 1;
+                currentScreen = CHESS_SCREEN_MAIN_MENU;
+                needsFullRedraw = true;  // Screen change
+                return true;
+            default:
+                return true;
+        }
+    }
+    
+    bool handleGameOverInput(Button btn) {
+        switch (btn) {
+            case BTN_UP:
+            case BTN_DOWN:
+                menuCursor = 1 - menuCursor;  // Partial refresh
+                return true;
+            case BTN_CONFIRM:
+                if (menuCursor == 0) {
+                    newGamePlayerWhite = !settings.playerDefaultBlack;
+                    newGameDifficulty = (Difficulty)settings.difficulty;
+                    menuCursor = 4;  // Default to Start Game button
+                    currentScreen = CHESS_SCREEN_NEW_GAME;
+                } else {
+                    menuCursor = 0;
+                    currentScreen = CHESS_SCREEN_MAIN_MENU;
+                }
+                needsFullRedraw = true;  // Screen change
+                return true;
+            case BTN_BACK:
+                menuCursor = 0;
+                currentScreen = CHESS_SCREEN_MAIN_MENU;
+                needsFullRedraw = true;  // Screen change
+                return true;
+            default:
+                return true;
+        }
+    }
+    
+    bool handleSelect() {
         if (!hasSel) {
-            // Try to select piece
             int8_t piece = board[curR][curC];
-            Serial.printf("[CHESS] Piece at cursor: %d, whiteTurn=%d\n", piece, whiteTurn);
+            if (piece == EMPTY) return true;
+            if ((piece > 0) != playerIsWhite) return true;
             
-            if (piece == EMPTY) {
-                Serial.println("[CHESS] Empty square, ignoring");
-                return true;
-            }
-            if ((piece > 0) != whiteTurn) {
-                Serial.println("[CHESS] Wrong color piece, ignoring");
-                return true;
-            }
-            
-            selR = curR; selC = curC;
+            selR = curR;
+            selC = curC;
             hasSel = true;
             calcValidMoves(curR, curC);
-            
-            // Count valid moves for debug
-            int validCount = 0;
-            for (int r = 0; r < 8; r++)
-                for (int c = 0; c < 8; c++)
-                    if (validMoves[r][c]) validCount++;
-            Serial.printf("[CHESS] Selected piece at (%d,%d), %d valid moves\n", selR, selC, validCount);
-            
-            // Mark all affected squares dirty
-            markSquareDirty(selR, selC);
-            for (int r = 0; r < 8; r++)
-                for (int c = 0; c < 8; c++)
-                    if (validMoves[r][c]) markSquareDirty(r, c);
+            needsFullRedraw = true;
             return true;
         } else {
-            // Try to move
-            Serial.printf("[CHESS] Trying to move to (%d,%d), validMoves[%d][%d]=%d\n", 
-                          curR, curC, curR, curC, validMoves[curR][curC]);
-            
             if (curR == selR && curC == selC) {
-                // Deselect
-                Serial.println("[CHESS] Deselecting (same square)");
-                markSquareDirty(selR, selC);
-                for (int r = 0; r < 8; r++)
-                    for (int c = 0; c < 8; c++)
-                        if (validMoves[r][c]) markSquareDirty(r, c);
                 hasSel = false;
                 selR = selC = -1;
                 memset(validMoves, 0, sizeof(validMoves));
+                needsFullRedraw = true;
                 return true;
             }
             
             if (validMoves[curR][curC]) {
-                // Make move
-                Serial.printf("[CHESS] Making move from (%d,%d) to (%d,%d)\n", selR, selC, curR, curC);
-                Move move = makeMove(selR, selC, curR, curC);
-                
-                // Mark old and new positions dirty
-                markSquareDirty(move.fr, move.fc);
-                markSquareDirty(move.tr, move.tc);
-                if (lastMove.valid()) {
-                    markSquareDirty(lastMove.fr, lastMove.fc);
-                    markSquareDirty(lastMove.tr, lastMove.tc);
-                }
-                
-                // Clear selection highlights
-                for (int r = 0; r < 8; r++)
-                    for (int c = 0; c < 8; c++)
-                        if (validMoves[r][c]) markSquareDirty(r, c);
-                
-                lastMove = move;
-                hasSel = false;
-                selR = selC = -1;
-                memset(validMoves, 0, sizeof(validMoves));
-                
-                updateGameState();
-                Serial.printf("[CHESS] Move complete, gameOver=%d, inCheck=%d\n", gameOver, inCheck);
-                
-                // Auto-save after player move
-                if (!gameOver) {
-                    saveGame();
-                    aiThinking = true;
-                    Serial.println("[CHESS] AI thinking...");
-                } else {
-                    // Game over - delete save file
-                    deleteSavedGame();
-                }
-                needsFullRedraw = true;  // Refresh for status update
+                executePlayerMove(selR, selC, curR, curC);
                 return true;
             } else {
-                // Check if clicking own piece to reselect
                 int8_t piece = board[curR][curC];
-                if (piece != EMPTY && (piece > 0) == whiteTurn) {
-                    Serial.printf("[CHESS] Reselecting piece at (%d,%d)\n", curR, curC);
-                    // Clear old selection
-                    markSquareDirty(selR, selC);
-                    for (int r = 0; r < 8; r++)
-                        for (int c = 0; c < 8; c++)
-                            if (validMoves[r][c]) markSquareDirty(r, c);
-                    
-                    selR = curR; selC = curC;
+                if (piece != EMPTY && (piece > 0) == playerIsWhite) {
+                    selR = curR;
+                    selC = curC;
                     calcValidMoves(curR, curC);
-                    
-                    markSquareDirty(selR, selC);
-                    for (int r = 0; r < 8; r++)
-                        for (int c = 0; c < 8; c++)
-                            if (validMoves[r][c]) markSquareDirty(r, c);
-                } else {
-                    Serial.println("[CHESS] Invalid move destination");
+                    needsFullRedraw = true;
                 }
-                return true;
             }
+            return true;
         }
     }
     
-    void markSquareDirty(int r, int c) {
-        if (r >= 0 && r < 8 && c >= 0 && c < 8) {
-            dirtySquares[r][c] = true;
-            anyDirty = true;
+    void executePlayerMove(int fr, int fc, int tr, int tc) {
+        // Save for undo
+        memcpy(undoBoard, board, sizeof(board));
+        undoMove = lastMove;
+        undoCastleK[0] = wCastleK; undoCastleK[1] = bCastleK;
+        undoCastleQ[0] = wCastleQ; undoCastleQ[1] = bCastleQ;
+        undoEpCol = epCol;
+        undoCapturedCount = playerIsWhite ? whiteCapturedCount : blackCapturedCount;
+        canUndo = true;
+        
+        Move move = makeMove(fr, fc, tr, tc);
+        
+        if (moveHistoryCount < 50) {
+            generateNotation(move, moveHistory[moveHistoryCount].notation);
+            moveHistory[moveHistoryCount].move = move;
+            moveHistoryCount++;
         }
+        
+        if (settings.animatePieces) {
+            startAnimation(fr, fc, tr, tc, move.movedPiece);
+        }
+        
+        execMove(move);
+        lastMove = move;
+        
+        hasSel = false;
+        selR = selC = -1;
+        memset(validMoves, 0, sizeof(validMoves));
+        
+        updateGameState();
+        
+        if (!gameOver) {
+            saveGame();
+            aiThinking = true;
+        } else {
+            if (checkmate) {
+                recordGameResult(whiteTurn ? 1 : -1);
+            } else if (stalemate) {
+                recordGameResult(0);
+            }
+            deleteSavedGame();
+        }
+        
+        needsFullRedraw = true;
     }
     
-    void markCursorDirty() {
-        markSquareDirty(prevCurR, prevCurC);
-        markSquareDirty(curR, curC);
+    void performUndo() {
+        if (!canUndo) return;
+        
+        memcpy(board, undoBoard, sizeof(board));
+        lastMove = undoMove;
+        wCastleK = undoCastleK[0]; bCastleK = undoCastleK[1];
+        wCastleQ = undoCastleQ[0]; bCastleQ = undoCastleQ[1];
+        epCol = undoEpCol;
+        whiteTurn = !whiteTurn;
+        if (!whiteTurn) moveNum--;
+        
+        if (playerIsWhite) {
+            whiteCapturedCount = undoCapturedCount;
+        } else {
+            blackCapturedCount = undoCapturedCount;
+        }
+        
+        if (moveHistoryCount > 0) moveHistoryCount--;
+        
+        canUndo = false;
+        hasSel = false;
+        selR = selC = -1;
+        memset(validMoves, 0, sizeof(validMoves));
+        updateGameState();
     }
     
-    // =========================================================================
-    // Update (AI)
-    // =========================================================================
+    // ==========================================================================
+    // Update Loop
+    // ==========================================================================
     bool update() {
+        if (animating) {
+            unsigned long now = millis();
+            if (now - lastAnimTime >= ANIM_DELAY) {
+                animFrame++;
+                lastAnimTime = now;
+                if (animFrame >= ANIM_FRAMES) {
+                    animating = false;
+                    needsFullRedraw = true;  // Only full refresh when animation ends
+                } else {
+                    // Draw animation frame with partial refresh (no black flash)
+                    drawAnimationFrame();
+                }
+            }
+            return true;
+        }
+        
         if (!aiThinking || gameOver) return false;
         
         Move aiMove = findBestMove();
         if (aiMove.valid()) {
-            // Mark old move highlight
-            if (lastMove.valid()) {
-                markSquareDirty(lastMove.fr, lastMove.fc);
-                markSquareDirty(lastMove.tr, lastMove.tc);
+            if (moveHistoryCount < 50) {
+                generateNotation(aiMove, moveHistory[moveHistoryCount].notation);
+                moveHistory[moveHistoryCount].move = aiMove;
+                moveHistoryCount++;
+            }
+            
+            if (settings.animatePieces) {
+                startAnimation(aiMove.fr, aiMove.fc, aiMove.tr, aiMove.tc, board[aiMove.fr][aiMove.fc]);
             }
             
             execMove(aiMove);
             lastMove = aiMove;
-            
-            markSquareDirty(aiMove.fr, aiMove.fc);
-            markSquareDirty(aiMove.tr, aiMove.tc);
-            
             updateGameState();
             aiThinking = false;
             
-            // Auto-save after AI move (or delete if game over)
-            if (gameOver) {
-                deleteSavedGame();
-            } else {
+            if (!gameOver) {
                 saveGame();
+            } else {
+                if (checkmate) {
+                    recordGameResult(whiteTurn ? -1 : 1);
+                } else if (stalemate) {
+                    recordGameResult(0);
+                }
+                deleteSavedGame();
             }
             
             needsFullRedraw = true;
             return true;
         }
+        
         aiThinking = false;
         return false;
     }
     
-    // =========================================================================
-    // Drawing
-    // =========================================================================
-    void draw() {
-        if (needsFullRedraw) {
-            drawFull();
-            needsFullRedraw = false;
-            memset(dirtySquares, 0, sizeof(dirtySquares));
-            anyDirty = false;
-        } else if (anyDirty) {
-            drawPartial();
-            memset(dirtySquares, 0, sizeof(dirtySquares));
-            anyDirty = false;
-        }
+    // ==========================================================================
+    // Animation
+    // ==========================================================================
+    void startAnimation(int fr, int fc, int tr, int tc, int8_t piece) {
+        // Convert board coordinates to display coordinates for animation
+        int dispFr = playerIsWhite ? fr : (7 - fr);
+        int dispFc = playerIsWhite ? fc : (7 - fc);
+        int dispTr = playerIsWhite ? tr : (7 - tr);
+        int dispTc = playerIsWhite ? tc : (7 - tc);
+        
+        animFromX = boardX + dispFc * cellSize + cellSize / 2;
+        animFromY = boardY + dispFr * cellSize + cellSize / 2;
+        animToX = boardX + dispTc * cellSize + cellSize / 2;
+        animToY = boardY + dispTr * cellSize + cellSize / 2;
+        animPiece = piece;
+        animFrame = 0;
+        lastAnimTime = millis();
+        animating = true;
     }
     
-    void drawFull() {
+    float easeInOut(float t) {
+        return t < 0.5f ? 2 * t * t : 1 - (-2 * t + 2) * (-2 * t + 2) / 2;
+    }
+    
+    // ==========================================================================
+    // Drawing - Main
+    // ==========================================================================
+    void draw() {
         display.setFullWindow();
         display.firstPage();
         do {
             display.fillScreen(GxEPD_WHITE);
-            drawContent();
+            
+            switch (currentScreen) {
+                case CHESS_SCREEN_MAIN_MENU: drawMainMenu(); break;
+                case CHESS_SCREEN_NEW_GAME: drawNewGameScreen(); break;
+                case CHESS_SCREEN_PLAYING: drawPlayingScreen(); break;
+                case CHESS_SCREEN_IN_GAME_MENU:
+                    drawPlayingScreen();
+                    drawInGameMenu();
+                    break;
+                case CHESS_SCREEN_SETTINGS: drawSettingsScreen(); break;
+                case CHESS_SCREEN_GAME_OVER: drawGameOverScreen(); break;
+            }
         } while (display.nextPage());
+        
+        needsFullRedraw = false;
     }
     
     void drawPartial() {
-        // Find bounding box of dirty squares
-        int minR = 8, maxR = -1, minC = 8, maxC = -1;
-        for (int r = 0; r < 8; r++) {
-            for (int c = 0; c < 8; c++) {
-                if (dirtySquares[r][c]) {
-                    if (r < minR) minR = r;
-                    if (r > maxR) maxR = r;
-                    if (c < minC) minC = c;
-                    if (c > maxC) maxC = c;
-                }
-            }
-        }
-        
-        if (maxR < 0) return;  // Nothing dirty
-        
-        // Add cursor margin
-        int x = boardX + minC * cellSize - 4;
-        int y = boardY + minR * cellSize - 4;
-        int w = (maxC - minC + 1) * cellSize + 8;
-        int h = (maxR - minR + 1) * cellSize + 8;
-        
-        // Clamp to screen
-        if (x < 0) x = 0;
-        if (y < 0) y = 0;
-        if (x + w > screenW) w = screenW - x;
-        if (y + h > screenH) h = screenH - y;
-        
-        display.setPartialWindow(x, y, w, h);
+        // Use partial window for smoother menu updates
+        display.setPartialWindow(0, 0, screenW, screenH);
         display.firstPage();
         do {
-            // Redraw only affected squares
-            for (int r = minR; r <= maxR; r++) {
-                for (int c = minC; c <= maxC; c++) {
-                    drawSquare(r, c);
+            display.fillScreen(GxEPD_WHITE);
+            
+            switch (currentScreen) {
+                case CHESS_SCREEN_MAIN_MENU: drawMainMenu(); break;
+                case CHESS_SCREEN_NEW_GAME: drawNewGameScreen(); break;
+                case CHESS_SCREEN_PLAYING: drawPlayingScreen(); break;
+                case CHESS_SCREEN_IN_GAME_MENU:
+                    drawPlayingScreen();
+                    drawInGameMenu();
+                    break;
+                case CHESS_SCREEN_SETTINGS: drawSettingsScreen(); break;
+                case CHESS_SCREEN_GAME_OVER: drawGameOverScreen(); break;
+            }
+        } while (display.nextPage());
+        
+        needsFullRedraw = false;
+    }
+    
+    void drawFullScreen() {
+        needsFullRedraw = true;
+        draw();
+    }
+    
+    void drawAnimationFrame() {
+        // Partial refresh just the board area for smooth animation
+        int boardSize = cellSize * 8;
+        display.setPartialWindow(boardX - 2, boardY - 2, boardSize + 4, boardSize + 4);
+        display.firstPage();
+        do {
+            // Redraw board background - iterate in display order
+            for (int dr = 0; dr < 8; dr++) {
+                for (int dc = 0; dc < 8; dc++) {
+                    // Convert display coords to board coords
+                    int r = playerIsWhite ? dr : (7 - dr);
+                    int c = playerIsWhite ? dc : (7 - dc);
+                    
+                    int x = boardX + dc * cellSize;
+                    int y = boardY + dr * cellSize;
+                    bool dark = (dr + dc) % 2 == 1;
+                    
+                    if (dark) {
+                        if (settings.boardStyle == STYLE_HIGH_CONTRAST) {
+                            display.fillRect(x, y, cellSize, cellSize, GxEPD_BLACK);
+                        } else {
+                            // Dithered pattern
+                            for (int py = y; py < y + cellSize; py++) {
+                                for (int px = x; px < x + cellSize; px++) {
+                                    if ((px + py) % 2 == 0) {
+                                        display.drawPixel(px, py, GxEPD_BLACK);
+                                    } else {
+                                        display.drawPixel(px, py, GxEPD_WHITE);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        display.fillRect(x, y, cellSize, cellSize, GxEPD_WHITE);
+                    }
+                    
+                    // Draw pieces (except the animated one at destination)
+                    int8_t piece = board[r][c];
+                    if (piece != 0) {
+                        // Skip if this is the destination during animation
+                        if (!(animating && r == lastMove.tr && c == lastMove.tc && animFrame < ANIM_FRAMES)) {
+                            drawPiece(x, y, piece, dark, false);  // Never flip pieces
+                        }
+                    }
                 }
             }
-            // Redraw cursor
-            drawCursor();
+            
+            // Draw animated piece at interpolated position
+            if (animating && animFrame < ANIM_FRAMES) {
+                float t = easeInOut((float)animFrame / ANIM_FRAMES);
+                int x = animFromX + (animToX - animFromX) * t - cellSize / 2;
+                int y = animFromY + (animToY - animFromY) * t - cellSize / 2;
+                
+                // Determine if on dark square
+                int col = (x - boardX) / cellSize;
+                int row = (y - boardY) / cellSize;
+                bool onDark = (col + row) % 2 == 1;
+                
+                drawPiece(x, y, animPiece, onDark, false);  // Never flip pieces
+            }
+            
+            // Board border
+            display.drawRect(boardX - 1, boardY - 1, boardSize + 2, boardSize + 2, GxEPD_BLACK);
+            
         } while (display.nextPage());
     }
     
-    void drawContent() {
+    // ==========================================================================
+    // Drawing - Main Menu
+    // ==========================================================================
+    void drawMainMenu() {
         // Header
-        display.fillRect(0, 0, screenW, 45, GxEPD_BLACK);
+        display.fillRect(0, 0, screenW, 48, GxEPD_BLACK);
         display.setTextColor(GxEPD_WHITE);
         display.setFont(&FreeSansBold12pt7b);
+        centerText("Chess", screenW / 2, 34);
         
-        int16_t tx, ty; uint16_t tw, th;
-        display.getTextBounds("Chess", 0, 0, &tx, &ty, &tw, &th);
-        display.setCursor((screenW - tw) / 2, 32);
-        display.print("Chess");
+        // Mini board
+        int previewSize = 200;
+        int previewX = (screenW - previewSize) / 2;
+        int previewY = 70;
+        drawMiniBoard(previewX, previewY, previewSize, nullptr);
         
-        // Column labels (a-h)
-        display.setFont(NULL);
+        // Menu items
+        int menuY = previewY + previewSize + 32;
+        int itemH = 60;
+        
+        const char* items[] = { "New Game", "Load Game", "Settings" };
+        const char* descs[] = { "Start a fresh game vs AI", "Continue saved game", "Difficulty, options, history" };
+        int itemCount = hasSavedGame ? 3 : 2;
+        
+        for (int i = 0; i < itemCount; i++) {
+            int idx = i;
+            if (!hasSavedGame && i >= 1) idx = i + 1;
+            
+            int y = menuY + i * (itemH + 12);
+            bool sel = (menuCursor == i);
+            
+            if (sel) {
+                display.fillRoundRect(20, y, screenW - 40, itemH, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(20, y, screenW - 40, itemH, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(40, y + 26);
+            display.print(items[idx]);
+            
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(40, y + 48);
+            display.print(descs[idx]);
+            
+            // Arrow
+            display.setFont(&FreeSansBold12pt7b);
+            display.setCursor(screenW - 50, y + 38);
+            display.print(">");
+        }
+    }
+    
+    // ==========================================================================
+    // Drawing - New Game Screen
+    // ==========================================================================
+    void drawNewGameScreen() {
+        // Header
+        display.fillRect(0, 0, screenW, 48, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold12pt7b);
+        centerText("New Game", screenW / 2, 34);
+        
+        int y = 64;
+        
+        // PLAY AS section
+        display.setFont(&FreeSans9pt7b);
         display.setTextColor(GxEPD_BLACK);
-        for (int c = 0; c < 8; c++) {
-            int x = boardX + c * cellSize + cellSize / 2 - 3;
-            int y = boardY + 8 * cellSize + 4;
-            display.setCursor(x, y);
-            display.print((char)('a' + c));
+        display.setCursor(24, y);
+        display.print("PLAY AS");
+        y += 16;
+        
+        int boxW = (screenW - 60) / 2;
+        int boxH = 100;
+        
+        for (int i = 0; i < 2; i++) {
+            int x = 24 + i * (boxW + 12);
+            bool isBlack = (i == 0);
+            bool sel = isBlack ? !newGamePlayerWhite : newGamePlayerWhite;
+            bool isCursor = (menuCursor == 0);
+            
+            if (sel) {
+                display.fillRoundRect(x, y, boxW, boxH, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(x, y, boxW, boxH, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            
+            // Piece icon
+            int px = x + (boxW - 32) / 2;
+            int py = y + 14;
+            drawPieceLarge(px, py, isBlack ? B_KING : W_KING, sel);
+            
+            // Label
+            display.setFont(&FreeSansBold9pt7b);
+            const char* label = isBlack ? "Black" : "White";
+            int16_t tx, ty; uint16_t tw, th;
+            display.getTextBounds(label, 0, 0, &tx, &ty, &tw, &th);
+            display.setCursor(x + (boxW - tw) / 2, y + 72);
+            display.print(label);
+            
+            // Sub-label
+            display.setFont(&FreeSans9pt7b);
+            const char* sub = isBlack ? "AI moves first" : "You move first";
+            display.getTextBounds(sub, 0, 0, &tx, &ty, &tw, &th);
+            display.setCursor(x + (boxW - tw) / 2, y + 90);
+            display.print(sub);
+            
+            // Cursor
+            if (isCursor) {
+                for (int j = 0; j < 3; j++) {
+                    display.drawRoundRect(x - 2 - j, y - 2 - j, boxW + 4 + j*2, boxH + 4 + j*2, 10, GxEPD_BLACK);
+                }
+            }
         }
         
-        // Row labels (8-1)
-        for (int r = 0; r < 8; r++) {
-            int x = boardX - 12;
-            int y = boardY + r * cellSize + cellSize / 2 + 4;
-            display.setCursor(x, y);
-            display.print((char)('8' - r));
+        y += boxH + 20;
+        
+        // DIFFICULTY section
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(24, y);
+        display.print("DIFFICULTY");
+        y += 16;
+        
+        const char* diffNames[] = { "Beginner", "Intermediate", "Advanced" };
+        const char* diffDescs[] = { "Makes mistakes, good for learning", "Balanced, thoughtful play", "Strong tactical play, challenging" };
+        
+        for (int i = 0; i < 3; i++) {
+            int itemY = y + i * 54;
+            bool sel = ((int)newGameDifficulty == i + 1);
+            bool isCursor = (menuCursor == i + 1);
+            
+            if (sel) {
+                display.fillRoundRect(24, itemY, screenW - 48, 48, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(24, itemY, screenW - 48, 48, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            
+            // Radio button
+            int radioX = 42;
+            int radioY = itemY + 24;
+            display.drawCircle(radioX, radioY, 8, sel ? GxEPD_WHITE : GxEPD_BLACK);
+            if (sel) {
+                display.fillCircle(radioX, radioY, 4, GxEPD_WHITE);
+            }
+            
+            display.setFont(&FreeSansBold9pt7b);
+            display.setCursor(60, itemY + 20);
+            display.print(diffNames[i]);
+            
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(60, itemY + 38);
+            display.print(diffDescs[i]);
+            
+            if (isCursor && !sel) {
+                display.drawRoundRect(22, itemY - 2, screenW - 44, 52, 8, GxEPD_BLACK);
+                display.drawRoundRect(21, itemY - 3, screenW - 42, 54, 9, GxEPD_BLACK);
+            }
         }
+        
+        y += 3 * 54 + 16;
+        
+        // Start button
+        bool startSel = (menuCursor == 4);
+        if (startSel) {
+            display.fillRoundRect(24, y, screenW - 48, 56, 8, GxEPD_BLACK);
+            display.setTextColor(GxEPD_WHITE);
+        } else {
+            display.drawRoundRect(24, y, screenW - 48, 56, 8, GxEPD_BLACK);
+            display.setTextColor(GxEPD_BLACK);
+        }
+        display.setFont(&FreeSansBold12pt7b);
+        centerText("Start Game", screenW / 2, y + 36);
+    }
+    
+    // ==========================================================================
+    // Drawing - Playing Screen
+    // ==========================================================================
+    void drawPlayingScreen() {
+        // Header (40px to match layout calculation)
+        display.fillRect(0, 0, screenW, 40, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        
+        // AI label (left)
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(16, 26);
+        display.print("AI");
+        
+        // Move number (center)
+        display.setFont(&FreeSansBold12pt7b);
+        char moveStr[16];
+        snprintf(moveStr, sizeof(moveStr), "Move %d", moveNum);
+        centerText(moveStr, screenW / 2, 28);
+        
+        // Player label (right)
+        display.setFont(&FreeSans9pt7b);
+        int16_t tx, ty; uint16_t tw, th;
+        display.getTextBounds("You", 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor(screenW - tw - 16, 26);
+        display.print("You");
+        
+        // AI captured pieces (above board)
+        int captH = 24;
+        int aiCaptY = boardY - captH - 2;
+        display.fillRect(0, aiCaptY, screenW, captH, GxEPD_WHITE);
+        display.drawFastHLine(0, aiCaptY + captH - 1, screenW, GxEPD_BLACK);
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(8, aiCaptY + 17);
+        display.print("AI:");
+        drawCapturedPieces(42, aiCaptY + 4, 
+            playerIsWhite ? blackCaptured : whiteCaptured,
+            playerIsWhite ? blackCapturedCount : whiteCapturedCount);
         
         // Board
-        for (int r = 0; r < 8; r++) {
-            for (int c = 0; c < 8; c++) {
-                drawSquare(r, c);
+        drawBoard();
+        
+        // Player captured pieces (below board)
+        int yourCaptY = boardY + cellSize * 8 + 2;
+        display.drawFastHLine(0, yourCaptY, screenW, GxEPD_BLACK);
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(8, yourCaptY + 17);
+        display.print("You:");
+        drawCapturedPieces(48, yourCaptY + 4,
+            playerIsWhite ? whiteCaptured : blackCaptured,
+            playerIsWhite ? whiteCapturedCount : blackCapturedCount);
+        
+        // Move history
+        int histY = yourCaptY + captH;
+        display.drawFastHLine(0, histY, screenW, GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(8, histY + 17);
+        
+        int startIdx = max(0, moveHistoryCount - 8);
+        for (int i = startIdx; i < moveHistoryCount; i++) {
+            if (display.getCursorX() > screenW - 50) break;
+            if (i % 2 == 0) {
+                char numStr[8];
+                snprintf(numStr, sizeof(numStr), "%d.", (i / 2) + 1);
+                display.print(numStr);
+            }
+            display.print(moveHistory[i].notation);
+            display.print(" ");
+        }
+        
+        // Footer
+        int footerY = screenH - 54;
+        display.fillRect(0, footerY, screenW, 54, GxEPD_WHITE);
+        display.drawFastHLine(0, footerY, screenW, GxEPD_BLACK);
+        display.drawFastHLine(0, footerY + 1, screenW, GxEPD_BLACK);
+        
+        display.setTextColor(GxEPD_BLACK);
+        display.setFont(&FreeSansBold9pt7b);
+        display.setCursor(12, footerY + 22);
+        
+        if (gameOver) {
+            if (checkmate) {
+                display.print((whiteTurn == playerIsWhite) ? "Checkmate! You lose" : "Checkmate! You win!");
+            } else if (stalemate) {
+                display.print("Stalemate - Draw");
+            } else if (resigned) {
+                display.print("You resigned");
+            }
+        } else if (aiThinking) {
+            display.print("AI thinking...");
+        } else {
+            display.print("Your move");
+            if (inCheck) display.print(" - CHECK!");
+        }
+        
+        // Position info
+        display.setFont(&FreeSans9pt7b);
+        display.setCursor(12, footerY + 42);
+        char posStr[24];
+        snprintf(posStr, sizeof(posStr), "%c%d", 'a' + curC, 8 - curR);
+        display.print(posStr);
+        if (hasSel) {
+            int cnt = 0;
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                    if (validMoves[r][c]) cnt++;
+            snprintf(posStr, sizeof(posStr), " sel, %d moves", cnt);
+            display.print(posStr);
+        }
+        
+        // Buttons
+        if (!gameOver && !aiThinking) {
+            if (settings.allowUndo && canUndo) {
+                display.drawRoundRect(screenW - 165, footerY + 10, 72, 34, 4, GxEPD_BLACK);
+                display.setCursor(screenW - 153, footerY + 32);
+                display.print("Undo");
+            }
+            
+            display.drawRoundRect(screenW - 85, footerY + 10, 72, 34, 4, GxEPD_BLACK);
+            display.setCursor(screenW - 70, footerY + 32);
+            display.print("Menu");
+        }
+    }
+    
+    // ==========================================================================
+    // Drawing - Board
+    // ==========================================================================
+    
+    // Helper to flip row for display when player is black
+    int displayRow(int r) const {
+        return playerIsWhite ? r : (7 - r);
+    }
+    int displayCol(int c) const {
+        return playerIsWhite ? c : (7 - c);
+    }
+    
+    void drawBoard() {
+        // Board border
+        display.drawRect(boardX - 1, boardY - 1, cellSize * 8 + 2, cellSize * 8 + 2, GxEPD_BLACK);
+        
+        // Squares - iterate in display order
+        for (int dr = 0; dr < 8; dr++) {
+            for (int dc = 0; dc < 8; dc++) {
+                int r = displayRow(dr);
+                int c = displayCol(dc);
+                drawSquareAt(dr, dc, r, c);
             }
         }
         
         // Cursor
-        drawCursor();
-        
-        // Footer
-        display.setFont(&FreeSans9pt7b);
-        display.setTextColor(GxEPD_BLACK);
-        int footerY = screenH - 8;
-        
-        if (gameOver) {
-            display.setCursor(10, footerY);
-            if (checkmate) {
-                display.print(whiteTurn ? "Checkmate! Black wins" : "Checkmate! You win!");
-            } else {
-                display.print("Stalemate - Draw");
-            }
-        } else {
-            display.setCursor(10, footerY);
-            if (whiteTurn) {
-                display.print("Your move");
-                if (inCheck) display.print(" - CHECK!");
-            } else {
-                display.print("Thinking...");
-            }
+        if (!gameOver && !aiThinking && currentScreen == CHESS_SCREEN_PLAYING) {
+            drawCursor();
         }
         
-        // Current square
-        char coord[4] = { (char)('a' + curC), (char)('8' - curR), '\0' };
-        display.setCursor(screenW - 90, footerY);
-        display.printf("Move %d %s", moveNum, coord);
+        // Animation overlay
+        if (animating) {
+            float t = easeInOut((float)animFrame / ANIM_FRAMES);
+            int x = animFromX + (animToX - animFromX) * t - cellSize / 2;
+            int y = animFromY + (animToY - animFromY) * t - cellSize / 2;
+            drawPiece(x, y, animPiece, false, false);  // Never flip pieces
+        }
         
-        // Draw menu dialogs on top
-        if (menuState != MENU_NONE) {
-            drawMenuDialog();
+        // Coordinates (flipped when player is black)
+        if (settings.showCoordinates) {
+            display.setFont(NULL);
+            display.setTextSize(1);
+            display.setTextColor(GxEPD_BLACK);
+            
+            for (int dc = 0; dc < 8; dc++) {
+                int c = displayCol(dc);
+                display.setCursor(boardX + dc * cellSize + cellSize / 2 - 2, boardY + 8 * cellSize + 4);
+                display.print((char)('a' + c));
+            }
+            
+            for (int dr = 0; dr < 8; dr++) {
+                int r = displayRow(dr);
+                display.setCursor(boardX - 10, boardY + dr * cellSize + cellSize / 2 + 3);
+                display.print((char)('8' - r));
+            }
         }
     }
     
-    void drawMenuDialog() {
-        // Dialog dimensions
-        int dialogW = 280;
-        int dialogH = 120;
-        int dialogX = (screenW - dialogW) / 2;
-        int dialogY = (screenH - dialogH) / 2;
-        
-        // Draw dialog background with border
-        display.fillRect(dialogX, dialogY, dialogW, dialogH, GxEPD_WHITE);
-        display.drawRect(dialogX, dialogY, dialogW, dialogH, GxEPD_BLACK);
-        display.drawRect(dialogX + 2, dialogY + 2, dialogW - 4, dialogH - 4, GxEPD_BLACK);
-        
-        display.setFont(&FreeSansBold12pt7b);
-        display.setTextColor(GxEPD_BLACK);
-        
-        // Title
-        const char* title = "Resume Game?";
-        int16_t tx, ty; uint16_t tw, th;
-        display.getTextBounds(title, 0, 0, &tx, &ty, &tw, &th);
-        display.setCursor(dialogX + (dialogW - tw) / 2, dialogY + 35);
-        display.print(title);
-        
-        // Subtitle
-        display.setFont(&FreeSans9pt7b);
-        const char* subtitle = "Found a saved game";
-        display.getTextBounds(subtitle, 0, 0, &tx, &ty, &tw, &th);
-        display.setCursor(dialogX + (dialogW - tw) / 2, dialogY + 55);
-        display.print(subtitle);
-        
-        // Buttons
-        int btnW = 80;
-        int btnH = 32;
-        int btnY = dialogY + dialogH - 45;
-        int btnSpacing = 30;
-        int yesX = dialogX + (dialogW / 2) - btnW - (btnSpacing / 2);
-        int noX = dialogX + (dialogW / 2) + (btnSpacing / 2);
-        
-        // Yes button
-        if (menuCursor == 0) {
-            display.fillRoundRect(yesX, btnY, btnW, btnH, 4, GxEPD_BLACK);
-            display.setTextColor(GxEPD_WHITE);
-        } else {
-            display.drawRoundRect(yesX, btnY, btnW, btnH, 4, GxEPD_BLACK);
-            display.setTextColor(GxEPD_BLACK);
-        }
-        display.setCursor(yesX + 25, btnY + 22);
-        display.print("Yes");
-        
-        // No button
-        if (menuCursor == 1) {
-            display.fillRoundRect(noX, btnY, btnW, btnH, 4, GxEPD_BLACK);
-            display.setTextColor(GxEPD_WHITE);
-        } else {
-            display.drawRoundRect(noX, btnY, btnW, btnH, 4, GxEPD_BLACK);
-            display.setTextColor(GxEPD_BLACK);
-        }
-        display.setCursor(noX + 28, btnY + 22);
-        display.print("No");
-        
-        display.setTextColor(GxEPD_BLACK);
-    }
-    
-    void drawSquare(int r, int c) {
-        int x = boardX + c * cellSize;
-        int y = boardY + r * cellSize;
+    // Draw a square at display position (dr, dc) with board position (r, c)
+    void drawSquareAt(int dr, int dc, int r, int c) {
+        int x = boardX + dc * cellSize;
+        int y = boardY + dr * cellSize;
         bool dark = (r + c) % 2 == 1;
         
-        // Fill square
-        if (dark) {
-            display.fillRect(x, y, cellSize, cellSize, GxEPD_BLACK);
+        // Background
+        if (settings.boardStyle == STYLE_HIGH_CONTRAST) {
+            if (dark) {
+                display.fillRect(x, y, cellSize, cellSize, GxEPD_BLACK);
+            } else {
+                display.fillRect(x, y, cellSize, cellSize, GxEPD_WHITE);
+            }
         } else {
-            display.fillRect(x, y, cellSize, cellSize, GxEPD_WHITE);
-            display.drawRect(x, y, cellSize, cellSize, GxEPD_BLACK);
+            // Classic - dithered gray
+            if (dark) {
+                for (int py = 0; py < cellSize; py++) {
+                    for (int px = 0; px < cellSize; px++) {
+                        if ((px + py) % 2 == 0) {
+                            display.drawPixel(x + px, y + py, GxEPD_BLACK);
+                        }
+                    }
+                }
+            } else {
+                display.fillRect(x, y, cellSize, cellSize, GxEPD_WHITE);
+            }
         }
         
-        // Last move highlight (corner brackets)
-        if (lastMove.valid() && 
-            ((r == lastMove.fr && c == lastMove.fc) || (r == lastMove.tr && c == lastMove.tc))) {
-            uint16_t col = dark ? GxEPD_WHITE : GxEPD_BLACK;
-            int m = 2, len = cellSize / 4;
-            // Corners
-            display.drawFastHLine(x + m, y + m, len, col);
-            display.drawFastVLine(x + m, y + m, len, col);
-            display.drawFastHLine(x + cellSize - m - len, y + m, len, col);
-            display.drawFastVLine(x + cellSize - m - 1, y + m, len, col);
-            display.drawFastHLine(x + m, y + cellSize - m - 1, len, col);
-            display.drawFastVLine(x + m, y + cellSize - m - len, len, col);
-            display.drawFastHLine(x + cellSize - m - len, y + cellSize - m - 1, len, col);
-            display.drawFastVLine(x + cellSize - m - 1, y + cellSize - m - len, len, col);
+        // Last move highlight
+        if (settings.highlightLastMove && lastMove.valid()) {
+            if ((r == lastMove.fr && c == lastMove.fc) || (r == lastMove.tr && c == lastMove.tc)) {
+                uint16_t col = dark ? GxEPD_WHITE : GxEPD_BLACK;
+                int m = 2, len = cellSize / 4;
+                display.drawFastHLine(x + m, y + m, len, col);
+                display.drawFastVLine(x + m, y + m, len, col);
+                display.drawFastHLine(x + cellSize - m - len, y + m, len, col);
+                display.drawFastVLine(x + cellSize - m - 1, y + m, len, col);
+                display.drawFastHLine(x + m, y + cellSize - m - 1, len, col);
+                display.drawFastVLine(x + m, y + cellSize - m - len, len, col);
+                display.drawFastHLine(x + cellSize - m - len, y + cellSize - m - 1, len, col);
+                display.drawFastVLine(x + cellSize - m - 1, y + cellSize - m - len, len, col);
+            }
         }
         
-        // Selection highlight (thick border)
+        // Selection
         if (hasSel && r == selR && c == selC) {
             uint16_t col = dark ? GxEPD_WHITE : GxEPD_BLACK;
             for (int i = 2; i <= 4; i++) {
@@ -891,41 +1473,48 @@ public:
         }
         
         // Valid move indicator
-        if (validMoves[r][c]) {
+        if (settings.showLegalMoves && validMoves[r][c]) {
             int cx = x + cellSize / 2;
             int cy = y + cellSize / 2;
             int dotR = max(4, cellSize / 8);
             uint16_t col = dark ? GxEPD_WHITE : GxEPD_BLACK;
             
             if (board[r][c] != EMPTY) {
-                // Capture - ring
                 display.drawCircle(cx, cy, dotR + 2, col);
                 display.drawCircle(cx, cy, dotR + 3, col);
             } else {
-                // Move - dot
                 display.fillCircle(cx, cy, dotR, col);
             }
         }
         
-        // Draw piece
+        // Piece (skip if animating from this square)
         int8_t piece = board[r][c];
         if (piece != EMPTY) {
-            drawPiece(x, y, piece, dark);
+            if (!(animating && r == lastMove.tr && c == lastMove.tc && animFrame < ANIM_FRAMES)) {
+                drawPiece(x, y, piece, dark, false);  // Never flip pieces
+            }
         }
     }
     
     void drawCursor() {
-        int x = boardX + curC * cellSize;
-        int y = boardY + curR * cellSize;
+        // Convert board coordinates to display coordinates
+        int dc = displayCol(curC);
+        int dr = displayRow(curR);
+        int x = boardX + dc * cellSize;
+        int y = boardY + dr * cellSize;
         
-        // Double ring cursor (visible on both dark and light)
+        display.drawRect(x - 3, y - 3, cellSize + 6, cellSize + 6, GxEPD_BLACK);
         display.drawRect(x - 2, y - 2, cellSize + 4, cellSize + 4, GxEPD_WHITE);
         display.drawRect(x - 1, y - 1, cellSize + 2, cellSize + 2, GxEPD_BLACK);
-        display.drawRect(x, y, cellSize, cellSize, GxEPD_BLACK);
-        display.drawRect(x - 3, y - 3, cellSize + 6, cellSize + 6, GxEPD_BLACK);
     }
     
-    void drawPiece(int x, int y, int8_t piece, bool onDark) {
+    void drawPiece(int x, int y, int8_t piece, bool onDark, bool flipVertical = false) {
+        // Try to draw from BMP file first
+        if (drawPieceBMP(x, y, piece, cellSize, onDark, flipVertical)) {
+            return;  // BMP loaded successfully
+        }
+        
+        // Fall back to embedded bitmap
         bool isWhite = piece > 0;
         int type = abs(piece);
         if (type < 1 || type > 6) return;
@@ -933,48 +1522,65 @@ public:
         const uint8_t* bitmap = PIECE_BITMAPS[type];
         if (!bitmap) return;
         
-        // Scale bitmap to fit cell
         int bmpSize = 16;
-        int scale = (cellSize - 8) / bmpSize;
-        if (scale < 1) scale = 1;
-        if (scale > 3) scale = 3;
+        int scale = (cellSize - 6) / bmpSize;
+        scale = constrain(scale, 1, 2);
         
         int pieceW = bmpSize * scale;
-        int pieceH = bmpSize * scale;
         int px = x + (cellSize - pieceW) / 2;
-        int py = y + (cellSize - pieceH) / 2;
+        int py = y + (cellSize - pieceW) / 2;
+        
+        // WHITE PIECES: Black outline + white fill (newspaper chess diagram style)
+        // BLACK PIECES: Solid black (with white outline on dark squares for visibility)
         
         if (isWhite) {
-            // WHITE PIECES: solid fill with outline
-            // First pass: draw black outline
+            // STEP 1: Draw black outline (the full piece shape)
             for (int by = 0; by < bmpSize; by++) {
-                uint16_t row = (pgm_read_byte(&bitmap[by * 2]) << 8) | pgm_read_byte(&bitmap[by * 2 + 1]);
+                int srcRow = flipVertical ? (bmpSize - 1 - by) : by;
+                uint16_t row = pgm_read_byte(&bitmap[srcRow * 2]) << 8 | pgm_read_byte(&bitmap[srcRow * 2 + 1]);
                 for (int bx = 0; bx < bmpSize; bx++) {
-                    bool bit = (row >> (15 - bx)) & 1;
-                    if (bit) {
-                        uint16_t color = onDark ? GxEPD_WHITE : GxEPD_BLACK;
+                    if (row & (0x8000 >> bx)) {
                         for (int sy = 0; sy < scale; sy++) {
                             for (int sx = 0; sx < scale; sx++) {
-                                display.drawPixel(px + bx * scale + sx, py + by * scale + sy, color);
+                                display.drawPixel(px + bx * scale + sx, py + by * scale + sy, GxEPD_BLACK);
                             }
                         }
                     }
                 }
             }
             
-            // Second pass: fill interior with white (on light squares)
-            if (!onDark) {
-                for (int by = 1; by < bmpSize - 1; by++) {
-                    uint16_t row = (pgm_read_byte(&bitmap[by * 2]) << 8) | pgm_read_byte(&bitmap[by * 2 + 1]);
-                    for (int bx = 1; bx < bmpSize - 1; bx++) {
-                        bool bit = (row >> (15 - bx)) & 1;
-                        bool above = ((pgm_read_byte(&bitmap[(by-1) * 2]) << 8) | pgm_read_byte(&bitmap[(by-1) * 2 + 1])) >> (15 - bx) & 1;
-                        bool below = ((pgm_read_byte(&bitmap[(by+1) * 2]) << 8) | pgm_read_byte(&bitmap[(by+1) * 2 + 1])) >> (15 - bx) & 1;
-                        bool left = (row >> (15 - bx + 1)) & 1;
-                        bool right = (row >> (15 - bx - 1)) & 1;
-                        
-                        // Fill interior (surrounded by set bits)
-                        if (bit && above && below && left && right) {
+            // STEP 2: Fill interior with white
+            for (int by = 1; by < bmpSize - 1; by++) {
+                int srcRow = flipVertical ? (bmpSize - 1 - by) : by;
+                int srcRowA = flipVertical ? (bmpSize - by) : (by - 1);
+                int srcRowB = flipVertical ? (bmpSize - 2 - by) : (by + 1);
+                uint16_t row = pgm_read_byte(&bitmap[srcRow * 2]) << 8 | pgm_read_byte(&bitmap[srcRow * 2 + 1]);
+                uint16_t rowA = pgm_read_byte(&bitmap[srcRowA * 2]) << 8 | pgm_read_byte(&bitmap[srcRowA * 2 + 1]);
+                uint16_t rowB = pgm_read_byte(&bitmap[srcRowB * 2]) << 8 | pgm_read_byte(&bitmap[srcRowB * 2 + 1]);
+                for (int bx = 1; bx < bmpSize - 1; bx++) {
+                    bool curr = row & (0x8000 >> bx);
+                    bool above = rowA & (0x8000 >> bx);
+                    bool below = rowB & (0x8000 >> bx);
+                    bool left = row & (0x8000 >> (bx - 1));
+                    bool right = row & (0x8000 >> (bx + 1));
+                    if (curr && above && below && left && right) {
+                        for (int sy = 0; sy < scale; sy++) {
+                            for (int sx = 0; sx < scale; sx++) {
+                                display.drawPixel(px + bx * scale + sx, py + by * scale + sy, GxEPD_WHITE);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // BLACK PIECES
+            if (onDark) {
+                // On dark squares: draw white outline first
+                for (int by = 0; by < bmpSize; by++) {
+                    int srcRow = flipVertical ? (bmpSize - 1 - by) : by;
+                    uint16_t row = pgm_read_byte(&bitmap[srcRow * 2]) << 8 | pgm_read_byte(&bitmap[srcRow * 2 + 1]);
+                    for (int bx = 0; bx < bmpSize; bx++) {
+                        if (row & (0x8000 >> bx)) {
                             for (int sy = 0; sy < scale; sy++) {
                                 for (int sx = 0; sx < scale; sx++) {
                                     display.drawPixel(px + bx * scale + sx, py + by * scale + sy, GxEPD_WHITE);
@@ -983,39 +1589,39 @@ public:
                         }
                     }
                 }
-            }
-        } else {
-            // BLACK PIECES: dithered/stippled pattern for "gray" appearance
-            for (int by = 0; by < bmpSize; by++) {
-                uint16_t row = (pgm_read_byte(&bitmap[by * 2]) << 8) | pgm_read_byte(&bitmap[by * 2 + 1]);
-                for (int bx = 0; bx < bmpSize; bx++) {
-                    bool bit = (row >> (15 - bx)) & 1;
-                    if (bit) {
-                        // Check if this is an edge pixel (for solid outline)
-                        bool above = (by > 0) ? ((pgm_read_byte(&bitmap[(by-1) * 2]) << 8) | pgm_read_byte(&bitmap[(by-1) * 2 + 1])) >> (15 - bx) & 1 : false;
-                        bool below = (by < bmpSize-1) ? ((pgm_read_byte(&bitmap[(by+1) * 2]) << 8) | pgm_read_byte(&bitmap[(by+1) * 2 + 1])) >> (15 - bx) & 1 : false;
-                        bool left = (bx > 0) ? (row >> (15 - bx + 1)) & 1 : false;
-                        bool right = (bx < bmpSize-1) ? (row >> (15 - bx - 1)) & 1 : false;
-                        bool isEdge = !above || !below || !left || !right;
-                        
-                        for (int sy = 0; sy < scale; sy++) {
-                            for (int sx = 0; sx < scale; sx++) {
-                                int screenX = px + bx * scale + sx;
-                                int screenY = py + by * scale + sy;
-                                
-                                if (isEdge) {
-                                    // Solid outline - contrasting color
-                                    display.drawPixel(screenX, screenY, onDark ? GxEPD_WHITE : GxEPD_BLACK);
-                                } else {
-                                    // Interior: checkerboard dither pattern for "gray"
-                                    bool dither = ((screenX + screenY) % 2 == 0);
-                                    if (onDark) {
-                                        // On dark square: white/dark checkerboard
-                                        display.drawPixel(screenX, screenY, dither ? GxEPD_WHITE : GxEPD_BLACK);
-                                    } else {
-                                        // On light square: black/white checkerboard
-                                        display.drawPixel(screenX, screenY, dither ? GxEPD_BLACK : GxEPD_WHITE);
-                                    }
+                // Then fill interior with black
+                for (int by = 1; by < bmpSize - 1; by++) {
+                    int srcRow = flipVertical ? (bmpSize - 1 - by) : by;
+                    int srcRowA = flipVertical ? (bmpSize - by) : (by - 1);
+                    int srcRowB = flipVertical ? (bmpSize - 2 - by) : (by + 1);
+                    uint16_t row = pgm_read_byte(&bitmap[srcRow * 2]) << 8 | pgm_read_byte(&bitmap[srcRow * 2 + 1]);
+                    uint16_t rowA = pgm_read_byte(&bitmap[srcRowA * 2]) << 8 | pgm_read_byte(&bitmap[srcRowA * 2 + 1]);
+                    uint16_t rowB = pgm_read_byte(&bitmap[srcRowB * 2]) << 8 | pgm_read_byte(&bitmap[srcRowB * 2 + 1]);
+                    for (int bx = 1; bx < bmpSize - 1; bx++) {
+                        bool curr = row & (0x8000 >> bx);
+                        bool above = rowA & (0x8000 >> bx);
+                        bool below = rowB & (0x8000 >> bx);
+                        bool left = row & (0x8000 >> (bx - 1));
+                        bool right = row & (0x8000 >> (bx + 1));
+                        if (curr && above && below && left && right) {
+                            for (int sy = 0; sy < scale; sy++) {
+                                for (int sx = 0; sx < scale; sx++) {
+                                    display.drawPixel(px + bx * scale + sx, py + by * scale + sy, GxEPD_BLACK);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // On light squares: solid black
+                for (int by = 0; by < bmpSize; by++) {
+                    int srcRow = flipVertical ? (bmpSize - 1 - by) : by;
+                    uint16_t row = pgm_read_byte(&bitmap[srcRow * 2]) << 8 | pgm_read_byte(&bitmap[srcRow * 2 + 1]);
+                    for (int bx = 0; bx < bmpSize; bx++) {
+                        if (row & (0x8000 >> bx)) {
+                            for (int sy = 0; sy < scale; sy++) {
+                                for (int sx = 0; sx < scale; sx++) {
+                                    display.drawPixel(px + bx * scale + sx, py + by * scale + sy, GxEPD_BLACK);
                                 }
                             }
                         }
@@ -1025,224 +1631,428 @@ public:
         }
     }
     
-    // =========================================================================
-    // Move Generation
-    // =========================================================================
-    void calcValidMoves(int r, int c) {
-        memset(validMoves, 0, sizeof(validMoves));
-        
-        int8_t piece = board[r][c];
-        if (piece == EMPTY) return;
-        
-        bool isWhite = piece > 0;
+    void drawPieceLarge(int x, int y, int8_t piece, bool inverted) {
         int type = abs(piece);
+        if (type < 1 || type > 6) return;
         
-        switch (type) {
-            case 1: genPawnMoves(r, c, isWhite); break;
-            case 2: genSliding(r, c, isWhite, true, false); break;
-            case 3: genKnightMoves(r, c, isWhite); break;
-            case 4: genSliding(r, c, isWhite, false, true); break;
-            case 5: genSliding(r, c, isWhite, true, true); break;
-            case 6: genKingMoves(r, c, isWhite); break;
-        }
+        const uint8_t* bitmap = PIECE_BITMAPS[type];
+        if (!bitmap) return;
         
-        filterLegalMoves(r, c, isWhite);
-    }
-    
-    void genPawnMoves(int r, int c, bool isWhite) {
-        int dir = isWhite ? -1 : 1;
-        int start = isWhite ? 6 : 1;
+        uint16_t fg = inverted ? GxEPD_WHITE : GxEPD_BLACK;
         
-        // Forward
-        int nr = r + dir;
-        if (nr >= 0 && nr < 8 && board[nr][c] == EMPTY) {
-            validMoves[nr][c] = true;
-            if (r == start) {
-                int nr2 = r + dir * 2;
-                if (board[nr2][c] == EMPTY) validMoves[nr2][c] = true;
-            }
-        }
-        
-        // Captures
-        for (int dc = -1; dc <= 1; dc += 2) {
-            int nc = c + dc;
-            if (nc < 0 || nc > 7 || nr < 0 || nr > 7) continue;
-            int8_t target = board[nr][nc];
-            if (target != EMPTY && (target > 0) != isWhite) {
-                validMoves[nr][nc] = true;
-            }
-            // En passant
-            if (nc == epCol && r == (isWhite ? 3 : 4)) {
-                validMoves[nr][nc] = true;
-            }
-        }
-    }
-    
-    void genKnightMoves(int r, int c, bool isWhite) {
-        static const int8_t jumps[8][2] = {{-2,-1},{-2,1},{-1,-2},{-1,2},{1,-2},{1,2},{2,-1},{2,1}};
-        for (int i = 0; i < 8; i++) {
-            int nr = r + jumps[i][0];
-            int nc = c + jumps[i][1];
-            if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
-            int8_t target = board[nr][nc];
-            if (target == EMPTY || (target > 0) != isWhite) {
-                validMoves[nr][nc] = true;
-            }
-        }
-    }
-    
-    void genSliding(int r, int c, bool isWhite, bool rook, bool bishop) {
-        static const int8_t rookDirs[4][2] = {{-1,0},{1,0},{0,-1},{0,1}};
-        static const int8_t bishopDirs[4][2] = {{-1,-1},{-1,1},{1,-1},{1,1}};
-        
-        auto genRay = [&](int dr, int dc) {
-            int nr = r + dr, nc = c + dc;
-            while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
-                int8_t target = board[nr][nc];
-                if (target == EMPTY) {
-                    validMoves[nr][nc] = true;
-                } else {
-                    if ((target > 0) != isWhite) validMoves[nr][nc] = true;
-                    break;
+        for (int by = 0; by < 16; by++) {
+            uint16_t row = pgm_read_byte(&bitmap[by * 2]) << 8 | pgm_read_byte(&bitmap[by * 2 + 1]);
+            for (int bx = 0; bx < 16; bx++) {
+                if (row & (0x8000 >> bx)) {
+                    display.drawPixel(x + bx * 2, y + by * 2, fg);
+                    display.drawPixel(x + bx * 2 + 1, y + by * 2, fg);
+                    display.drawPixel(x + bx * 2, y + by * 2 + 1, fg);
+                    display.drawPixel(x + bx * 2 + 1, y + by * 2 + 1, fg);
                 }
-                nr += dr; nc += dc;
             }
+        }
+    }
+    
+    void drawCapturedPieces(int x, int y, int8_t* captured, int count) {
+        int px = x;
+        for (int i = 0; i < count && i < 16; i++) {
+            int type = abs(captured[i]);
+            if (type < 1 || type > 6) continue;
+            
+            const uint8_t* bitmap = PIECE_BITMAPS[type];
+            if (!bitmap) continue;
+            
+            // Draw small (8x8)
+            for (int by = 0; by < 16; by += 2) {
+                uint16_t row = pgm_read_byte(&bitmap[by * 2]) << 8 | pgm_read_byte(&bitmap[by * 2 + 1]);
+                for (int bx = 0; bx < 16; bx += 2) {
+                    if (row & (0x8000 >> bx)) {
+                        display.drawPixel(px + bx/2, y + by/2, GxEPD_BLACK);
+                    }
+                }
+            }
+            px += 12;
+        }
+    }
+    
+    void drawMiniBoard(int x, int y, int size, int8_t (*brd)[8]) {
+        int cs = size / 8;
+        
+        int8_t startBoard[8][8] = {
+            {B_ROOK, B_KNIGHT, B_BISHOP, B_QUEEN, B_KING, B_BISHOP, B_KNIGHT, B_ROOK},
+            {B_PAWN, B_PAWN, B_PAWN, B_PAWN, B_PAWN, B_PAWN, B_PAWN, B_PAWN},
+            {0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0},
+            {W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN},
+            {W_ROOK, W_KNIGHT, W_BISHOP, W_QUEEN, W_KING, W_BISHOP, W_KNIGHT, W_ROOK}
         };
         
-        if (rook) for (int i = 0; i < 4; i++) genRay(rookDirs[i][0], rookDirs[i][1]);
-        if (bishop) for (int i = 0; i < 4; i++) genRay(bishopDirs[i][0], bishopDirs[i][1]);
-    }
-    
-    void genKingMoves(int r, int c, bool isWhite) {
-        for (int dr = -1; dr <= 1; dr++) {
-            for (int dc = -1; dc <= 1; dc++) {
-                if (dr == 0 && dc == 0) continue;
-                int nr = r + dr, nc = c + dc;
-                if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
-                int8_t target = board[nr][nc];
-                if (target == EMPTY || (target > 0) != isWhite) {
-                    validMoves[nr][nc] = true;
+        int8_t (*useBoard)[8] = brd ? brd : startBoard;
+        
+        display.drawRect(x, y, size, size, GxEPD_BLACK);
+        
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 8; c++) {
+                int sx = x + c * cs;
+                int sy = y + r * cs;
+                bool dark = (r + c) % 2 == 1;
+                
+                if (dark) {
+                    for (int py = 0; py < cs; py++) {
+                        for (int px = 0; px < cs; px++) {
+                            if ((px + py) % 2 == 0) {
+                                display.drawPixel(sx + px, sy + py, GxEPD_BLACK);
+                            }
+                        }
+                    }
+                }
+                
+                int8_t piece = useBoard[r][c];
+                if (piece != 0) {
+                    int type = abs(piece);
+                    const uint8_t* bitmap = PIECE_BITMAPS[type];
+                    if (bitmap) {
+                        int ppx = sx + (cs - 8) / 2;
+                        int ppy = sy + (cs - 8) / 2;
+                        for (int by = 0; by < 16; by += 2) {
+                            uint16_t row = pgm_read_byte(&bitmap[by * 2]) << 8 | pgm_read_byte(&bitmap[by * 2 + 1]);
+                            for (int bx = 0; bx < 16; bx += 2) {
+                                if (row & (0x8000 >> bx)) {
+                                    display.drawPixel(ppx + bx/2, ppy + by/2, GxEPD_BLACK);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+    
+    // ==========================================================================
+    // Drawing - In-Game Menu
+    // ==========================================================================
+    void drawInGameMenu() {
+        int dialogW = 300;
+        int dialogH = (settings.allowUndo && canUndo) ? 280 : 230;
+        int dialogX = (screenW - dialogW) / 2;
+        int dialogY = (screenH - dialogH) / 2;
         
-        // Castling
-        if (isWhite && r == 7 && c == 4 && !isAttacked(7, 4, false)) {
-            if (wCastleK && board[7][5] == EMPTY && board[7][6] == EMPTY &&
-                !isAttacked(7, 5, false) && !isAttacked(7, 6, false)) {
-                validMoves[7][6] = true;
+        display.fillRect(dialogX, dialogY, dialogW, dialogH, GxEPD_WHITE);
+        for (int i = 0; i < 3; i++) {
+            display.drawRect(dialogX + i, dialogY + i, dialogW - i*2, dialogH - i*2, GxEPD_BLACK);
+        }
+        
+        display.setFont(&FreeSansBold12pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        centerText("Game Menu", dialogX + dialogW / 2, dialogY + 36);
+        
+        const char* allItems[] = { "Resume Game", "Undo Last Move", "Resign", "Save & Exit" };
+        int itemIdx[4];
+        int itemCount;
+        
+        if (settings.allowUndo && canUndo) {
+            itemIdx[0] = 0; itemIdx[1] = 1; itemIdx[2] = 2; itemIdx[3] = 3;
+            itemCount = 4;
+        } else {
+            itemIdx[0] = 0; itemIdx[1] = 2; itemIdx[2] = 3;
+            itemCount = 3;
+        }
+        
+        int itemY = dialogY + 55;
+        int itemH = 44;
+        
+        for (int i = 0; i < itemCount; i++) {
+            int iy = itemY + i * (itemH + 8);
+            bool sel = (menuCursor == i);
+            
+            if (sel) {
+                display.fillRoundRect(dialogX + 16, iy, dialogW - 32, itemH, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(dialogX + 16, iy, dialogW - 32, itemH, 6, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
             }
-            if (wCastleQ && board[7][3] == EMPTY && board[7][2] == EMPTY && board[7][1] == EMPTY &&
-                !isAttacked(7, 3, false) && !isAttacked(7, 2, false)) {
-                validMoves[7][2] = true;
-            }
-        } else if (!isWhite && r == 0 && c == 4 && !isAttacked(0, 4, true)) {
-            if (bCastleK && board[0][5] == EMPTY && board[0][6] == EMPTY &&
-                !isAttacked(0, 5, true) && !isAttacked(0, 6, true)) {
-                validMoves[0][6] = true;
-            }
-            if (bCastleQ && board[0][3] == EMPTY && board[0][2] == EMPTY && board[0][1] == EMPTY &&
-                !isAttacked(0, 3, true) && !isAttacked(0, 2, true)) {
-                validMoves[0][2] = true;
-            }
+            
+            display.setFont(&FreeSansBold9pt7b);
+            centerText(allItems[itemIdx[i]], dialogX + dialogW / 2, iy + 28);
         }
     }
     
-    void filterLegalMoves(int fr, int fc, bool isWhite) {
-        for (int r = 0; r < 8; r++) {
-            for (int c = 0; c < 8; c++) {
-                if (!validMoves[r][c]) continue;
-                
-                // Try move
-                int8_t saved = board[r][c];
-                int8_t piece = board[fr][fc];
-                board[r][c] = piece;
-                board[fr][fc] = EMPTY;
-                
-                if (kingInCheck(isWhite)) validMoves[r][c] = false;
-                
-                // Undo
-                board[fr][fc] = piece;
-                board[r][c] = saved;
-            }
+    // ==========================================================================
+    // Drawing - Settings Screen
+    // ==========================================================================
+    void drawSettingsScreen() {
+        display.fillRect(0, 0, screenW, 48, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold12pt7b);
+        centerText("Settings", screenW / 2, 34);
+        
+        int y = 60;
+        int itemH = 50;
+        
+        // Difficulty
+        drawSettingsItem(y, 0, "Difficulty", getDiffName(settings.difficulty));
+        y += itemH + 6;
+        
+        // Board Style
+        drawSettingsItem(y, 1, "Board Style", settings.boardStyle == STYLE_CLASSIC ? "Classic" : "High Contrast");
+        y += itemH + 6;
+        
+        // Toggles
+        drawSettingsToggle(y, 2, "Allow Undo", settings.allowUndo);
+        y += itemH + 6;
+        
+        drawSettingsToggle(y, 3, "Show Legal Moves", settings.showLegalMoves);
+        y += itemH + 6;
+        
+        drawSettingsToggle(y, 4, "Animate Pieces", settings.animatePieces);
+        y += itemH + 6;
+        
+        drawSettingsToggle(y, 5, "Highlight Last Move", settings.highlightLastMove);
+        y += itemH + 16;
+        
+        // Game History
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(20, y);
+        display.print("GAME HISTORY");
+        y += 20;
+        
+        int boxW = (screenW - 60) / 3;
+        const char* labels[] = { "Wins", "Losses", "Draws" };
+        int values[] = { stats.wins, stats.losses, stats.draws };
+        
+        for (int i = 0; i < 3; i++) {
+            int bx = 20 + i * (boxW + 10);
+            display.drawRoundRect(bx, y, boxW, 60, 6, GxEPD_BLACK);
+            
+            display.setFont(&FreeSansBold12pt7b);
+            char numStr[8];
+            snprintf(numStr, sizeof(numStr), "%d", values[i]);
+            centerText(numStr, bx + boxW / 2, y + 30);
+            
+            display.setFont(&FreeSans9pt7b);
+            centerText(labels[i], bx + boxW / 2, y + 50);
         }
     }
     
-    // =========================================================================
-    // Check Detection
-    // =========================================================================
-    bool kingInCheck(bool whiteKing) {
-        int8_t king = whiteKing ? W_KING : B_KING;
-        for (int r = 0; r < 8; r++)
-            for (int c = 0; c < 8; c++)
-                if (board[r][c] == king)
-                    return isAttacked(r, c, !whiteKing);
-        return false;
-    }
-    
-    bool isAttacked(int tr, int tc, bool byWhite) {
-        for (int r = 0; r < 8; r++) {
-            for (int c = 0; c < 8; c++) {
-                int8_t piece = board[r][c];
-                if (piece == EMPTY || (piece > 0) != byWhite) continue;
-                if (canAttack(r, c, tr, tc)) return true;
-            }
+    void drawSettingsItem(int y, int index, const char* label, const char* value) {
+        bool sel = (menuCursor == index);
+        
+        display.drawRoundRect(20, y, screenW - 40, 50, 6, GxEPD_BLACK);
+        if (sel) {
+            display.drawRoundRect(18, y - 2, screenW - 36, 54, 8, GxEPD_BLACK);
+            display.drawRoundRect(17, y - 3, screenW - 34, 56, 9, GxEPD_BLACK);
         }
-        return false;
+        
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(35, y + 32);
+        display.print(label);
+        
+        int16_t tx, ty; uint16_t tw, th;
+        display.getTextBounds(value, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor(screenW - 60 - tw, y + 32);
+        display.print(value);
+        display.print(" <>");
     }
     
-    bool canAttack(int fr, int fc, int tr, int tc) {
-        int8_t piece = board[fr][fc];
+    void drawSettingsToggle(int y, int index, const char* label, bool enabled) {
+        bool sel = (menuCursor == index);
+        
+        display.drawRoundRect(20, y, screenW - 40, 50, 6, GxEPD_BLACK);
+        if (sel) {
+            display.drawRoundRect(18, y - 2, screenW - 36, 54, 8, GxEPD_BLACK);
+            display.drawRoundRect(17, y - 3, screenW - 34, 56, 9, GxEPD_BLACK);
+        }
+        
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(35, y + 32);
+        display.print(label);
+        
+        int sw = 44, sh = 24;
+        int sx = screenW - 70;
+        int sy = y + 13;
+        
+        if (enabled) {
+            display.fillRoundRect(sx, sy, sw, sh, sh/2, GxEPD_BLACK);
+            display.fillCircle(sx + sw - sh/2, sy + sh/2, 8, GxEPD_WHITE);
+        } else {
+            display.drawRoundRect(sx, sy, sw, sh, sh/2, GxEPD_BLACK);
+            display.fillCircle(sx + sh/2, sy + sh/2, 8, GxEPD_BLACK);
+        }
+    }
+    
+    // ==========================================================================
+    // Drawing - Game Over Screen
+    // ==========================================================================
+    void drawGameOverScreen() {
+        display.fillRect(0, 0, screenW, 48, GxEPD_BLACK);
+        display.setTextColor(GxEPD_WHITE);
+        display.setFont(&FreeSansBold12pt7b);
+        centerText("Game Over", screenW / 2, 34);
+        
+        // Result
+        display.fillRect(0, 56, screenW, 80, GxEPD_WHITE);
+        display.drawFastHLine(0, 56, screenW, GxEPD_BLACK);
+        display.drawFastHLine(0, 135, screenW, GxEPD_BLACK);
+        
+        const char* result;
+        const char* subtext;
+        
+        if (checkmate) {
+            result = (whiteTurn == playerIsWhite) ? "You Lose" : "You Win!";
+            subtext = "Checkmate";
+        } else if (stalemate) {
+            result = "Draw";
+            subtext = "Stalemate";
+        } else if (resigned) {
+            result = "You Lose";
+            subtext = "Resigned";
+        } else {
+            result = "Game Over";
+            subtext = "";
+        }
+        
+        display.setFont(&FreeSansBold12pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        centerText(result, screenW / 2, 95);
+        
+        display.setFont(&FreeSans9pt7b);
+        centerText(subtext, screenW / 2, 120);
+        
+        // Mini board
+        int boardSize = 200;
+        int bx = (screenW - boardSize) / 2;
+        int by = 150;
+        drawMiniBoard(bx, by, boardSize, board);
+        
+        // Stats
+        int statsY = by + boardSize + 16;
+        int statW = (screenW - 60) / 3;
+        
+        display.setFont(&FreeSansBold9pt7b);
+        
+        char val[16];
+        snprintf(val, sizeof(val), "%d", moveNum);
+        drawStatBox(20, statsY, statW, "Moves", val);
+        
+        snprintf(val, sizeof(val), "%d-%d", stats.wins, stats.losses);
+        drawStatBox(20 + statW + 10, statsY, statW, "Record", val);
+        
+        snprintf(val, sizeof(val), "%d", stats.gamesPlayed);
+        drawStatBox(20 + (statW + 10) * 2, statsY, statW, "Games", val);
+        
+        // Buttons
+        int btnY = screenH - 70;
+        int btnW = (screenW - 60) / 2;
+        
+        for (int i = 0; i < 2; i++) {
+            int bx = 20 + i * (btnW + 20);
+            bool sel = (menuCursor == i);
+            
+            if (sel) {
+                display.fillRoundRect(bx, btnY, btnW, 50, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_WHITE);
+            } else {
+                display.drawRoundRect(bx, btnY, btnW, 50, 8, GxEPD_BLACK);
+                display.setTextColor(GxEPD_BLACK);
+            }
+            
+            display.setFont(&FreeSansBold9pt7b);
+            centerText(i == 0 ? "Play Again" : "Exit", bx + btnW / 2, btnY + 32);
+        }
+    }
+    
+    void drawStatBox(int x, int y, int w, const char* label, const char* value) {
+        display.drawRoundRect(x, y, w, 50, 6, GxEPD_BLACK);
+        display.setTextColor(GxEPD_BLACK);
+        
+        display.setFont(&FreeSansBold9pt7b);
+        centerText(value, x + w / 2, y + 24);
+        
+        display.setFont(&FreeSans9pt7b);
+        centerText(label, x + w / 2, y + 42);
+    }
+    
+    // ==========================================================================
+    // Helpers
+    // ==========================================================================
+    void centerText(const char* text, int x, int y) {
+        int16_t tx, ty; uint16_t tw, th;
+        display.getTextBounds(text, 0, 0, &tx, &ty, &tw, &th);
+        display.setCursor(x - tw / 2, y);
+        display.print(text);
+    }
+    
+    const char* getDiffName(int diff) {
+        switch (diff) {
+            case DIFF_BEGINNER: return "Beginner";
+            case DIFF_INTERMEDIATE: return "Intermediate";
+            case DIFF_ADVANCED: return "Advanced";
+            default: return "Unknown";
+        }
+    }
+    
+    // ==========================================================================
+    // Move Generation & Notation
+    // ==========================================================================
+    void generateNotation(Move& move, char* buf) {
+        int8_t piece = move.movedPiece;
         int type = abs(piece);
-        int dr = tr - fr, dc = tc - fc;
-        int adr = abs(dr), adc = abs(dc);
         
-        switch (type) {
-            case 1: return adc == 1 && dr == ((piece > 0) ? -1 : 1);
-            case 2: return (dr == 0 || dc == 0) && pathClear(fr, fc, tr, tc);
-            case 3: return (adr == 2 && adc == 1) || (adr == 1 && adc == 2);
-            case 4: return adr == adc && pathClear(fr, fc, tr, tc);
-            case 5: return ((dr == 0 || dc == 0) || adr == adc) && pathClear(fr, fc, tr, tc);
-            case 6: return adr <= 1 && adc <= 1;
+        if (move.special == 1) { strcpy(buf, "O-O"); return; }
+        if (move.special == 2) { strcpy(buf, "O-O-O"); return; }
+        
+        int idx = 0;
+        if (type == 2) buf[idx++] = 'R';
+        else if (type == 3) buf[idx++] = 'N';
+        else if (type == 4) buf[idx++] = 'B';
+        else if (type == 5) buf[idx++] = 'Q';
+        else if (type == 6) buf[idx++] = 'K';
+        
+        if (move.captured != 0 || move.special == 3) {
+            if (type == 1) buf[idx++] = 'a' + move.fc;
+            buf[idx++] = 'x';
         }
-        return false;
+        
+        buf[idx++] = 'a' + move.tc;
+        buf[idx++] = '8' - move.tr;
+        
+        if (move.special == 4) {
+            buf[idx++] = '=';
+            buf[idx++] = 'Q';
+        }
+        
+        buf[idx] = '\0';
     }
     
-    bool pathClear(int fr, int fc, int tr, int tc) {
-        int dr = (tr > fr) ? 1 : (tr < fr) ? -1 : 0;
-        int dc = (tc > fc) ? 1 : (tc < fc) ? -1 : 0;
-        int r = fr + dr, c = fc + dc;
-        while (r != tr || c != tc) {
-            if (board[r][c] != EMPTY) return false;
-            r += dr; c += dc;
-        }
-        return true;
-    }
-    
-    // =========================================================================
-    // Move Execution
-    // =========================================================================
     Move makeMove(int fr, int fc, int tr, int tc) {
         Move move(fr, fc, tr, tc);
+        move.movedPiece = board[fr][fc];
         move.captured = board[tr][tc];
         
         int8_t piece = board[fr][fc];
         int type = abs(piece);
+        bool isWhite = piece > 0;
         
-        // Detect special moves
-        if (type == 6 && fc == 4) {
-            if (tc == 6) move.special = 1;  // O-O
-            if (tc == 2) move.special = 2;  // O-O-O
+        if (type == 6 && abs(tc - fc) == 2) {
+            move.special = (tc > fc) ? 1 : 2;
+        } else if (type == 1 && tc == epCol && board[tr][tc] == EMPTY) {
+            move.special = 3;
+            move.captured = board[fr][tc];
+        } else if (type == 1 && (tr == 0 || tr == 7)) {
+            move.special = 4;
         }
-        if (type == 1) {
-            if (tc == epCol && board[tr][tc] == EMPTY) {
-                move.special = 3;  // en passant
-                move.captured = board[fr][tc];
+        
+        if (move.captured != 0) {
+            if (isWhite) {
+                if (whiteCapturedCount < 16) whiteCaptured[whiteCapturedCount++] = move.captured;
+            } else {
+                if (blackCapturedCount < 16) blackCaptured[blackCapturedCount++] = move.captured;
             }
-            if (tr == 0 || tr == 7) move.special = 4;  // promotion
         }
         
-        execMove(move);
         return move;
     }
     
@@ -1251,27 +2061,28 @@ public:
         bool isWhite = piece > 0;
         int type = abs(piece);
         
-        // Handle special moves
-        if (move.special == 1) {  // O-O
-            board[move.tr][5] = board[move.tr][7];
-            board[move.tr][7] = EMPTY;
-        } else if (move.special == 2) {  // O-O-O
-            board[move.tr][3] = board[move.tr][0];
-            board[move.tr][0] = EMPTY;
-        } else if (move.special == 3) {  // en passant
+        if (move.special == 1) {
+            board[move.fr][6] = piece;
+            board[move.fr][4] = EMPTY;
+            board[move.fr][5] = isWhite ? W_ROOK : B_ROOK;
+            board[move.fr][7] = EMPTY;
+        } else if (move.special == 2) {
+            board[move.fr][2] = piece;
+            board[move.fr][4] = EMPTY;
+            board[move.fr][3] = isWhite ? W_ROOK : B_ROOK;
+            board[move.fr][0] = EMPTY;
+        } else if (move.special == 3) {
+            board[move.tr][move.tc] = piece;
+            board[move.fr][move.fc] = EMPTY;
             board[move.fr][move.tc] = EMPTY;
+        } else {
+            board[move.tr][move.tc] = piece;
+            board[move.fr][move.fc] = EMPTY;
+            if (move.special == 4) {
+                board[move.tr][move.tc] = isWhite ? W_QUEEN : B_QUEEN;
+            }
         }
         
-        // Make move
-        board[move.tr][move.tc] = piece;
-        board[move.fr][move.fc] = EMPTY;
-        
-        // Promotion (auto-queen)
-        if (move.special == 4) {
-            board[move.tr][move.tc] = isWhite ? W_QUEEN : B_QUEEN;
-        }
-        
-        // Update castling rights
         if (type == 6) {
             if (isWhite) { wCastleK = wCastleQ = false; }
             else { bCastleK = bCastleQ = false; }
@@ -1283,7 +2094,6 @@ public:
             if (move.fr == 0 && move.fc == 0) bCastleQ = false;
         }
         
-        // Update en passant
         epCol = -1;
         if (type == 1 && abs(move.tr - move.fr) == 2) {
             epCol = move.fc;
@@ -1293,10 +2103,242 @@ public:
         if (whiteTurn) moveNum++;
     }
     
+    // ==========================================================================
+    // Move Validation
+    // ==========================================================================
+    void calcValidMoves(int r, int c) {
+        memset(validMoves, 0, sizeof(validMoves));
+        
+        int8_t piece = board[r][c];
+        if (piece == EMPTY) return;
+        
+        bool isWhite = piece > 0;
+        int type = abs(piece);
+        
+        switch (type) {
+            case 1: calcPawnMoves(r, c, isWhite); break;
+            case 2: calcSlidingMoves(r, c, true, false); break;
+            case 3: calcKnightMoves(r, c, isWhite); break;
+            case 4: calcSlidingMoves(r, c, false, true); break;
+            case 5: calcSlidingMoves(r, c, true, true); break;
+            case 6: calcKingMoves(r, c, isWhite); break;
+        }
+        
+        // Filter illegal moves
+        for (int tr = 0; tr < 8; tr++) {
+            for (int tc = 0; tc < 8; tc++) {
+                if (!validMoves[tr][tc]) continue;
+                
+                int8_t saved = board[tr][tc];
+                int8_t savedEp = EMPTY;
+                board[tr][tc] = board[r][c];
+                board[r][c] = EMPTY;
+                
+                if (type == 1 && tc == epCol && saved == EMPTY) {
+                    savedEp = board[r][tc];
+                    board[r][tc] = EMPTY;
+                }
+                
+                if (kingInCheck(isWhite)) {
+                    validMoves[tr][tc] = false;
+                }
+                
+                board[r][c] = board[tr][tc];
+                board[tr][tc] = saved;
+                if (savedEp != EMPTY) board[r][tc] = savedEp;
+            }
+        }
+    }
+    
+    void calcPawnMoves(int r, int c, bool isWhite) {
+        int dir = isWhite ? -1 : 1;
+        int startRow = isWhite ? 6 : 1;
+        
+        if (r + dir >= 0 && r + dir < 8 && board[r + dir][c] == EMPTY) {
+            validMoves[r + dir][c] = true;
+            if (r == startRow && board[r + dir * 2][c] == EMPTY) {
+                validMoves[r + dir * 2][c] = true;
+            }
+        }
+        
+        for (int dc = -1; dc <= 1; dc += 2) {
+            int nc = c + dc;
+            if (nc < 0 || nc > 7 || r + dir < 0 || r + dir > 7) continue;
+            
+            int8_t target = board[r + dir][nc];
+            if (target != EMPTY && (target > 0) != isWhite) {
+                validMoves[r + dir][nc] = true;
+            }
+            
+            if (nc == epCol && r == (isWhite ? 3 : 4)) {
+                validMoves[r + dir][nc] = true;
+            }
+        }
+    }
+    
+    void calcKnightMoves(int r, int c, bool isWhite) {
+        static const int dr[] = {-2, -2, -1, -1, 1, 1, 2, 2};
+        static const int dc[] = {-1, 1, -2, 2, -2, 2, -1, 1};
+        
+        for (int i = 0; i < 8; i++) {
+            int nr = r + dr[i];
+            int nc = c + dc[i];
+            if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+            
+            int8_t target = board[nr][nc];
+            if (target == EMPTY || (target > 0) != isWhite) {
+                validMoves[nr][nc] = true;
+            }
+        }
+    }
+    
+    void calcSlidingMoves(int r, int c, bool rook, bool bishop) {
+        static const int dr[] = {-1, 1, 0, 0, -1, -1, 1, 1};
+        static const int dc[] = {0, 0, -1, 1, -1, 1, -1, 1};
+        
+        int8_t piece = board[r][c];
+        bool isWhite = piece > 0;
+        
+        int start = rook ? 0 : 4;
+        int end = bishop ? 8 : 4;
+        
+        for (int d = start; d < end; d++) {
+            for (int dist = 1; dist < 8; dist++) {
+                int nr = r + dr[d] * dist;
+                int nc = c + dc[d] * dist;
+                if (nr < 0 || nr > 7 || nc < 0 || nc > 7) break;
+                
+                int8_t target = board[nr][nc];
+                if (target == EMPTY) {
+                    validMoves[nr][nc] = true;
+                } else {
+                    if ((target > 0) != isWhite) {
+                        validMoves[nr][nc] = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
+    void calcKingMoves(int r, int c, bool isWhite) {
+        for (int dr = -1; dr <= 1; dr++) {
+            for (int dc = -1; dc <= 1; dc++) {
+                if (dr == 0 && dc == 0) continue;
+                int nr = r + dr;
+                int nc = c + dc;
+                if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+                
+                int8_t target = board[nr][nc];
+                if (target == EMPTY || (target > 0) != isWhite) {
+                    validMoves[nr][nc] = true;
+                }
+            }
+        }
+        
+        // Castling
+        if (isWhite && r == 7 && c == 4 && !kingInCheck(true)) {
+            if (wCastleK && board[7][5] == EMPTY && board[7][6] == EMPTY &&
+                !squareAttacked(7, 5, false) && !squareAttacked(7, 6, false)) {
+                validMoves[7][6] = true;
+            }
+            if (wCastleQ && board[7][3] == EMPTY && board[7][2] == EMPTY && board[7][1] == EMPTY &&
+                !squareAttacked(7, 3, false) && !squareAttacked(7, 2, false)) {
+                validMoves[7][2] = true;
+            }
+        }
+        if (!isWhite && r == 0 && c == 4 && !kingInCheck(false)) {
+            if (bCastleK && board[0][5] == EMPTY && board[0][6] == EMPTY &&
+                !squareAttacked(0, 5, true) && !squareAttacked(0, 6, true)) {
+                validMoves[0][6] = true;
+            }
+            if (bCastleQ && board[0][3] == EMPTY && board[0][2] == EMPTY && board[0][1] == EMPTY &&
+                !squareAttacked(0, 3, true) && !squareAttacked(0, 2, true)) {
+                validMoves[0][2] = true;
+            }
+        }
+    }
+    
+    bool kingInCheck(bool whiteKing) {
+        int kr = -1, kc = -1;
+        int8_t kingPiece = whiteKing ? W_KING : B_KING;
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 8; c++) {
+                if (board[r][c] == kingPiece) {
+                    kr = r; kc = c;
+                    break;
+                }
+            }
+            if (kr >= 0) break;
+        }
+        
+        if (kr < 0) return false;
+        return squareAttacked(kr, kc, !whiteKing);
+    }
+    
+    bool squareAttacked(int r, int c, bool byWhite) {
+        int pawnDir = byWhite ? 1 : -1;
+        for (int dc = -1; dc <= 1; dc += 2) {
+            int pr = r + pawnDir;
+            int pc = c + dc;
+            if (pr >= 0 && pr < 8 && pc >= 0 && pc < 8) {
+                if (board[pr][pc] == (byWhite ? W_PAWN : B_PAWN)) return true;
+            }
+        }
+        
+        static const int kdr[] = {-2, -2, -1, -1, 1, 1, 2, 2};
+        static const int kdc[] = {-1, 1, -2, 2, -2, 2, -1, 1};
+        for (int i = 0; i < 8; i++) {
+            int nr = r + kdr[i];
+            int nc = c + kdc[i];
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                if (board[nr][nc] == (byWhite ? W_KNIGHT : B_KNIGHT)) return true;
+            }
+        }
+        
+        for (int dr = -1; dr <= 1; dr++) {
+            for (int dc = -1; dc <= 1; dc++) {
+                if (dr == 0 && dc == 0) continue;
+                int nr = r + dr;
+                int nc = c + dc;
+                if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                    if (board[nr][nc] == (byWhite ? W_KING : B_KING)) return true;
+                }
+            }
+        }
+        
+        static const int sdr[] = {-1, 1, 0, 0, -1, -1, 1, 1};
+        static const int sdc[] = {0, 0, -1, 1, -1, 1, -1, 1};
+        
+        for (int d = 0; d < 8; d++) {
+            for (int dist = 1; dist < 8; dist++) {
+                int nr = r + sdr[d] * dist;
+                int nc = c + sdc[d] * dist;
+                if (nr < 0 || nr > 7 || nc < 0 || nc > 7) break;
+                
+                int8_t piece = board[nr][nc];
+                if (piece == EMPTY) continue;
+                
+                bool isEnemy = (piece > 0) == byWhite;
+                if (!isEnemy) break;
+                
+                int type = abs(piece);
+                bool isRookDir = (d < 4);
+                
+                if (type == 5) return true;
+                if (type == 2 && isRookDir) return true;
+                if (type == 4 && !isRookDir) return true;
+                
+                break;
+            }
+        }
+        
+        return false;
+    }
+    
     void updateGameState() {
         inCheck = kingInCheck(whiteTurn);
         
-        // Check for legal moves
         bool hasLegal = false;
         for (int r = 0; r < 8 && !hasLegal; r++) {
             for (int c = 0; c < 8 && !hasLegal; c++) {
@@ -1304,9 +2346,14 @@ public:
                 if (piece == EMPTY || (piece > 0) != whiteTurn) continue;
                 
                 calcValidMoves(r, c);
-                for (int tr = 0; tr < 8 && !hasLegal; tr++)
-                    for (int tc = 0; tc < 8; tc++)
-                        if (validMoves[tr][tc]) { hasLegal = true; break; }
+                for (int tr = 0; tr < 8 && !hasLegal; tr++) {
+                    for (int tc = 0; tc < 8; tc++) {
+                        if (validMoves[tr][tc]) {
+                            hasLegal = true;
+                            break;
+                        }
+                    }
+                }
             }
         }
         
@@ -1316,23 +2363,27 @@ public:
             gameOver = true;
             checkmate = inCheck;
             stalemate = !inCheck;
-            deleteSavedGame();  // Clear save when game ends
         }
     }
     
-    // =========================================================================
-    // AI - Minimax with Alpha-Beta
-    // =========================================================================
+    // ==========================================================================
+    // AI
+    // ==========================================================================
     Move findBestMove() {
         Move best;
         int bestScore = -100000;
+        int depth = settings.difficulty;
+        int randomFactor = (depth == 1) ? 50 : (depth == 2) ? 20 : 5;
+        
+        bool aiIsWhite = !playerIsWhite;
         
         for (int r = 0; r < 8; r++) {
             for (int c = 0; c < 8; c++) {
-                if (board[r][c] >= 0) continue;  // Not black
+                int8_t piece = board[r][c];
+                if (piece == EMPTY || (piece > 0) != aiIsWhite) continue;
                 
                 bool origTurn = whiteTurn;
-                whiteTurn = false;
+                whiteTurn = aiIsWhite;
                 calcValidMoves(r, c);
                 whiteTurn = origTurn;
                 
@@ -1340,7 +2391,6 @@ public:
                     for (int tc = 0; tc < 8; tc++) {
                         if (!validMoves[tr][tc]) continue;
                         
-                        // Try move
                         int8_t saved = board[tr][tc];
                         int8_t moving = board[r][c];
                         board[tr][tc] = moving;
@@ -1352,9 +2402,9 @@ public:
                             board[r][tc] = EMPTY;
                         }
                         
-                        int score = minimax(2, -100000, 100000, true) + random(-3, 4);
+                        int score = minimax(depth - 1, -100000, 100000, false, aiIsWhite);
+                        score += random(-randomFactor, randomFactor + 1);
                         
-                        // Undo
                         board[r][c] = moving;
                         board[tr][tc] = saved;
                         if (epSaved != EMPTY) board[r][tc] = epSaved;
@@ -1362,6 +2412,7 @@ public:
                         if (score > bestScore) {
                             bestScore = score;
                             best = Move(r, c, tr, tc);
+                            best.movedPiece = moving;
                             best.captured = saved;
                         }
                     }
@@ -1373,23 +2424,25 @@ public:
         return best;
     }
     
-    int minimax(int depth, int alpha, int beta, bool maxim) {
-        if (depth == 0) return evaluate();
+    int minimax(int depth, int alpha, int beta, bool maximizing, bool aiIsWhite) {
+        if (depth == 0) return evaluate(aiIsWhite);
         
-        if (maxim) {
+        if (maximizing) {
             int maxEval = -100000;
             for (int r = 0; r < 8; r++) {
                 for (int c = 0; c < 8; c++) {
-                    if (board[r][c] >= 0) continue;
+                    int8_t piece = board[r][c];
+                    if (piece == EMPTY || (piece > 0) != aiIsWhite) continue;
+                    
                     for (int tr = 0; tr < 8; tr++) {
                         for (int tc = 0; tc < 8; tc++) {
-                            if (!quickValid(r, c, tr, tc, false)) continue;
+                            if (!quickValid(r, c, tr, tc, aiIsWhite)) continue;
                             
                             int8_t saved = board[tr][tc];
                             board[tr][tc] = board[r][c];
                             board[r][c] = EMPTY;
                             
-                            int eval = minimax(depth - 1, alpha, beta, false);
+                            int eval = minimax(depth - 1, alpha, beta, false, aiIsWhite);
                             
                             board[r][c] = board[tr][tc];
                             board[tr][tc] = saved;
@@ -1406,16 +2459,18 @@ public:
             int minEval = 100000;
             for (int r = 0; r < 8; r++) {
                 for (int c = 0; c < 8; c++) {
-                    if (board[r][c] <= 0) continue;
+                    int8_t piece = board[r][c];
+                    if (piece == EMPTY || (piece > 0) == aiIsWhite) continue;
+                    
                     for (int tr = 0; tr < 8; tr++) {
                         for (int tc = 0; tc < 8; tc++) {
-                            if (!quickValid(r, c, tr, tc, true)) continue;
+                            if (!quickValid(r, c, tr, tc, !aiIsWhite)) continue;
                             
                             int8_t saved = board[tr][tc];
                             board[tr][tc] = board[r][c];
                             board[r][c] = EMPTY;
                             
-                            int eval = minimax(depth - 1, alpha, beta, true);
+                            int eval = minimax(depth - 1, alpha, beta, true, aiIsWhite);
                             
                             board[r][c] = board[tr][tc];
                             board[tr][tc] = saved;
@@ -1459,32 +2514,48 @@ public:
         return false;
     }
     
-    int evaluate() {
+    bool pathClear(int fr, int fc, int tr, int tc) {
+        int dr = (tr > fr) ? 1 : (tr < fr) ? -1 : 0;
+        int dc = (tc > fc) ? 1 : (tc < fc) ? -1 : 0;
+        
+        int r = fr + dr, c = fc + dc;
+        while (r != tr || c != tc) {
+            if (board[r][c] != EMPTY) return false;
+            r += dr;
+            c += dc;
+        }
+        return true;
+    }
+    
+    int evaluate(bool aiIsWhite) {
         int score = 0;
+        
         for (int r = 0; r < 8; r++) {
             for (int c = 0; c < 8; c++) {
                 int8_t piece = board[r][c];
                 if (piece == EMPTY) continue;
                 
+                bool pieceIsWhite = piece > 0;
                 int val = PIECE_VALUES[abs(piece)];
                 
-                // Pawn advancement
                 if (abs(piece) == 1) {
-                    val += ((piece > 0) ? (6 - r) : (r - 1)) * 10;
+                    val += pieceIsWhite ? (6 - r) * 10 : (r - 1) * 10;
                 }
                 
-                // Center control
                 if (r >= 3 && r <= 4 && c >= 3 && c <= 4) val += 15;
                 else if (r >= 2 && r <= 5 && c >= 2 && c <= 5) val += 5;
                 
-                score += (piece > 0) ? -val : val;  // Positive = good for black
+                if (pieceIsWhite == aiIsWhite) {
+                    score += val;
+                } else {
+                    score -= val;
+                }
             }
         }
+        
         return score;
     }
 };
-
-
 
 #endif // FEATURE_GAMES
 #endif // SUMI_PLUGIN_CHESSGAME_H

@@ -2,6 +2,31 @@
 
 The web portal lets you configure SUMI from a browser. It's embedded in the firmware and served directly by the ESP32.
 
+## Screenshots
+
+<p align="center">
+  <img src="images/portal_wifi_setup.png" width="400" alt="WiFi Setup">
+  <img src="images/portal_wifi_connected.png" width="400" alt="WiFi Connected">
+</p>
+<p align="center">
+  <em>WiFi setup flow: Select network → Enter credentials → Switch to home network</em>
+</p>
+
+<p align="center">
+  <img src="images/portal_files.png" width="400" alt="File Manager">
+  <img src="images/portal_processing.png" width="400" alt="Book Processing">
+</p>
+<p align="center">
+  <em>File manager with smart book processing - extracts chapters in your browser</em>
+</p>
+
+<p align="center">
+  <img src="images/portal_customize.png" width="400" alt="Customize">
+</p>
+<p align="center">
+  <em>Customize your home screen with live preview</em>
+</p>
+
 ## Accessing the Portal
 
 **During first-time setup:**
@@ -38,18 +63,18 @@ Browse and manage SD card contents:
 
 ### Book Processing
 
-**Important:** As of v1.4.2, books must be pre-processed through the portal before they can be read. On-device EPUB parsing was causing memory issues and reliability problems on the ESP32-C3, so browser-based pre-processing is now the default.
+Books must be pre-processed through the portal before they can be read. This design enables faster loading, better text quality, and reliable parsing of complex EPUBs.
 
 EPUBs are pre-processed in the browser before the ESP32 reads them:
 1. Upload EPUB to `/books/` folder
 2. Click "Process Now" (requires internet for JSZip library)
-3. Portal extracts metadata, chapters, and cover art
+3. Portal extracts metadata, chapters, TOC, and cover art
 4. Processed files saved to `/.sumi/books/{hash}/`
-5. ESP32 reads rich text files instead of parsing complex EPUBs
+5. ESP32 reads rich text files - no ZIP or XML parsing on device
 
 If you try to open a book that hasn't been processed, you'll see "Process this book in the portal first".
 
-**Rich Text Preservation (v1.4.3+):**
+**Rich Text Preservation:**
 The portal preserves formatting from the original EPUB:
 - **Bold text** (`<b>`, `<strong>`) → `**text**`
 - *Italic text* (`<i>`, `<em>`) → `*text*`
@@ -58,24 +83,27 @@ The portal preserves formatting from the original EPUB:
 - Images → `[Image]` or `[Image: alt text]` placeholder
 - Tables → `[Table]` placeholder
 - Soft hyphens preserved for better line breaking
+- Smart typography (curly quotes, em-dashes, ellipses)
 
-**Reader Settings → Require Pre-processing** (default: ON)
-- When ON: Only pre-processed books can be opened (recommended)
-- When OFF: Falls back to on-device EPUB parsing (also outputs rich text markers, but unreliable on large books)
+**Cache Management:**
+The portal includes buttons to manage your book cache:
+- **Reprocess All** - Re-extracts all books (useful after firmware updates)
+- **Clear All Cache** - Deletes the entire `/.sumi` folder and recreates it
 
 **Cache structure:**
 ```
 /.sumi/books/a1b2c3d4/
   meta.json         # Title, author, chapter count, word count, etc.
-  cover_thumb.jpg   # 80×120 for home widget
+  toc.json          # Table of contents with chapter titles
+  cover_thumb.jpg   # 120×180 for home widget
   cover_full.jpg    # 300px wide for library browser
-  ch_000.txt        # Chapter 1 with rich text markers
-  ch_001.txt        # Chapter 2
+  ch_000.txt        # Chapter 0 with rich text markers
+  ch_001.txt        # Chapter 1
   ...
 ```
 
 **Re-processing books:**
-If you update the firmware and need to re-process books (e.g., to get new formatting features), delete the book's cache folder and process again.
+If you update the firmware and need to re-process books (e.g., to get new formatting features), use the "Reprocess All" button in the portal, or delete the book's cache folder and process again.
 
 ### Customize
 Configure home screen, display settings, reader preferences, and more.

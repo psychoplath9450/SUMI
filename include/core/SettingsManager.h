@@ -73,12 +73,12 @@ struct ReaderSettings {
     uint8_t lineHeight;         // 100-200% → syncs to LibReaderSettings.lineSpacing enum
     uint8_t margins;            // 5-40 pixels → syncs to LibReaderSettings.screenMargin
     uint8_t textAlign;          // 0=left, 1=justify → syncs to LibReaderSettings.textAlign
-    bool requirePreprocessed;   // Only open books processed via portal (default true)
+    // Note: All EPUBs must be preprocessed via portal - no fallback parsing
     
     // === LEGACY/UNUSED SETTINGS (kept for compatibility, not exposed in portal) ===
     uint8_t paraSpacing;        // Not synced - LibReaderSettings has own extraParagraphSpacing bool
     uint8_t sceneBreakSpacing;  // Never implemented
-    bool hyphenation;           // Never implemented in TextLayout
+    bool hyphenation;           // Now handled by portal during preprocessing
     bool showProgress;          // Status bar always shows progress
     bool showChapter;           // Synced but LibReaderSettings.showChapterTitle not read
     bool showPages;             // Synced but LibReaderSettings.showPageNumbers not read

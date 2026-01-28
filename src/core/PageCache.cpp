@@ -232,23 +232,68 @@ bool PageCache::loadMeta() {
 void PageCache::invalidateBook() {
     if (!_initialized) return;
     
-    Serial.printf("[CACHE] Invalidating: %s\n", _cachePath.c_str());
-    deleteDirectory(_cachePath);
+    Serial.printf("[CACHE] Invalidating PageCache data: %s\n", _cachePath.c_str());
     
-    // Recreate empty directory structure
-    ensureDirectory(_cachePath);
-    ensureDirectory(_cachePath + "/pages");
+    // IMPORTANT: Only delete PageCache's own files, NOT the portal's preprocessed files!
+    // Portal files: meta.json, toc.json, ch_XXX.txt, cover_*.jpg
+    // PageCache files: meta.bin, progress.bin, pages/*
+    
+    // Delete PageCache meta file
+    String metaPath = _cachePath + "/meta.bin";
+    if (SD.exists(metaPath.c_str())) {
+        SD.remove(metaPath.c_str());
+    }
+    
+    // Delete progress file  
+    String progressPath = _cachePath + "/progress.bin";
+    if (SD.exists(progressPath.c_str())) {
+        SD.remove(progressPath.c_str());
+    }
+    
+    // Delete the pages subdirectory (layout cache)
+    String pagesPath = _cachePath + "/pages";
+    deleteDirectory(pagesPath);
+    
+    // Recreate empty pages directory
+    ensureDirectory(pagesPath);
     
     _metaLoaded = false;
 }
 
 void PageCache::invalidateAll() {
     String basePath = String(PATH_SUMI_CACHE) + "/books";
-    Serial.printf("[CACHE] Invalidating all caches: %s\n", basePath.c_str());
-    deleteDirectory(basePath);
+    Serial.printf("[CACHE] Invalidating all PageCache data in: %s\n", basePath.c_str());
     
-    // Recreate directory
-    ensureDirectory(basePath);
+    // IMPORTANT: Only delete PageCache's own files in each book directory
+    // NOT the portal's preprocessed files (meta.json, ch_XXX.txt, etc.)
+    
+    File dir = SD.open(basePath.c_str());
+    if (!dir || !dir.isDirectory()) {
+        if (dir) dir.close();
+        return;
+    }
+    
+    // Iterate through each book's cache directory
+    File entry;
+    while ((entry = dir.openNextFile())) {
+        if (entry.isDirectory()) {
+            String bookDir = basePath + "/" + entry.name();
+            entry.close();
+            
+            // Delete PageCache files only
+            String metaPath = bookDir + "/meta.bin";
+            String progressPath = bookDir + "/progress.bin";
+            String pagesPath = bookDir + "/pages";
+            
+            if (SD.exists(metaPath.c_str())) SD.remove(metaPath.c_str());
+            if (SD.exists(progressPath.c_str())) SD.remove(progressPath.c_str());
+            deleteDirectory(pagesPath);
+        } else {
+            entry.close();
+        }
+        yield();
+    }
+    dir.close();
     
     _metaLoaded = false;
 }
@@ -329,10 +374,17 @@ void PageCache::getStats(int& cachedPages, int& totalSize) {
 // =============================================================================
 
 String PageCache::hashPath(const String& path) {
-    // Simple hash to 8 hex characters
-    uint32_t hash = 5381;
-    for (int i = 0; i < path.length(); i++) {
-        hash = ((hash << 5) + hash) ^ path[i];
+    // Hash FILENAME ONLY (not full path) using same algorithm as Library
+    // This ensures PageCache finds the preprocessed data from portal
+    
+    // Extract filename from path
+    int lastSlash = path.lastIndexOf('/');
+    String filename = (lastSlash >= 0) ? path.substring(lastSlash + 1) : path;
+    
+    // Use same hash algorithm as Library: hash * 31 + char, starting at 0
+    uint32_t hash = 0;
+    for (int i = 0; i < filename.length(); i++) {
+        hash = ((hash << 5) - hash) + (uint8_t)filename[i];  // hash * 31 + char
     }
     
     char hex[9];

@@ -32,6 +32,7 @@ public:
     bool handleInput(Button btn);
     void draw();
     void drawPartial();
+    void drawFullScreen();
     bool update();
     
 private:

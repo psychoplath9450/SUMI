@@ -1,10 +1,16 @@
 /**
  * @file Library_render.cpp
  * @brief Library rendering task and chapter loading
- * @version 1.4.2
+ * @version 1.5.0
+ * 
+ * All EPUB chapters loaded from preprocessed text files.
+ * No on-device EPUB/XML parsing.
+ * Supports inline image pages from preprocessed EPUBs.
  */
 
 #include "plugins/Library.h"
+#include <TJpg_Decoder.h>
+#include <Fonts/FreeSans9pt7b.h>
 
 #if FEATURE_READER
 
@@ -78,23 +84,17 @@ void LibraryApp::renderTaskLoop() {
 
 // Check if a pre-processed cache exists for this book
 String LibraryApp::getPreprocessedChapterPath(int chapter) {
-    // Hash the filename (same algorithm as portal)
-    // Extract filename from currentBookPath, not currentBook (which is title)
-    const char* filename = strrchr(currentBookPath, '/');
-    if (filename) filename++; else filename = currentBookPath;
-    
-    uint32_t hash = 0;
-    for (const char* p = filename; *p; p++) {
-        hash = ((hash << 5) - hash) + (uint8_t)*p;
-    }
-    hash = hash & 0xFFFFFFFF;
-    
+    // Use stored bookCacheDir (set in openBook from book.cacheHash)
+    // This avoids hash mismatch issues with truncated filenames
     char path[96];
-    snprintf(path, sizeof(path), "/.sumi/books/%08x/ch_%03d.txt", hash, chapter);
+    snprintf(path, sizeof(path), "%s/ch_%03d.txt", bookCacheDir, chapter);
+    
+    Serial.printf("[LOAD] Looking for: %s\n", path);
     
     if (SD.exists(path)) {
         return String(path);
     }
+    Serial.printf("[LOAD] Chapter file not found!\n");
     return String();
 }
 
@@ -163,7 +163,7 @@ bool LibraryApp::loadChapterSync(int chapter) {
     bool success = true;
     
     if (hasPreprocessed) {
-        // FAST PATH: Load pre-processed rich text with markers
+        // Load pre-processed rich text with markers
         // Markers: **bold**, *italic*, # header, • bullet, [Image], [Table]
         Serial.printf("[LOAD] Using pre-processed: %s\n", preprocessedPath.c_str());
         
@@ -172,76 +172,90 @@ bool LibraryApp::loadChapterSync(int chapter) {
             const int bufSize = 4096;
             char* buffer = (char*)malloc(bufSize + 1);
             if (buffer) {
+                int consecutiveNewlines = 0;  // Track across buffer reads
+                
                 while (file.available()) {
                     int bytesRead = file.readBytes(buffer, bufSize);
                     buffer[bytesRead] = '\0';
                     
-                    // Process line by line
-                    char* savePtr;
-                    char* line = strtok_r(buffer, "\n", &savePtr);
-                    while (line) {
-                        // Trim trailing whitespace only (preserve leading for markers)
-                        size_t len = strlen(line);
-                        while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t' || line[len-1] == '\r')) {
-                            line[--len] = '\0';
+                    // Process character by character to detect paragraph breaks
+                    // Double newlines (\n\n) indicate paragraph breaks
+                    char* ptr = buffer;
+                    char* lineStart = buffer;
+                    
+                    while (*ptr) {
+                        if (*ptr == '\n' || *ptr == '\r') {
+                            // End of line - process it
+                            *ptr = '\0';  // Terminate the line
+                            
+                            // Trim trailing whitespace
+                            char* lineEnd = ptr - 1;
+                            while (lineEnd >= lineStart && (*lineEnd == ' ' || *lineEnd == '\t' || *lineEnd == '\r')) {
+                                *lineEnd-- = '\0';
+                            }
+                            
+                            // Skip leading whitespace for non-marker lines
+                            char* start = lineStart;
+                            if (*start != '#' && (uint8_t)*start != 0xE2) {  // Not header or bullet
+                                while (*start == ' ' || *start == '\t') start++;
+                            }
+                            
+                            size_t len = strlen(start);
+                            
+                            if (len > 0) {
+                                // If we had 2+ newlines before this, it's a new paragraph
+                                if (consecutiveNewlines >= 2) {
+                                    Serial.printf("[LOAD] Para break (%d newlines) -> endParagraph()\n", consecutiveNewlines);
+                                    textLayout->endParagraph();
+                                }
+                                
+                                textLayout->addRichText(start, len);
+                                textLayout->addText(" ", 1);
+                                consecutiveNewlines = 1;  // Reset to 1 (this newline)
+                            } else {
+                                // Empty line - increment counter
+                                consecutiveNewlines++;
+                            }
+                            
+                            // Skip \r\n sequences
+                            if (*ptr == '\r' && *(ptr + 1) == '\n') {
+                                ptr++;
+                            }
+                            
+                            lineStart = ptr + 1;
                         }
-                        
-                        // Skip leading whitespace for non-marker lines
-                        char* start = line;
-                        if (*start != '#' && (uint8_t)*start != 0xE2) {  // Not header or bullet
+                        ptr++;
+                    }
+                    
+                    // Handle any remaining text (no trailing newline)
+                    if (lineStart < ptr && *lineStart) {
+                        char* start = lineStart;
+                        if (*start != '#' && (uint8_t)*start != 0xE2) {
                             while (*start == ' ' || *start == '\t') start++;
-                            len = strlen(start);
                         }
-                        
+                        size_t len = strlen(start);
                         if (len > 0) {
+                            if (consecutiveNewlines >= 2) {
+                                textLayout->endParagraph();
+                            }
                             textLayout->addRichText(start, len);
-                            textLayout->endParagraph();
-                        } else {
-                            // Empty line = paragraph break
-                            textLayout->endParagraph();
+                            textLayout->addText(" ", 1);
                         }
-                        
-                        line = strtok_r(nullptr, "\n", &savePtr);
                     }
                     
                     yield();
                 }
+                
+                // End final paragraph
+                textLayout->endParagraph();
+                
                 free(buffer);
             }
             file.close();
         } else {
             success = false;
         }
-    } else if (isEpub) {
-        // SLOW PATH: Parse from EPUB (no pre-processed cache)
-        Serial.println("[LOAD] No pre-processed cache, parsing EPUB...");
-        SD.mkdir("/.sumi");
-        String tempPath = getTempFilePath(chapter);
-        
-        // Stream from EPUB to temp file
-        bool streamOk = epub.streamChapterToFile(chapter, tempPath);
-        if (!streamOk) {
-            Serial.println("[LOAD] Stream failed");
-            textLayout->addText("Chapter unavailable", 19);
-            textLayout->endParagraph();
-            success = false;
-        } else {
-            // Parse with Expat - outputs rich text markers
-            bool parseOk = expatParser.parseFile(tempPath, [this](const String& text, bool isHeader) {
-                if (text.length() > 0) {
-                    // Use addRichText to parse markers (**bold**, *italic*, # header)
-                    textLayout->addRichText(text.c_str(), text.length());
-                    textLayout->endParagraph();
-                }
-            });
-            
-            if (!parseOk) {
-                Serial.println("[LOAD] Parse failed");
-            }
-            
-            SD.remove(tempPath.c_str());
-        }
-    } else {
+    } else if (!isEpub) {
         // TXT file - may contain rich text markers
         File file = SD.open(currentBookPath);
         if (file) {
@@ -280,6 +294,14 @@ bool LibraryApp::loadChapterSync(int chapter) {
         } else {
             success = false;
         }
+    } else {
+        // Chapter file not found - this shouldn't happen if book is in library
+        Serial.printf("[LOAD] ERROR: Chapter file not found! bookCacheDir='%s'\n", bookCacheDir);
+        textLayout->addText("Chapter file not found", 22);
+        textLayout->endParagraph();
+        textLayout->addText("Try reprocessing book", 21);
+        textLayout->endParagraph();
+        success = false;
     }
     
     // Finalize layout
@@ -304,15 +326,49 @@ void LibraryApp::loadChapter(int chapter) {
     cacheValid = false;
 }
 
-String LibraryApp::getTempFilePath(int chapter) {
-    char path[64];
-    snprintf(path, sizeof(path), "/.sumi/ch%d.tmp", chapter);
-    return String(path);
-}
-
 // =============================================================================
 // Page Rendering
 // =============================================================================
+
+// Static variables for TJpgDec callback (image page rendering)
+static int _imgTargetX = 0;
+static int _imgTargetY = 0;
+static int _imgMaxW = 0;
+static int _imgMaxH = 0;
+static GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT>* _imgDisplay = nullptr;
+
+// TJpgDec callback for inline image rendering
+static bool _inlineImageCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+    if (!_imgDisplay) return false;
+    
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            int px = _imgTargetX + x + i;
+            int py = _imgTargetY + y + j;
+            
+            if (px >= 0 && px < _imgMaxW && py >= 0 && py < _imgMaxH) {
+                uint16_t color = bitmap[j * w + i];
+                // RGB565 to grayscale with dithering
+                uint8_t r = (color >> 11) & 0x1F;
+                uint8_t g = (color >> 5) & 0x3F;
+                uint8_t b = color & 0x1F;
+                uint8_t gray = (r * 8 + g * 4 + b * 8) / 3;  // 0-255
+                
+                // Bayer 4x4 dithering
+                static const uint8_t bayer[4][4] = {
+                    {  15, 135,  45, 165 },
+                    { 195,  75, 225, 105 },
+                    {  60, 180,  30, 150 },
+                    { 240, 120, 210,  90 }
+                };
+                uint8_t threshold = bayer[py % 4][px % 4];
+                _imgDisplay->drawPixel(px, py, gray > threshold ? GxEPD_WHITE : GxEPD_BLACK);
+            }
+        }
+    }
+    return true;
+}
+
 void LibraryApp::renderCurrentPage() {
     if (!cacheValid || totalPages == 0) return;
     
@@ -323,14 +379,70 @@ void LibraryApp::renderCurrentPage() {
     
     MEM_LOG("render_start");
     
-    // Always use full refresh for now until partial works properly
-    display.setFullWindow();
-    display.firstPage();
-    do {
-        display.fillScreen(GxEPD_WHITE);
-        textLayout->renderPage(currentPage, display);
-        drawStatusBarInPage();
-    } while (display.nextPage());
+    // Check if this is an image page
+    PageType pageType = textLayout->getPageType(currentPage);
+    
+    if (pageType == PageType::IMAGE) {
+        // Render image page
+        char imgFilename[IMAGE_PATH_SIZE];
+        int imgW, imgH;
+        
+        if (textLayout->getImageInfo(currentPage, imgFilename, sizeof(imgFilename), &imgW, &imgH)) {
+            // Build full path: bookCacheDir/images/img_XXX.jpg
+            char imgPath[128];
+            snprintf(imgPath, sizeof(imgPath), "%s/images/%s", bookCacheDir, imgFilename);
+            
+            Serial.printf("[RENDER] Image page %d: %s\n", currentPage, imgPath);
+            
+            display.setFullWindow();
+            display.firstPage();
+            do {
+                display.fillScreen(GxEPD_WHITE);
+                
+                if (SD.exists(imgPath)) {
+                    // Calculate centered position
+                    int centerX = (screenW - imgW) / 2;
+                    int centerY = (screenH - imgH) / 2;
+                    if (centerX < 0) centerX = 0;
+                    if (centerY < 0) centerY = 0;
+                    
+                    // Setup TJpgDec callback
+                    _imgTargetX = centerX;
+                    _imgTargetY = centerY;
+                    _imgMaxW = screenW;
+                    _imgMaxH = screenH;
+                    _imgDisplay = &display;
+                    
+                    TJpgDec.setJpgScale(1);
+                    TJpgDec.setCallback(_inlineImageCallback);
+                    TJpgDec.drawSdJpg(0, 0, imgPath);
+                } else {
+                    // Image not found - show placeholder
+                    display.setFont(&FreeSans9pt7b);
+                    display.setTextColor(GxEPD_BLACK);
+                    
+                    const char* msg = "[Image not found]";
+                    int16_t x1, y1;
+                    uint16_t tw, th;
+                    display.getTextBounds(msg, 0, 0, &x1, &y1, &tw, &th);
+                    display.setCursor((screenW - tw) / 2, screenH / 2);
+                    display.print(msg);
+                }
+                
+                // Draw minimal status bar
+                drawStatusBarInPage();
+            } while (display.nextPage());
+        }
+    } else {
+        // Render text page (normal)
+        display.setFullWindow();
+        display.firstPage();
+        do {
+            display.fillScreen(GxEPD_WHITE);
+            textLayout->renderPage(currentPage, display);
+            drawStatusBarInPage();
+        } while (display.nextPage());
+    }
     
     MEM_LOG("render_done");
     isRendering = false;
@@ -348,50 +460,12 @@ void LibraryApp::clearAllCache() {
     cacheValid = false;
 }
 
-// =============================================================================
-// Loading/Error Screens
-// =============================================================================
-void LibraryApp::showLoadingScreen(const char* message) {
-    display.setFullWindow();
-    display.firstPage();
-    do {
-        display.fillScreen(GxEPD_WHITE);
-        display.setTextColor(GxEPD_BLACK);
-        display.setFont(&FreeSans12pt7b);
-        
-        int16_t x1, y1;
-        uint16_t w, h;
-        display.getTextBounds(message, 0, 0, &x1, &y1, &w, &h);
-        display.setCursor((screenW - w) / 2, screenH / 2);
-        display.print(message);
-    } while (display.nextPage());
-}
-
-void LibraryApp::showErrorScreen(const char* message) {
-    display.setFullWindow();
-    display.firstPage();
-    do {
-        display.fillScreen(GxEPD_WHITE);
-        display.setTextColor(GxEPD_BLACK);
-        display.setFont(&FreeSans12pt7b);
-        
-        int16_t x1, y1;
-        uint16_t w, h;
-        display.getTextBounds("Error", 0, 0, &x1, &y1, &w, &h);
-        display.setCursor((screenW - w) / 2, screenH / 2 - 20);
-        display.print("Error");
-        
-        display.setFont(&FreeSans9pt7b);
-        display.getTextBounds(message, 0, 0, &x1, &y1, &w, &h);
-        display.setCursor((screenW - w) / 2, screenH / 2 + 20);
-        display.print(message);
-    } while (display.nextPage());
-    
-    delay(2000);
-}
-
 bool LibraryApp::needsFullRefresh() {
     return pagesUntilFullRefresh <= 0;
+}
+
+bool LibraryApp::needsRedraw() {
+    return _pendingRedraw;
 }
 
 void LibraryApp::requestFullRefresh() {

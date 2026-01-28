@@ -1,6 +1,6 @@
 # Settings Reference
 
-*Last updated: January 25, 2026*
+*Last updated: January 28, 2026*
 
 Settings are stored in two places:
 
@@ -29,7 +29,6 @@ These sync between the on-device menu and the web portal. Settings version is v3
 | screenMargin | 5px | 0, 5, 10, 15, or 20 pixels |
 | textAlign | JUSTIFIED | JUSTIFIED, LEFT, CENTER, RIGHT |
 | extraParagraphSpacing | false | Add half-line-height between paragraphs |
-| requirePreprocessed | true | Require portal pre-processing for EPUBs |
 | refreshFrequency | 15 | Pages between full e-ink refresh |
 
 ### Margin System
@@ -42,19 +41,22 @@ Margins are calculated from multiple layers:
 
 Total margin = viewable + screen margin (+ status bar at bottom)
 
-### Require Pre-processing
+### Portal Pre-processing
 
-**New in v1.4.2:** This setting controls whether books must be processed through the portal before reading.
+All EPUBs must be processed through the web portal before reading. This is a deliberate design choice that enables:
+- Instant book loading (no parsing delay)
+- More reliable parsing (browser handles complex HTML)
+- Smart typography (curly quotes, em-dashes, ellipses)
+- Soft hyphenation for better line wrapping
+- ~45KB more RAM for reading
 
-- **When ON (default):** Only pre-processed books can be opened. If you try to open an unprocessed EPUB, you'll see "Process this book in the portal first". This is recommended because on-device EPUB parsing was causing memory issues and reliability problems.
-
-- **When OFF:** Falls back to on-device EPUB parsing using miniz and expat. This also outputs rich text markers for formatting preservation, but may fail on complex books or when memory is low.
+If you try to open an unprocessed EPUB, you'll see "Process this book in the portal first".
 
 ### Rich Text Formatting
 
-Both portal and on-device processing preserve formatting using markers:
+The portal preserves formatting from EPUBs using markers:
 - `**bold**` - Rendered in bold font
-- `*italic*` - Rendered in italic font (falls back to regular if unavailable)
+- `*italic*` - Rendered in italic font
 - `# Header` - Rendered centered and bold
 - `• bullet` - Rendered with bullet character
 
