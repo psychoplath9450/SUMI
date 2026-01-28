@@ -25,9 +25,8 @@ Custom firmware for the Xteink X4
 ### → [Launch Web Flasher](https://psychoplath9450.github.io/SUMI/flasher/)
 
 1. Connect your Xteink X4 via USB-C
-2. Hold **BOOT** button while clicking **Install**
-3. Release BOOT after the port selection popup appears
-4. Select the USB serial port
+2. Click **Install SUMI**
+3. Select the USB serial port
 
 > **Requirements:** Chrome, Edge, or Opera browser (Firefox/Safari not supported)
 
@@ -170,9 +169,8 @@ Flash SUMI directly from your browser - no software installation required!
 
 1. **Go to the [SUMI Web Flasher](https://psychoplath9450.github.io/SUMI/flasher/)**
 2. Connect your Xteink X4 via USB-C
-3. Hold the **BOOT** button while clicking **Install SUMI**
-4. Release BOOT after the port selection popup appears
-5. Select the USB serial port - flashing starts automatically
+3. Click **Install SUMI**
+4. Select the USB serial port - flashing starts automatically
 
 > **Note:** Web Serial requires Chrome, Edge, or Opera. Firefox and Safari are not supported.
 

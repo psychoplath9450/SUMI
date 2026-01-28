@@ -192,8 +192,7 @@
                     <div class="instructions">
                         <ol>
                             <li>Connect your Xteink X4 via USB-C</li>
-                            <li>Hold the <strong>BOOT</strong> button while clicking Install</li>
-                            <li>Release BOOT after the popup appears</li>
+                            <li>Click <strong>Install</strong> below</li>
                             <li>Select the USB serial port</li>
                         </ol>
                     </div>
@@ -316,7 +315,7 @@
                 const port = await navigator.serial.requestPort();
                 const transport = new Transport(port, true);
                 
-                progressText.textContent = 'Connecting (hold BOOT if needed)...';
+                progressText.textContent = 'Connecting...';
                 
                 const esploader = new ESPLoader({
                     transport,
