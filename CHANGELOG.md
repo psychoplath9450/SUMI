@@ -11,10 +11,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Web Flasher** - Flash SUMI directly from your browser at `docs/flasher/`
-  - Backup current firmware before flashing
-  - Flash latest SUMI (auto-downloads from GitHub)
-  - Flash custom .bin files (restore backups, other firmware)
-  - Erase flash option for clean installs
+  - One-click install of latest SUMI firmware
+  - Uses ESP Web Tools for reliable browser-based flashing
+  - Link to Web ESPTool for custom .bin files
   - Classic Mac OS-style UI matching the portal
 - **Ready-to-use SD card contents** (`sample_sd/` folder)
   - 4 classic novels from Project Gutenberg
