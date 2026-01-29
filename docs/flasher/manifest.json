@@ -1,12 +1,12 @@
 {
   "name": "SUMI",
-  "version": "1.5.0",
+  "version": "1.6.3",
   "builds": [
     {
       "chipFamily": "ESP32-C3",
       "parts": [
         {
-          "path": "SUMI-v1.5.0-full.bin",
+          "path": "SUMI-v1.6.3-full.bin",
           "offset": 0
         }
       ]
