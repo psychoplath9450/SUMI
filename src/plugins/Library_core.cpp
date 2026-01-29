@@ -24,6 +24,26 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
+
+// Bookerly fonts - sizes scaled up to match CrossPoint visual appearance on e-ink
+// Our GFXfont converter produces smaller glyphs than CrossPoint's EpdFont at same pt size
+#include "fonts/Bookerly24pt7b.h"      // SMALL (visually matches CrossPoint ~12pt)
+#include "fonts/Bookerly28pt7b.h"      // MEDIUM (visually matches CrossPoint ~14pt) - DEFAULT
+#include "fonts/Bookerly32pt7b.h"      // LARGE (visually matches CrossPoint ~16pt)
+#include "fonts/BookerlyBold24pt7b.h"
+#include "fonts/BookerlyBold28pt7b.h"
+#include "fonts/BookerlyBold32pt7b.h"
+
+// FreeSerif Italic fonts for rich text (italics support) - DEPRECATED
+// Now using Bookerly Italic for better visual matching
+#include "fonts/BookerlyItalic26pt7b.h"
+#include "fonts/BookerlyItalic30pt7b.h"
+#include "fonts/BookerlyItalic34pt7b.h"
+// Bold Italic still uses FreeSerif since we don't have Bookerly Bold Italic
+#include "fonts/FreeSerifBoldItalic24pt7b.h"
+#include "fonts/FreeSerifBoldItalic28pt7b.h"
+#include "fonts/FreeSerifBoldItalic32pt7b.h"
+
 #include <algorithm>
 #include <new>  // For std::nothrow
 
@@ -223,7 +243,7 @@ LibraryApp::LibraryApp()
     , currentPage(0), totalPages(0), currentChapter(0), totalChapters(1)
     , currentBookHash(0)
     , chapterCursor(0), chapterScrollOffset(0), settingsCursor(0)
-    , pagesUntilFullRefresh(30), pagesUntilHalfRefresh(10)
+    , pagesUntilFullRefresh(10), pagesUntilHalfRefresh(5)
     , updateRequired(false), renderTaskHandle(nullptr), renderMutex(nullptr)
     , buttonHoldStart(0), lastButtonState(BTN_NONE)
     , cacheValid(false), indexingProgress(0), preloadedPage(-1)
@@ -295,9 +315,11 @@ void LibraryApp::onEnter() {
 
 void LibraryApp::onExit() {
     MEM_LOG("library_onExit");
-    if (bookIsOpen) { saveProgress(); stats.endSession(); }
+    // closeBook handles: saveProgress, KOSync upload, stats.endSession, stats.save
+    if (bookIsOpen) {
+        closeBook();
+    }
     stats.save();
-    closeBook();
     Activity::onExit();
 }
 
@@ -458,34 +480,64 @@ int LibraryApp::getLayoutWidth() const { return screenW; }
 
 const GFXfont* LibraryApp::getReaderFont() {
     LibReaderSettings& settings = readerSettings.get();
+    // Font sizes scaled up to match CrossPoint visual appearance
+    // GFXfont converter produces smaller glyphs than EpdFont at same point size
     switch (settings.fontSize) {
-        case FontSize::SMALL:       return &FreeSans9pt7b;
-        case FontSize::MEDIUM:      return &FreeSans12pt7b;
-        case FontSize::LARGE:       return &FreeSans18pt7b;
-        case FontSize::EXTRA_LARGE: return &FreeSans24pt7b;
-        default:                    return &FreeSans12pt7b;
+        case FontSize::SMALL:       return &Bookerly24pt7b;   // ~12pt visual
+        case FontSize::MEDIUM:      return &Bookerly28pt7b;   // ~14pt visual (default)
+        case FontSize::LARGE:       return &Bookerly32pt7b;   // ~16pt visual
+        case FontSize::EXTRA_LARGE: return &FreeSans24pt7b;   // Fallback for largest
+        default:                    return &Bookerly28pt7b;
     }
 }
 
 const GFXfont* LibraryApp::getReaderBoldFont() {
     LibReaderSettings& settings = readerSettings.get();
+    // Bold fonts scaled to match regular fonts
     switch (settings.fontSize) {
-        case FontSize::SMALL:       return &FreeSansBold9pt7b;
-        case FontSize::MEDIUM:      return &FreeSansBold12pt7b;
-        case FontSize::LARGE:       return &FreeSansBold18pt7b;
+        case FontSize::SMALL:       return &BookerlyBold24pt7b;
+        case FontSize::MEDIUM:      return &BookerlyBold28pt7b;
+        case FontSize::LARGE:       return &BookerlyBold32pt7b;
         case FontSize::EXTRA_LARGE: return &FreeSansBold24pt7b;
-        default:                    return &FreeSansBold12pt7b;
+        default:                    return &BookerlyBold28pt7b;
+    }
+}
+
+const GFXfont* LibraryApp::getReaderItalicFont() {
+    LibReaderSettings& settings = readerSettings.get();
+    // Bookerly Italic fonts - slightly larger point sizes to match regular Bookerly visually
+    // (Italic fonts render smaller at same point size)
+    switch (settings.fontSize) {
+        case FontSize::SMALL:       return &BookerlyItalic26pt7b;   // matches Bookerly24pt
+        case FontSize::MEDIUM:      return &BookerlyItalic30pt7b;   // matches Bookerly28pt
+        case FontSize::LARGE:       return &BookerlyItalic34pt7b;   // matches Bookerly32pt
+        case FontSize::EXTRA_LARGE: return &BookerlyItalic34pt7b;   // Use largest available
+        default:                    return &BookerlyItalic30pt7b;
+    }
+}
+
+const GFXfont* LibraryApp::getReaderBoldItalicFont() {
+    LibReaderSettings& settings = readerSettings.get();
+    // FreeSerif Bold Italic fonts for rich text
+    switch (settings.fontSize) {
+        case FontSize::SMALL:       return &FreeSerifBoldItalic24pt7b;
+        case FontSize::MEDIUM:      return &FreeSerifBoldItalic28pt7b;
+        case FontSize::LARGE:       return &FreeSerifBoldItalic32pt7b;
+        case FontSize::EXTRA_LARGE: return &FreeSerifBoldItalic32pt7b;  // Use largest available
+        default:                    return &FreeSerifBoldItalic28pt7b;
     }
 }
 
 void LibraryApp::applyFontSettings() {
     const GFXfont* font = getReaderFont();
     const GFXfont* boldFont = getReaderBoldFont();
+    const GFXfont* italicFont = getReaderItalicFont();
+    const GFXfont* boldItalicFont = getReaderBoldItalicFont();
     
     textLayout->setFont(font);
     textLayout->setBoldFont(boldFont);
-    textLayout->setItalicFont(font);        // Use regular for italic (no italic font available)
-    textLayout->setBoldItalicFont(boldFont); // Use bold for bold-italic
+    textLayout->setItalicFont(italicFont);
+    textLayout->setBoldItalicFont(boldItalicFont);
     display.setFont(font);
     
     LibReaderSettings& settings = readerSettings.get();

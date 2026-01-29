@@ -71,11 +71,6 @@ Button readButton() {
     
     Button raw = readRawButton();
     
-    // Debug: log non-NONE buttons
-    if (raw != BTN_NONE) {
-        Serial.printf("[BTN] Raw button: %d (%s), isLandscape=%d\n", raw, getButtonName(raw), isLandscape);
-    }
-    
     if (!isLandscape || raw == BTN_NONE || raw == BTN_CONFIRM || raw == BTN_BACK || raw == BTN_POWER) {
         return raw;
     }
@@ -88,9 +83,6 @@ Button readButton() {
         case BTN_RIGHT: mapped = BTN_UP; break;
         default: mapped = raw; break;
     }
-    if (mapped != raw) {
-        Serial.printf("[BTN] Remapped to: %d (%s)\n", mapped, getButtonName(mapped));
-    }
     return mapped;
 }
 
@@ -98,9 +90,9 @@ Button waitForButtonPress() {
     Button btn = BTN_NONE;
     while (btn == BTN_NONE) {
         btn = readButton();
-        delay(20);
+        delay(10);  // Faster polling
     }
-    while (readButton() != BTN_NONE) delay(20);
-    delay(30);
+    while (readButton() != BTN_NONE) delay(10);
+    delay(20);  // Brief debounce after release
     return btn;
 }

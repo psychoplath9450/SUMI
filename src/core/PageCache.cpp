@@ -244,11 +244,9 @@ void PageCache::invalidateBook() {
         SD.remove(metaPath.c_str());
     }
     
-    // Delete progress file  
-    String progressPath = _cachePath + "/progress.bin";
-    if (SD.exists(progressPath.c_str())) {
-        SD.remove(progressPath.c_str());
-    }
+    // NOTE: Do NOT delete progress.bin here!
+    // Progress tracks the user's reading position and should survive
+    // layout cache rebuilds (font/margin changes, etc.)
     
     // Delete the pages subdirectory (layout cache)
     String pagesPath = _cachePath + "/pages";
@@ -280,13 +278,12 @@ void PageCache::invalidateAll() {
             String bookDir = basePath + "/" + entry.name();
             entry.close();
             
-            // Delete PageCache files only
+            // Delete PageCache files only - NOT progress.bin (preserves reading position)
             String metaPath = bookDir + "/meta.bin";
-            String progressPath = bookDir + "/progress.bin";
             String pagesPath = bookDir + "/pages";
             
             if (SD.exists(metaPath.c_str())) SD.remove(metaPath.c_str());
-            if (SD.exists(progressPath.c_str())) SD.remove(progressPath.c_str());
+            // NOTE: Do NOT delete progress.bin - user's reading position should survive
             deleteDirectory(pagesPath);
         } else {
             entry.close();

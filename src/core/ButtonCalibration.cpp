@@ -5,6 +5,7 @@
  */
 
 #include "core/ButtonCalibration.h"
+#include "core/PowerManager.h"
 
 // Global instance
 ButtonCalibration buttonCalibration;
@@ -297,6 +298,10 @@ void ButtonCalibration::waitForAnyButton() {
 bool ButtonCalibration::waitForConfirmOrBack() {
     while (true) {
         Button btn = readButton();
+        if (btn == BTN_POWER) {
+            powerManager.enterDeepSleep();
+            return false;
+        }
         if (btn == BTN_CONFIRM) {
             while (readButton() != BTN_NONE) delay(20);
             return true;

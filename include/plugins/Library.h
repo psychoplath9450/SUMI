@@ -245,6 +245,8 @@ public:
     int getLayoutWidth() const;
     const GFXfont* getReaderFont();
     const GFXfont* getReaderBoldFont();
+    const GFXfont* getReaderItalicFont();
+    const GFXfont* getReaderBoldItalicFont();
     void applyFontSettings();
     
     // Directory/Book scanning

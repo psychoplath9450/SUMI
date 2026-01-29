@@ -511,7 +511,7 @@ void fetchWeatherForWidget() {
         
         WiFiClient geoClient;
         if (geoClient.connect("ip-api.com", 80)) {
-            geoClient.print("GET /json/?fields=status,city,country,lat,lon,offset HTTP/1.1\r\n");
+            geoClient.print("GET /json/?fields=status,city,regionName,country,lat,lon,offset HTTP/1.1\r\n");
             geoClient.print("Host: ip-api.com\r\n");
             geoClient.print("Connection: close\r\n\r\n");
             
@@ -534,13 +534,28 @@ void fetchWeatherForWidget() {
                 if (strcmp(doc["status"] | "fail", "success") == 0) {
                     float lat = doc["lat"] | 0.0f;
                     float lon = doc["lon"] | 0.0f;
+                    int32_t tzOffset = doc["offset"] | 0;
+                    
                     if (lat != 0.0f || lon != 0.0f) {
                         settingsManager.weather.latitude = lat;
                         settingsManager.weather.longitude = lon;
                         const char* city = doc["city"] | "Unknown";
-                        snprintf(settingsManager.weather.location, sizeof(settingsManager.weather.location), "%s", city);
+                        const char* region = doc["regionName"] | "";
+                        snprintf(settingsManager.weather.location, 
+                                 sizeof(settingsManager.weather.location), 
+                                 "%s, %s", city, region);
+                        
+                        // Also save timezone offset if not already set
+                        if (settingsManager.weather.timezoneOffset == 0 && tzOffset != 0) {
+                            settingsManager.weather.timezoneOffset = tzOffset;
+                            // Apply timezone immediately
+                            configTime(tzOffset, 0, "pool.ntp.org", "time.nist.gov");
+                            Serial.printf("[HOME] Weather: Auto-set timezone offset: %d\n", tzOffset);
+                        }
+                        
                         settingsManager.markDirty();
-                        Serial.printf("[HOME] Weather: Auto-detected location: %s (%.4f, %.4f)\n", city, lat, lon);
+                        Serial.printf("[HOME] Weather: Auto-detected location: %s (%.4f, %.4f)\n", 
+                                      settingsManager.weather.location, lat, lon);
                     }
                 }
             }
@@ -750,8 +765,8 @@ void activateWidget(int widget) {
     if (homeState.hasBook && settingsManager.display.showBookWidget) {
         if (widget == currentIdx) {
             Serial.printf("[HOME] Activating book widget: %s\n", lastBookWidget.title);
-            extern void openAppByItemIndex(uint8_t itemIndex);
-            openAppByItemIndex(HOME_ITEM_LIBRARY);
+            extern void openLibraryWithResume();
+            openLibraryWithResume();
             return;
         }
         currentIdx++;
@@ -1616,6 +1631,9 @@ static void drawGrid(const CellGeometry& geo) {
 // =============================================================================
 void showHomeScreen() {
     Serial.println("[HOME] Full refresh");
+    
+    // Always reload book widget data (may have changed)
+    loadLastBookWidget();
     
     // Recalculate if needed
     if (homeState.dirty || !homeState.initialized) {

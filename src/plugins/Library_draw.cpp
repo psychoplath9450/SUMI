@@ -13,6 +13,18 @@
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 
+// Bookerly fonts for better typography
+#include "fonts/Bookerly10pt7b.h"
+#include "fonts/Bookerly12pt7b.h"
+#include "fonts/Bookerly14pt7b.h"
+#include "fonts/Bookerly16pt7b.h"
+#include "fonts/Bookerly18pt7b.h"
+#include "fonts/BookerlyBold10pt7b.h"
+#include "fonts/BookerlyBold12pt7b.h"
+#include "fonts/BookerlyBold14pt7b.h"
+#include "fonts/BookerlyBold16pt7b.h"
+#include "fonts/BookerlyBold18pt7b.h"
+
 // =============================================================================
 // Static JPG Callback Variables
 // =============================================================================
@@ -129,10 +141,6 @@ void LibraryApp::draw() {
         return;
     }
     
-    // Reset the flags
-    needsFullRedraw = false;
-    _pendingRedraw = false;
-    
     switch (state) {
         case ViewState::MAIN_MENU:
             drawMainMenu();
@@ -145,7 +153,7 @@ void LibraryApp::draw() {
             break;
         case ViewState::READING:
             if (!renderTaskHandle && pendingChapterLoad) {
-                showLoadingScreen("Loading chapter...");
+                showLoadingScreen("Loading...");
                 int chapToLoad = pendingChapterToLoad;
                 pendingChapterLoad = false;
                 
@@ -165,10 +173,11 @@ void LibraryApp::draw() {
             
             if (!cacheValid) {
                 if (renderTaskHandle) {
-                    showLoadingScreen("Loading chapter...");
+                    showLoadingScreen("Loading...");
+                    // Brief wait - don't block forever
                     int waitCount = 0;
-                    while (!cacheValid && waitCount < 200) {
-                        delay(50);
+                    while (!cacheValid && waitCount < 100) {
+                        delay(20);
                         waitCount++;
                     }
                 }
@@ -200,6 +209,10 @@ void LibraryApp::draw() {
             drawInfo();
             break;
     }
+    
+    // Reset flags after draw is complete
+    needsFullRedraw = false;
+    _pendingRedraw = false;
 }
 
 void LibraryApp::drawPartial() {
@@ -402,13 +415,13 @@ void LibraryApp::drawFlipBrowser() {
         display.drawRect(coverX - 3, coverY - 3, coverW + 6, coverH + 6, GxEPD_BLACK);
         
         // Book info card
-        int cardX = 16, cardW = screenW - 32, cardH = 80;
+        int cardX = 16, cardW = screenW - 32, cardH = 100;  // Taller card for larger fonts
         display.drawRoundRect(cardX, infoY, cardW, cardH, 8, GxEPD_BLACK);
         
         display.setTextColor(GxEPD_BLACK);
         
-        // Title
-        display.setFont(&FreeSansBold12pt7b);
+        // Title - use 18pt Bookerly Bold for larger, more readable text
+        display.setFont(&BookerlyBold18pt7b);
         int16_t x1, y1; uint16_t tw, th;
         String title = book.title;
         display.getTextBounds(title, 0, 0, &x1, &y1, &tw, &th);
@@ -417,18 +430,18 @@ void LibraryApp::drawFlipBrowser() {
             title = title.substring(0, title.length() - 4) + "...";
             display.getTextBounds(title, 0, 0, &x1, &y1, &tw, &th);
         }
-        display.setCursor(cardX + 16, infoY + 24);
+        display.setCursor(cardX + 16, infoY + 32);
         display.print(title);
         
-        // Author
+        // Author - use 14pt Bookerly for better readability
         if (strlen(book.author) > 0) {
-            display.setFont(&FreeSans9pt7b);
-            display.setCursor(cardX + 16, infoY + 44);
+            display.setFont(&Bookerly14pt7b);
+            display.setCursor(cardX + 16, infoY + 58);
             display.print(book.author);
         }
         
-        // Stats line
-        display.setFont(&FreeSans9pt7b);
+        // Stats line - use 12pt Bookerly
+        display.setFont(&Bookerly12pt7b);
         char statsStr[64];
         if (book.totalChapters > 0 && book.estimatedPages > 0) {
             if (book.progress > 0.01f) {
@@ -442,7 +455,7 @@ void LibraryApp::drawFlipBrowser() {
         } else {
             strcpy(statsStr, "Not started");
         }
-        display.setCursor(cardX + 16, infoY + 66);
+        display.setCursor(cardX + 16, infoY + 82);
         display.print(statsStr);
         
         // Navigation dots
@@ -507,7 +520,7 @@ void LibraryApp::drawListBrowser() {
         }
         
         int y = 56;
-        int itemH = 80;
+        int itemH = 105;  // Taller items for larger fonts
         int maxVisible = (screenH - 56 - 40) / itemH;
         
         for (int i = scrollOffset; i < min(scrollOffset + maxVisible, bookCount); i++) {
@@ -526,57 +539,57 @@ void LibraryApp::drawListBrowser() {
             }
             
             // Mini cover placeholder
-            int coverX = 24, coverY = itemY + 8;
-            int coverW = 40, coverH = itemH - 20;
+            int coverX = 24, coverY = itemY + 10;
+            int coverW = 50, coverH = itemH - 24;
             display.drawRoundRect(coverX, coverY, coverW, coverH, 4, 
                                   selected ? GxEPD_WHITE : GxEPD_BLACK);
             
-            // Title & Author
-            int textX = coverX + coverW + 12;
-            display.setFont(&FreeSansBold9pt7b);
-            display.setCursor(textX, itemY + 24);
+            // Title & Author - use larger Bookerly fonts
+            int textX = coverX + coverW + 14;
+            display.setFont(&BookerlyBold16pt7b);  // Larger title font
+            display.setCursor(textX, itemY + 32);
             
-            char truncTitle[28];
-            strncpy(truncTitle, book.title, 27);
-            truncTitle[27] = '\0';
+            char truncTitle[24];
+            strncpy(truncTitle, book.title, 23);
+            truncTitle[23] = '\0';
             display.print(truncTitle);
             
-            display.setFont(&FreeSans9pt7b);
-            display.setCursor(textX, itemY + 42);
+            display.setFont(&Bookerly14pt7b);  // Larger author font
+            display.setCursor(textX, itemY + 56);
             if (strlen(book.author) > 0) {
                 display.print(book.author);
             }
             
             // Progress bar
-            int barX = textX, barY = itemY + 52;
-            int barW = screenW - textX - 70, barH = 4;
+            int barX = textX, barY = itemY + 74;
+            int barW = screenW - textX - 80, barH = 6;
             
             if (selected) {
-                display.fillRoundRect(barX, barY, barW, barH, 2, GxEPD_WHITE);
+                display.fillRoundRect(barX, barY, barW, barH, 3, GxEPD_WHITE);
             } else {
-                display.drawRoundRect(barX, barY, barW, barH, 2, GxEPD_BLACK);
+                display.drawRoundRect(barX, barY, barW, barH, 3, GxEPD_BLACK);
             }
             
             if (book.progress > 0.01f) {
                 int fillW = (barW * (int)(book.progress * 100)) / 100;
                 if (fillW > 0) {
                     if (selected) {
-                        display.fillRoundRect(barX + fillW, barY, barW - fillW, barH, 2, GxEPD_BLACK);
+                        display.fillRoundRect(barX + fillW, barY, barW - fillW, barH, 3, GxEPD_BLACK);
                     } else {
-                        display.fillRoundRect(barX, barY, fillW, barH, 2, GxEPD_BLACK);
+                        display.fillRoundRect(barX, barY, fillW, barH, 3, GxEPD_BLACK);
                     }
                 }
             }
             
-            // Progress percentage
-            display.setFont(&FreeSansBold9pt7b);
+            // Progress percentage - larger font
+            display.setFont(&BookerlyBold14pt7b);
             char pctStr[8];
             int pct = (int)(book.progress * 100);
             snprintf(pctStr, 8, "%d%%", pct);
             
             int16_t tx, ty; uint16_t tw, th;
             display.getTextBounds(pctStr, 0, 0, &tx, &ty, &tw, &th);
-            display.setCursor(screenW - 36 - tw, itemY + 40);
+            display.setCursor(screenW - 40 - tw, itemY + 52);
             display.print(pctStr);
         }
         
@@ -624,20 +637,55 @@ void LibraryApp::drawStatusBarInPage() {
     display.setTextColor(GxEPD_BLACK);
     
     int y = screenH - 20;
-    int margin = settings.screenMargin;
+    int margin = settings.screenMargin + 5;  // Slightly more margin for status bar
     
-    char pageStr[32];
-    snprintf(pageStr, sizeof(pageStr), "Ch %d - %d/%d", currentChapter + 1, currentPage + 1, totalPages);
+    // Left: Battery percentage
+    int batPercent = batteryMonitor.getPercent();
+    char batStr[16];
+    snprintf(batStr, sizeof(batStr), "%d%%", batPercent);  // Just percentage, no emoji (font doesn't support it)
     display.setCursor(margin, y);
-    display.print(pageStr);
+    display.print(batStr);
     
+    // Right: Page number and percentage ()
     float progress = getReadingProgress();
-    char progStr[16];
-    snprintf(progStr, sizeof(progStr), "%d%%", (int)(progress * 100));
+    char rightStr[24];
+    snprintf(rightStr, sizeof(rightStr), "%d/%d %d%%", currentPage + 1, totalPages, (int)(progress * 100));
     int16_t x1, y1; uint16_t w, h;
-    display.getTextBounds(progStr, 0, 0, &x1, &y1, &w, &h);
+    display.getTextBounds(rightStr, 0, 0, &x1, &y1, &w, &h);
     display.setCursor(screenW - margin - w, y);
-    display.print(progStr);
+    display.print(rightStr);
+    
+    // Center: Chapter title (truncated to fit between battery and page)
+    if (settings.showChapterTitle && chapterTitle[0] != '\0') {
+        // Calculate available space for chapter title
+        int16_t bx1, by1; uint16_t bw, bh;
+        display.getTextBounds(batStr, 0, 0, &bx1, &by1, &bw, &bh);
+        int leftEnd = margin + bw + 15;  // Space after battery
+        int rightStart = screenW - margin - w - 15;  // Space before page info
+        int availableWidth = rightStart - leftEnd;
+        
+        if (availableWidth > 60) {  // Only show if there's room
+            // Truncate chapter title to fit
+            char truncTitle[48];
+            strncpy(truncTitle, chapterTitle, sizeof(truncTitle) - 1);
+            truncTitle[sizeof(truncTitle) - 1] = '\0';
+            
+            // Measure and truncate if needed
+            display.getTextBounds(truncTitle, 0, 0, &x1, &y1, &w, &h);
+            while (w > (uint16_t)availableWidth && strlen(truncTitle) > 5) {
+                truncTitle[strlen(truncTitle) - 4] = '.';
+                truncTitle[strlen(truncTitle) - 3] = '.';
+                truncTitle[strlen(truncTitle) - 2] = '.';
+                truncTitle[strlen(truncTitle) - 1] = '\0';
+                display.getTextBounds(truncTitle, 0, 0, &x1, &y1, &w, &h);
+            }
+            
+            // Center the title
+            int titleX = leftEnd + (availableWidth - w) / 2;
+            display.setCursor(titleX, y);
+            display.print(truncTitle);
+        }
+    }
 }
 
 // =============================================================================
@@ -1174,13 +1222,29 @@ void LibraryApp::drawCoverPlaceholder(int x, int y, int maxW, int maxH, const ch
 // Utility Screens
 // =============================================================================
 void LibraryApp::showLoadingScreen(const char* message) {
-    display.setFullWindow();
+    // Small overlay popup on current page, not a full screen
+    // Uses partial refresh for speed - no black flash
+    int popupW = 200;
+    int popupH = 50;
+    int popupX = (screenW - popupW) / 2;
+    int popupY = (screenH - popupH) / 2;
+    
+    display.setPartialWindow(popupX, popupY, popupW, popupH);
     display.firstPage();
     do {
-        display.fillScreen(GxEPD_WHITE);
-        display.setFont(&FreeSans12pt7b);
+        // Draw popup background with border
+        display.fillRect(popupX, popupY, popupW, popupH, GxEPD_WHITE);
+        display.drawRect(popupX, popupY, popupW, popupH, GxEPD_BLACK);
+        display.drawRect(popupX + 1, popupY + 1, popupW - 2, popupH - 2, GxEPD_BLACK);
+        
+        // Draw message centered in popup
+        display.setFont(&FreeSans9pt7b);
         display.setTextColor(GxEPD_BLACK);
-        centerText(message, screenW/2, screenH/2);
+        int16_t x1, y1;
+        uint16_t tw, th;
+        display.getTextBounds(message, 0, 0, &x1, &y1, &tw, &th);
+        display.setCursor(popupX + (popupW - tw) / 2, popupY + (popupH + th) / 2);
+        display.print(message);
     } while (display.nextPage());
 }
 

@@ -13,6 +13,7 @@
 #include "core/ButtonInput.h"
 #include "core/PluginRunner.h"
 #include "core/SettingsState.h"
+#include "core/PowerManager.h"
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
 
@@ -74,6 +75,19 @@ void openAppByItemIndex(uint8_t itemIndex) {
     // Library - allocated on demand, handles its own display refresh
 #if FEATURE_READER
     if (itemIndex == HOME_ITEM_LIBRARY) {
+        // Show loading overlay immediately
+        display.setPartialWindow(display.width()/2 - 100, display.height()/2 - 25, 200, 50);
+        display.firstPage();
+        do {
+            display.fillRect(display.width()/2 - 100, display.height()/2 - 25, 200, 50, GxEPD_WHITE);
+            display.drawRect(display.width()/2 - 100, display.height()/2 - 25, 200, 50, GxEPD_BLACK);
+            display.drawRect(display.width()/2 - 99, display.height()/2 - 24, 198, 48, GxEPD_BLACK);
+            display.setFont(&FreeSans9pt7b);
+            display.setTextColor(GxEPD_BLACK);
+            display.setCursor(display.width()/2 - 45, display.height()/2 + 5);
+            display.print("Opening...");
+        } while (display.nextPage());
+        
         // Library needs ~35KB contiguous block. Check before attempting allocation.
         size_t freeHeap = ESP.getFreeHeap();
         size_t maxBlock = ESP.getMaxAllocHeap();
@@ -181,10 +195,16 @@ void openAppByItemIndex(uint8_t itemIndex) {
     
     while (true) {
         Button btn = readButton();
-        if (btn == BTN_BACK && lastButton == BTN_NONE) {
-            delay(100);
-            showHomeScreen();
-            break;
+        if (btn != BTN_NONE && lastButton == BTN_NONE) {
+            if (btn == BTN_POWER) {
+                powerManager.enterDeepSleep();
+                return;
+            }
+            if (btn == BTN_BACK) {
+                delay(100);
+                showHomeScreen();
+                break;
+            }
         }
         lastButton = btn;
         delay(50);
@@ -197,3 +217,130 @@ void openApp(int selectionIndex) {
         openAppByItemIndex(itemIndex);
     }
 }
+
+#if FEATURE_READER
+// Special launcher for book widget - opens Library and resumes last book
+void openLibraryWithResume() {
+    Serial.println("[LAUNCHER] Opening Library with resume...");
+    
+    // Show immediate feedback
+    int w = display.width();
+    int h = display.height();
+    display.setPartialWindow(w/2 - 100, h/2 - 25, 200, 50);
+    display.firstPage();
+    do {
+        display.fillRect(w/2 - 100, h/2 - 25, 200, 50, GxEPD_WHITE);
+        display.drawRect(w/2 - 100, h/2 - 25, 200, 50, GxEPD_BLACK);
+        display.drawRect(w/2 - 99, h/2 - 24, 198, 48, GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(w/2 - 55, h/2 + 5);
+        display.print("Resuming...");
+    } while (display.nextPage());
+    
+    // Check heap before allocation
+    if (ESP.getMaxAllocHeap() < 50000) {
+        Serial.println("[LAUNCHER] Low heap - cannot open Library");
+        showHomeScreen();
+        return;
+    }
+    
+    LibraryApp* plugin = new LibraryApp();
+    if (!plugin) {
+        Serial.println("[LAUNCHER] Library allocation failed!");
+        showHomeScreen();
+        return;
+    }
+    
+    // Initialize with autoResume=true
+    plugin->init(w, h, true);
+    plugin->draw();
+    
+    Button lastBtn = BTN_NONE;
+    unsigned long lastBtnTime = 0;
+    unsigned long lastProcessTime = 0;  // When we last processed a button
+    const unsigned long debounceMs = 50;  // Short debounce for responsiveness
+    const unsigned long repeatDelayMs = 100;  // Allow repeat after this delay post-draw
+    
+    while (true) {
+        Button btn = readButton();
+        unsigned long now = millis();
+        
+        bool shouldProcess = false;
+        
+        // Process button if: 
+        // 1. New button press (btn != lastBtn) after debounce, OR
+        // 2. Navigation button (LEFT/RIGHT) held after draw completed (enables rapid browsing)
+        if (btn != BTN_NONE && (now - lastBtnTime >= debounceMs)) {
+            if (lastBtn == BTN_NONE) {
+                // New button press
+                shouldProcess = true;
+            } else if ((btn == BTN_LEFT || btn == BTN_RIGHT) && btn == lastBtn) {
+                // Same navigation button held - allow repeat after draw completes
+                if (now - lastProcessTime >= repeatDelayMs) {
+                    shouldProcess = true;
+                }
+            }
+        }
+        
+        if (shouldProcess) {
+            powerManager.resetActivityTimer();
+            lastBtnTime = now;
+            lastProcessTime = now;
+            
+            if (btn == BTN_POWER) {
+                delete plugin;
+                powerManager.enterDeepSleep();
+                return;
+            }
+            
+            if (btn == BTN_BACK) {
+                bool consumed = plugin->handleInput(btn);
+                if (!consumed) {
+                    break;
+                }
+            } else {
+                plugin->handleInput(btn);
+            }
+            
+            if (plugin->needsRedraw()) {
+                plugin->draw();
+                
+                // After draw completes, allow immediate repeat if holding LEFT/RIGHT
+                lastProcessTime = millis();
+                
+                Button postDrawBtn = readButton();
+                if (postDrawBtn == BTN_LEFT || postDrawBtn == BTN_RIGHT) {
+                    lastBtnTime = millis();
+                } else if (postDrawBtn == BTN_NONE) {
+                    lastBtn = BTN_NONE;
+                    lastBtnTime = millis() - debounceMs;
+                }
+            }
+        }
+        
+        lastBtn = btn;
+        delay(15);
+    }
+    
+    // Cleanup
+    display.setPartialWindow(w/2 - 100, h/2 - 25, 200, 50);
+    display.firstPage();
+    do {
+        display.fillRect(w/2 - 100, h/2 - 25, 200, 50, GxEPD_WHITE);
+        display.drawRect(w/2 - 100, h/2 - 25, 200, 50, GxEPD_BLACK);
+        display.drawRect(w/2 - 99, h/2 - 24, 198, 48, GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(w/2 - 55, h/2 + 5);
+        display.print("Closing...");
+    } while (display.nextPage());
+    
+    delete plugin;
+    showHomeScreen();
+}
+#else
+void openLibraryWithResume() {
+    showHomeScreen();
+}
+#endif

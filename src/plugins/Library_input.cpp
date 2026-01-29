@@ -5,6 +5,7 @@
  */
 
 #include "plugins/Library.h"
+#include <WiFi.h>
 
 #if FEATURE_READER
 
@@ -74,11 +75,17 @@ bool LibraryApp::handleMainMenuInput(Button btn) {
     
     switch (btn) {
         case BTN_UP:
-            if (mainMenuCursor > 0) mainMenuCursor--;  // Partial refresh
+            if (mainMenuCursor > 0) {
+                mainMenuCursor--;
+                _pendingRedraw = true;  // Redraw to show selection change
+            }
             return true;
             
         case BTN_DOWN:
-            if (mainMenuCursor < maxItems - 1) mainMenuCursor++;  // Partial refresh
+            if (mainMenuCursor < maxItems - 1) {
+                mainMenuCursor++;
+                _pendingRedraw = true;  // Redraw to show selection change
+            }
             return true;
             
         case BTN_CONFIRM:
@@ -133,19 +140,25 @@ bool LibraryApp::handleFlipBrowserInput(Button btn) {
     switch (btn) {
         case BTN_LEFT:
             if (cursor > 0) {
+                // Show loading indicator while cover loads
+                showLoadingScreen("Loading cover...");
                 // Skip regular directories in flip mode
                 do { cursor--; } while (cursor > 0 && ({
                     BookEntry b; getBook(cursor, b); b.isRegularDir;
                 }));
+                needsFullRedraw = true;  // Force full redraw for cover
                 _pendingRedraw = true;
             }
             return true;
             
         case BTN_RIGHT:
             if (cursor < bookCount - 1) {
+                // Show loading indicator while cover loads
+                showLoadingScreen("Loading cover...");
                 do { cursor++; } while (cursor < bookCount - 1 && ({
                     BookEntry b; getBook(cursor, b); b.isRegularDir;
                 }));
+                needsFullRedraw = true;  // Force full redraw for cover
                 _pendingRedraw = true;
             }
             return true;
@@ -623,19 +636,78 @@ void LibraryApp::saveProgress() {
 }
 
 void LibraryApp::syncProgressToKOSync() {
-    // KOSync implementation - TODO
+    // Only sync if KOSync is enabled and WiFi is connected
+    if (!koSync.isEnabled()) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+    if (!bookIsOpen || strlen(currentBookPath) == 0) return;
+    
+    Serial.println("[LIBRARY] Syncing progress to KOSync...");
+    
+    // Generate document hash from book path
+    String docHash = KOSync::hashDocument(currentBookPath);
+    
+    // Calculate overall progress percentage
+    float progress = getReadingProgress();
+    
+    // Format progress string (chapter.page/total)
+    String progressStr = KOSync::formatProgress(currentChapter, currentPage, totalChapters);
+    
+    // Send to server
+    if (koSync.updateProgress(docHash.c_str(), progressStr.c_str(), progress)) {
+        Serial.printf("[LIBRARY] KOSync: uploaded %s = %.1f%%\n", progressStr.c_str(), progress * 100);
+    } else {
+        Serial.printf("[LIBRARY] KOSync upload failed: %s\n", koSync.getLastError().c_str());
+    }
 }
 
 void LibraryApp::syncProgressFromKOSync() {
-    // KOSync implementation - TODO
+    // Only sync if KOSync is enabled and WiFi is connected
+    if (!koSync.isEnabled()) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+    if (strlen(currentBookPath) == 0) return;
+    
+    Serial.println("[LIBRARY] Fetching progress from KOSync...");
+    
+    // Generate document hash from book path
+    String docHash = KOSync::hashDocument(currentBookPath);
+    
+    // Get progress from server
+    KOSync::Progress serverProgress;
+    if (koSync.getProgress(docHash.c_str(), serverProgress)) {
+        Serial.printf("[LIBRARY] KOSync: server has %s (%.1f%%)\n", 
+                      serverProgress.progress.c_str(), 
+                      serverProgress.percentage.toFloat() * 100);
+        
+        // Parse progress string to chapter/page
+        int serverChapter, serverPage;
+        if (KOSync::parseProgress(serverProgress.progress, serverChapter, serverPage)) {
+            // Only update if server has more progress
+            float serverPct = serverProgress.percentage.toFloat();
+            float localPct = getReadingProgress();
+            
+            if (serverPct > localPct) {
+                Serial.printf("[LIBRARY] KOSync: server ahead (%.1f%% vs %.1f%%), updating\n",
+                              serverPct * 100, localPct * 100);
+                currentChapter = serverChapter;
+                currentPage = serverPage;
+                // Reload chapter if needed
+                if (cacheValid && currentChapter != pendingChapterToLoad) {
+                    pendingChapterLoad = true;
+                    pendingChapterToLoad = currentChapter;
+                }
+            }
+        }
+    } else {
+        Serial.println("[LIBRARY] KOSync: no server progress found");
+    }
 }
 
 void LibraryApp::syncToKOReader() {
-    // KOReader sync - TODO
+    syncProgressToKOSync();
 }
 
 void LibraryApp::syncFromKOReader() {
-    // KOReader sync - TODO
+    syncProgressFromKOSync();
 }
 
 // =============================================================================
@@ -660,6 +732,9 @@ void LibraryApp::saveLastBookInfo() {
     info.page = currentPage;
     info.totalPages = totalPages;
     info.progress = getReadingProgress();
+    
+    // Ensure directory exists
+    SD.mkdir("/.sumi");
     
     File f = SD.open(LAST_BOOK_PATH, FILE_WRITE);
     if (f) {
@@ -687,11 +762,24 @@ bool LibraryApp::resumeLastBook() {
     strncpy(currentBookPath, info.bookPath, sizeof(currentBookPath) - 1);
     strncpy(currentBook, info.title, sizeof(currentBook) - 1);
     
+    // Set local progress BEFORE KOSync fetch so comparison works
+    currentChapter = info.chapter;
+    currentPage = info.page;
+    totalPages = info.totalPages;
+    
     // Detect type and open
     BookType type = detectBookType(currentBookPath);
     isEpub = (type == BookType::EPUB_FILE || type == BookType::EPUB_FOLDER);
     
     showLoadingScreen("Resuming...");
+    
+    // Fetch server progress BEFORE suspending WiFi
+    // syncProgressFromKOSync compares server vs local and uses newer
+    if (koSync.isEnabled() && WiFi.status() == WL_CONNECTED) {
+        Serial.println("[LIBRARY] Fetching KOSync progress before WiFi suspend...");
+        syncProgressFromKOSync();
+    }
+    
     suspendForReading();
     
     if (isEpub) {
@@ -718,8 +806,7 @@ bool LibraryApp::resumeLastBook() {
     textLayout->setPageSize(getLayoutWidth(), screenH);
     applyFontSettings();
     
-    currentChapter = info.chapter;
-    currentPage = info.page;
+    // currentChapter/currentPage already set (and possibly updated by KOSync)
     
     // Use synchronous loading (no render task)
     pendingChapterLoad = true;

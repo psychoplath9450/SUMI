@@ -74,7 +74,7 @@ void LibraryApp::renderTaskLoop() {
             }
         }
         
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(20));  // Faster polling for more responsive page turns
     }
 }
 
@@ -148,7 +148,7 @@ bool LibraryApp::loadChapterSync(int chapter) {
     
     if (!hasPreprocessed) {
         // Only show loading screen for slow EPUB parsing path
-        showLoadingScreen("Loading chapter...");
+        showLoadingScreen("Loading...");
     }
     
     textLayout->setPageSize(getLayoutWidth(), screenH);
@@ -173,6 +173,7 @@ bool LibraryApp::loadChapterSync(int chapter) {
             char* buffer = (char*)malloc(bufSize + 1);
             if (buffer) {
                 int consecutiveNewlines = 0;  // Track across buffer reads
+                bool extractedChapterTitle = false;  // Flag to extract first heading as title
                 
                 while (file.available()) {
                     int bytesRead = file.readBytes(buffer, bufSize);
@@ -202,10 +203,49 @@ bool LibraryApp::loadChapterSync(int chapter) {
                             
                             size_t len = strlen(start);
                             
+                            // Debug: log first few characters of each line to diagnose text issues
+                            if (len > 0 && len < 20) {
+                                Serial.printf("[PARSE] Line (%zu chars): '%s' (newlines=%d)\n", len, start, consecutiveNewlines);
+                            }
+                            
                             if (len > 0) {
+                                // Extract chapter title from first heading(s) if TOC title is generic
+                                if (*start == '#') {
+                                    // Skip the # and any spaces
+                                    const char* titleStart = start + 1;
+                                    while (*titleStart == ' ' || *titleStart == '#') titleStart++;
+                                    
+                                    // Only extract if current title is generic ("Chapter X" - case insensitive)
+                                    bool isGenericTitle = (strncasecmp(chapterTitle, "Chapter ", 8) == 0) ||
+                                                          chapterTitle[0] == '\0';
+                                    if (isGenericTitle) {
+                                        if (!extractedChapterTitle) {
+                                            // First heading - store it
+                                            strncpy(chapterTitle, titleStart, sizeof(chapterTitle) - 1);
+                                            chapterTitle[sizeof(chapterTitle) - 1] = '\0';
+                                            extractedChapterTitle = true;
+                                        } else {
+                                            // Second heading - append to first if it looks like a subtitle
+                                            // (e.g., "CHAPTER I." + "Down the Rabbit-Hole")
+                                            size_t curLen = strlen(chapterTitle);
+                                            if (curLen > 0 && curLen < sizeof(chapterTitle) - 3) {
+                                                // Check if current title already ends with punctuation
+                                                char lastChar = chapterTitle[curLen - 1];
+                                                if (lastChar == '.' || lastChar == ':' || lastChar == '!' || lastChar == '?') {
+                                                    // Just add space before subtitle
+                                                    strncat(chapterTitle, " ", sizeof(chapterTitle) - curLen - 1);
+                                                } else {
+                                                    // Add period and space
+                                                    strncat(chapterTitle, ". ", sizeof(chapterTitle) - curLen - 1);
+                                                }
+                                                strncat(chapterTitle, titleStart, sizeof(chapterTitle) - strlen(chapterTitle) - 1);
+                                            }
+                                        }
+                                    }
+                                }
+                                
                                 // If we had 2+ newlines before this, it's a new paragraph
                                 if (consecutiveNewlines >= 2) {
-                                    Serial.printf("[LOAD] Para break (%d newlines) -> endParagraph()\n", consecutiveNewlines);
                                     textLayout->endParagraph();
                                 }
                                 
@@ -335,11 +375,25 @@ static int _imgTargetX = 0;
 static int _imgTargetY = 0;
 static int _imgMaxW = 0;
 static int _imgMaxH = 0;
+static int _tjpgCallCount = 0;
 static GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT>* _imgDisplay = nullptr;
+static const char* _bookCacheDirPtr = nullptr;  // For inline image callback
 
 // TJpgDec callback for inline image rendering
 static bool _inlineImageCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
     if (!_imgDisplay) return false;
+    
+    if (_tjpgCallCount < 3) {
+        Serial.printf("[TJPG] Callback x=%d y=%d w=%d h=%d target=(%d,%d) bounds=(%d,%d)\n", 
+                      x, y, w, h, _imgTargetX, _imgTargetY, _imgMaxW, _imgMaxH);
+        // Sample first pixel
+        if (bitmap) {
+            uint16_t firstPixel = bitmap[0];
+            Serial.printf("[TJPG] First pixel: 0x%04X (r=%d g=%d b=%d)\n", 
+                         firstPixel, (firstPixel >> 11) & 0x1F, (firstPixel >> 5) & 0x3F, firstPixel & 0x1F);
+        }
+        _tjpgCallCount++;
+    }
     
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {
@@ -369,6 +423,37 @@ static bool _inlineImageCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, u
     return true;
 }
 
+// Callback for TextLayout::getInlineImages
+static void _renderInlineImageCB(const char* filename, int x, int y, int width, int height, void* userData) {
+    if (!_imgDisplay || !_bookCacheDirPtr) return;
+    
+    // Build full path: bookCacheDir/images/filename
+    char imgPath[128];
+    snprintf(imgPath, sizeof(imgPath), "%s/images/%s", _bookCacheDirPtr, filename);
+    
+    Serial.printf("[RENDER] Inline image: %s at (%d,%d) %dx%d\n", imgPath, x, y, width, height);
+    
+    if (!SD.exists(imgPath)) {
+        Serial.printf("[RENDER] Image not found: %s\n", imgPath);
+        return;
+    }
+    
+    // Reset debug counter for new image
+    _tjpgCallCount = 0;
+    
+    // Set up rendering target
+    _imgTargetX = x;
+    _imgTargetY = y;
+    
+    // Render the image
+    TJpgDec.setCallback(_inlineImageCallback);
+    TJpgDec.setJpgScale(1);
+    JRESULT result = TJpgDec.drawFsJpg(0, 0, imgPath, SD);
+    if (result != JDR_OK) {
+        Serial.printf("[RENDER] JPEG decode FAILED: result=%d\n", result);
+    }
+}
+
 void LibraryApp::renderCurrentPage() {
     if (!cacheValid || totalPages == 0) return;
     
@@ -379,11 +464,22 @@ void LibraryApp::renderCurrentPage() {
     
     MEM_LOG("render_start");
     
+    LibReaderSettings& settings = readerSettings.get();
+    
+    // Determine refresh mode: partial (fast) vs full (clean)
+    // Full refresh clears ghosting but is slower with black flash
+    // Partial refresh is fast but accumulates ghosting over time
+    bool useFullRefresh = (pagesUntilFullRefresh <= 0);
+    if (useFullRefresh) {
+        // Reset counter after full refresh
+        pagesUntilFullRefresh = settings.refreshFrequency > 0 ? settings.refreshFrequency : 10;
+    }
+    
     // Check if this is an image page
     PageType pageType = textLayout->getPageType(currentPage);
     
     if (pageType == PageType::IMAGE) {
-        // Render image page
+        // Render image page - always use full refresh for images
         char imgFilename[IMAGE_PATH_SIZE];
         int imgW, imgH;
         
@@ -434,14 +530,36 @@ void LibraryApp::renderCurrentPage() {
             } while (display.nextPage());
         }
     } else {
-        // Render text page (normal)
-        display.setFullWindow();
-        display.firstPage();
-        do {
-            display.fillScreen(GxEPD_WHITE);
-            textLayout->renderPage(currentPage, display);
-            drawStatusBarInPage();
-        } while (display.nextPage());
+        // Render text page
+        // Set up for inline image rendering
+        _imgDisplay = &display;
+        _bookCacheDirPtr = bookCacheDir;
+        _imgMaxW = screenW;
+        _imgMaxH = screenH;
+        
+        if (useFullRefresh) {
+            // Full refresh - clears ghosting with black flash
+            display.setFullWindow();
+            display.firstPage();
+            do {
+                display.fillScreen(GxEPD_WHITE);
+                textLayout->renderPage(currentPage, display);
+                // Render inline images on this page
+                textLayout->getInlineImages(currentPage, _renderInlineImageCB, nullptr);
+                drawStatusBarInPage();
+            } while (display.nextPage());
+        } else {
+            // Partial refresh - fast, no black flash
+            display.setPartialWindow(0, 0, screenW, screenH);
+            display.firstPage();
+            do {
+                display.fillScreen(GxEPD_WHITE);
+                textLayout->renderPage(currentPage, display);
+                // Render inline images on this page
+                textLayout->getInlineImages(currentPage, _renderInlineImageCB, nullptr);
+                drawStatusBarInPage();
+            } while (display.nextPage());
+        }
     }
     
     MEM_LOG("render_done");

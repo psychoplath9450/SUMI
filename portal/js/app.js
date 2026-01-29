@@ -66,7 +66,7 @@ let builderConfig = {
   showBatteryLock: true,
   
   // Sleep screen
-  sleepStyle: 'off',
+  sleepStyle: 'shuffle',
   sleepPhotoSource: 'shuffle',
   showBatterySleep: true,
   sleepMinutes: 15,
@@ -220,11 +220,6 @@ async function refreshSummary() {
       document.getElementById('sumBootBook').textContent = settings.display?.bootToLastBook ? '✓ On' : '✗ Off';
       document.getElementById('sumInvert').textContent = settings.display?.invertColors ? '✓ On' : '✗ Off';
       document.getElementById('sumSleepTimer').textContent = settings.display?.sleepMinutes ? settings.display.sleepMinutes + ' min' : 'Off';
-      
-      // Reader settings
-      document.getElementById('sumFontSize').textContent = (settings.reader?.fontSize || 18) + 'px';
-      document.getElementById('sumLineHeight').textContent = (settings.reader?.lineHeight || 150) + '%';
-      document.getElementById('sumJustify').textContent = settings.reader?.justify ? '✓ On' : '✗ Off';
       
       // Sync
       document.getElementById('sumKosync').textContent = settings.sync?.kosyncEnabled ? '✓ Enabled' : '✗ Off';
@@ -875,14 +870,8 @@ async function saveAndDeploy() {
         showBatterySleep: builderConfig.showBatterySleep,
         sleepMinutes: builderConfig.sleepMinutes || 15,
         wakeButton: {any:0, select:1, power:2}[builderConfig.wakeButton] || 0
-      },
-      // Reader settings
-      reader: {
-        fontSize: parseInt(document.getElementById('readerFontSize')?.value) || 18,
-        lineHeight: parseInt(document.getElementById('readerLineHeight')?.value) || 150,
-        margins: parseInt(document.getElementById('readerMargins')?.value) || 20,
-        textAlign: document.getElementById('togJustify')?.classList.contains('on') ? 1 : 0
       }
+      // Reader settings now managed on-device only
     });
     
     originalSelected = new Set(selected);
@@ -910,7 +899,7 @@ function resetToDefaults() {
     theme: 0, iconStyle: 'rounded', orientation: 'portrait', fontSize: 12,
     showStatusBar: true, showBattery: true, showClock: true, showWifi: false,
     lockStyle: 'shuffle', showBatteryLock: true,
-    sleepStyle: 'off', showBatterySleep: true, sleepMinutes: 15, wakeButton: 'any'
+    sleepStyle: 'shuffle', showBatterySleep: true, sleepMinutes: 15, wakeButton: 'any'
   };
   syncUIToConfig();
   renderPlugins();
@@ -1067,6 +1056,9 @@ async function pollWifiConnection(ssid, attempts = 0) {
       <button class="btn btn-sm btn-secondary" style="margin-top:8px;" onclick="disconnectWifi()">📴 Disconnect</button>
     `;
     checkWifiWarnings();
+    
+    // Auto-detect timezone from browser on first WiFi connect
+    autoSetupTimezoneAndLocation();
   } else {
     // Still connecting, update status and try again
     document.getElementById('wifiStatus').innerHTML = `
@@ -1133,6 +1125,7 @@ async function refreshFiles(type) {
             author: meta.author,
             totalChapters: meta.totalChapters,
             totalWords: meta.totalWords,
+            totalImages: meta.totalImages || 0,
             estimatedPages: meta.estimatedPages,
             estimatedReadingMins: meta.estimatedReadingMins,
             currentChapter: meta.currentChapter,
@@ -1224,6 +1217,8 @@ function renderFileGrid(type) {
       if (f.isProcessed) {
         if (f.totalChapters) metaInfo.push(`${f.totalChapters} ch`);
         if (f.estimatedPages) metaInfo.push(`~${f.estimatedPages} pg`);
+        // Always show image count for processed books
+        metaInfo.push(`${f.totalImages || 0} img`);
         if (f.estimatedReadingMins) metaInfo.push(formatReadTime(f.estimatedReadingMins));
       } else {
         metaInfo.push(formatSize(f.size));
@@ -1564,13 +1559,21 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
     const chapterPath = resolveHref(item.href, opfDir);
     const chapterFile = zip.file(chapterPath);
     
+    // Get directory of chapter file for resolving relative image paths
+    const chapterDir = chapterPath.includes('/') 
+      ? chapterPath.substring(0, chapterPath.lastIndexOf('/') + 1)
+      : '';
+    
     if (chapterFile) {
       try {
         let html = await chapterFile.async('string');
         
+        console.log(`[PORTAL] Processing chapter ${i}: ${chapterPath}, html length: ${html.length}, chapterDir: ${chapterDir}`);
+        
         // Extract inline images BEFORE converting to plain text
-        // This uploads images and returns markers to insert
-        const images = await extractInlineImages(zip, html, opfDir, cacheDir, imageIndex);
+        // Pass chapterDir so image paths resolve correctly (images are relative to chapter, not OPF)
+        const images = await extractInlineImages(zip, html, chapterDir, cacheDir, imageIndex);
+        console.log(`[PORTAL] extractInlineImages returned ${images.length} images`);
         
         // Replace <img> tags with markers
         for (const img of images) {
@@ -1580,11 +1583,24 @@ async function fullProcessEpub(file, onProgress, onCoverReady) {
         // Convert HTML to plain text with rich markers
         let text = htmlToPlainText(html);
         
+        // PROTECT image markers from text processing
+        // Extract [!IMG:...] markers before typography/hyphenation mangles them
+        const imgMarkers = [];
+        text = text.replace(/\[!IMG:[^\]]+\]/g, (match) => {
+          imgMarkers.push(match);
+          return `\x00IMGMARKER${imgMarkers.length - 1}\x00`;
+        });
+        
         // Apply smart typography (quotes, em-dashes, ellipsis)
         text = applySmartTypography(text);
         
         // Add soft hyphens for better line breaking
         text = addSoftHyphens(text, language);
+        
+        // RESTORE image markers (unchanged)
+        text = text.replace(/\x00IMGMARKER(\d+)\x00/g, (m, idx) => {
+          return imgMarkers[parseInt(idx)];
+        });
         
         if (text.trim().length > 0) {
           const charCount = text.length;
@@ -1943,28 +1959,73 @@ async function extractToc(zip, opfContent, opfDir, manifest) {
 // SMART TYPOGRAPHY
 // =============================================================================
 function applySmartTypography(text) {
-  // Smart quotes (straight to curly)
-  // Opening double quotes: after space, newline, or start
-  text = text.replace(/(^|[\s\n])"/g, "$1\u201C");
-  // Closing double quotes: before space, newline, punctuation, or end
-  text = text.replace(/"([\s\n.,;:!?\)]|$)/g, "\u201D$1");
-  // Remaining double quotes (likely closing)
-  text = text.replace(/"/g, "\u201D");
+  // First, temporarily protect asterisk markers from quote processing
+  // IMPORTANT: Capture bold (**) BEFORE italic (*) to avoid conflicts
+  const boldMarkers = [];
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, (m, content) => {
+    boldMarkers.push(content);
+    return `\x00BOLD${boldMarkers.length - 1}\x00`;
+  });
+  const italicMarkers = [];
+  text = text.replace(/\*([^*\n]+)\*/g, (m, content) => {
+    italicMarkers.push(content);
+    return `\x00ITALIC${italicMarkers.length - 1}\x00`;
+  });
   
-  // Single quotes / apostrophes
-  // Opening: after space or newline
-  text = text.replace(/(^|[\s\n])'/g, "$1\u2018");
-  // Apostrophes in contractions (don't, won't, etc)
+  // Preserve existing curly quotes (some EPUBs already have them)
+  // Skip quote processing if text already has curly quotes
+  const hasExistingCurlyQuotes = /[\u201C\u201D\u2018\u2019]/.test(text);
+  
+  if (!hasExistingCurlyQuotes) {
+    // Smart quotes (straight to curly)
+    // Opening double quotes: after space, newline, start, or opening bracket/paren
+    text = text.replace(/(^|[\s\n\(\[\{])"/g, "$1\u201C");
+    // Closing double quotes: before space, newline, punctuation, end, or after word
+    text = text.replace(/"([\s\n.,;:!?\)\]\}]|$)/g, "\u201D$1");
+    // Quote after word (likely closing)
+    text = text.replace(/(\w)"/g, "$1\u201D");
+    // Remaining double quotes (likely closing)
+    text = text.replace(/"/g, "\u201D");
+    
+    // Single quotes / apostrophes
+    // Opening: after space, newline, or opening bracket
+    text = text.replace(/(^|[\s\n\(\[\{])'/g, "$1\u2018");
+  }
+  
+  // Apostrophes in contractions ALWAYS need fixing (don't, won't, it's, they'll, etc)
+  // This handles both straight quotes and ensures contractions work
   text = text.replace(/(\w)'(\w)/g, "$1\u2019$2");
-  // Remaining single quotes (likely closing)
-  text = text.replace(/'/g, "\u2019");
+  // Possessives ending in s (teachers', James')
+  text = text.replace(/(\w)'([\s\n.,;:!?\)\]\}]|$)/g, "$1\u2019$2");
   
-  // Em-dashes
+  if (!hasExistingCurlyQuotes) {
+    // Remaining single quotes (likely closing)
+    text = text.replace(/'/g, "\u2019");
+  }
+  
+  // Em-dashes (but preserve existing proper ones)
   text = text.replace(/--/g, "\u2014");
-  text = text.replace(/ - /g, " \u2014 ");
+  text = text.replace(/ - /g, "\u2014");  // Remove spaces around em-dash for tighter typography
   
   // Ellipsis
   text = text.replace(/\.\.\./g, "\u2026");
+  
+  // Restore bold markers first
+  text = text.replace(/\x00BOLD(\d+)\x00/g, (m, idx) => {
+    return '**' + boldMarkers[parseInt(idx)] + '**';
+  });
+  // Restore italic markers
+  text = text.replace(/\x00ITALIC(\d+)\x00/g, (m, idx) => {
+    return '*' + italicMarkers[parseInt(idx)] + '*';
+  });
+  
+  // Fix common spacing issues (AFTER restoring markers)
+  // Remove space before punctuation (including after italic/bold markers)
+  text = text.replace(/\*\s+([.,;:!?\)\]\}])/g, "*$1");  // *word* , -> *word*,
+  text = text.replace(/\*\*\s+([.,;:!?\)\]\}])/g, "**$1");  // **word** , -> **word**,
+  text = text.replace(/ +([.,;:!?\)\]\}])/g, "$1");  // word , -> word,
+  // Ensure space after punctuation (except at end of line or before closing markers)
+  text = text.replace(/([.,;:!?])([A-Za-z])/g, "$1 $2");
   
   return text;
 }
@@ -2048,67 +2109,190 @@ function addSoftHyphens(text, language = 'en') {
 // =============================================================================
 // INLINE IMAGE EXTRACTION
 // =============================================================================
-async function extractInlineImages(zip, html, opfDir, cacheDir, imageIndex) {
+async function extractInlineImages(zip, html, chapterDir, cacheDir, imageIndex) {
   const images = [];
-  const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
-  let match;
+  
+  console.log(`[PORTAL] extractInlineImages called - chapterDir: ${chapterDir}, html length: ${html.length}`);
   
   // Target size for e-ink display (480x800 with margins)
-  // Leave room for status bar and comfortable margins
   const MAX_IMG_WIDTH = 420;
-  const MAX_IMG_HEIGHT = 680;
+  const MAX_IMG_HEIGHT = 500;  // Leave room for text on e-ink (800px screen)
   const MIN_IMG_SIZE = 80;  // Skip icons/spacers smaller than this
   
-  while ((match = imgRegex.exec(html)) !== null) {
-    const src = match[1];
-    
-    // Skip data: URLs and tiny embedded images
-    if (src.startsWith('data:')) continue;
-    
-    const imgPath = resolveHref(decodeURIComponent(src), opfDir);
-    const imgFile = zip.file(imgPath);
-    
-    if (imgFile) {
-      try {
-        const imgData = await imgFile.async('blob');
-        
-        // Check original dimensions first
-        const origDims = await getImageDimensions(imgData);
-        
-        // Skip tiny images (icons, spacers, decorations)
-        if (origDims.width < MIN_IMG_SIZE && origDims.height < MIN_IMG_SIZE) {
-          console.log('[PORTAL] Skipping tiny image:', imgPath, origDims);
-          continue;
-        }
-        
-        // Resize image for e-ink display
-        const resized = await processImage(imgData, MAX_IMG_WIDTH, MAX_IMG_HEIGHT, 0.8);
-        
-        if (resized && resized.size > 100) {
-          const imgFilename = `img_${String(imageIndex.count).padStart(3, '0')}.jpg`;
-          imageIndex.count++;
-          
-          // Upload image to cache directory
-          await uploadBlobFile(`${cacheDir}/images/${imgFilename}`, resized);
-          
-          // Get resized dimensions for marker
-          const dims = await getImageDimensions(resized);
-          
-          images.push({
-            original: match[0],
-            marker: `[!IMG:${imgFilename},w=${dims.width},h=${dims.height}]`,
-            filename: imgFilename
-          });
-          
-          console.log(`[PORTAL] Extracted image: ${imgFilename} (${dims.width}x${dims.height})`);
-        }
-      } catch (e) {
-        console.warn('[PORTAL] Failed to extract image:', imgPath, e);
+  // Find all image references - multiple patterns for different EPUB formats
+  const allMatches = [];
+  
+  // Pattern 1: Standard <img ... src="..."> - more flexible regex
+  // Match img tags and extract src attribute regardless of position
+  const imgTags = html.match(/<img[^>]+>/gi) || [];
+  console.log(`[PORTAL] Found ${imgTags.length} <img> tags`);
+  
+  for (const tag of imgTags) {
+    const srcMatch = tag.match(/src\s*=\s*["']([^"']+)["']/i);
+    if (srcMatch) {
+      allMatches.push({ fullMatch: tag, src: srcMatch[1], index: html.indexOf(tag) });
+      console.log(`[PORTAL] Found img src: ${srcMatch[1]}`);
+    }
+  }
+  
+  // Pattern 2: SVG <image> with href or xlink:href
+  const svgImageTags = html.match(/<image[^>]+>/gi) || [];
+  for (const tag of svgImageTags) {
+    const hrefMatch = tag.match(/(?:xlink:)?href\s*=\s*["']([^"']+)["']/i);
+    if (hrefMatch) {
+      allMatches.push({ fullMatch: tag, src: hrefMatch[1], index: html.indexOf(tag) });
+      console.log(`[PORTAL] Found svg image href: ${hrefMatch[1]}`);
+    }
+  }
+  
+  // Pattern 3: <figure> containing images (Standard Ebooks wraps in figure)
+  const figureTags = html.match(/<figure[^>]*>[\s\S]*?<\/figure>/gi) || [];
+  console.log(`[PORTAL] Found ${figureTags.length} <figure> tags`);
+  
+  for (const figure of figureTags) {
+    // Look for img inside figure
+    const imgMatch = figure.match(/<img[^>]+>/i);
+    if (imgMatch) {
+      const srcMatch = imgMatch[0].match(/src\s*=\s*["']([^"']+)["']/i);
+      if (srcMatch && !allMatches.some(m => m.src === srcMatch[1])) {
+        allMatches.push({ fullMatch: imgMatch[0], src: srcMatch[1], index: html.indexOf(imgMatch[0]) });
+        console.log(`[PORTAL] Found figure img src: ${srcMatch[1]}`);
       }
     }
   }
   
+  // Sort by position and remove duplicates
+  allMatches.sort((a, b) => a.index - b.index);
+  const seen = new Set();
+  const uniqueMatches = allMatches.filter(m => {
+    if (seen.has(m.src)) return false;
+    seen.add(m.src);
+    return true;
+  });
+  
+  console.log(`[PORTAL] Total unique images to extract: ${uniqueMatches.length}`);
+  
+  for (const match of uniqueMatches) {
+    const src = match.src;
+    
+    // Skip data: URLs
+    if (src.startsWith('data:')) continue;
+    
+    // Resolve the path relative to chapter directory
+    const imgPath = resolveHref(decodeURIComponent(src), chapterDir);
+    console.log(`[PORTAL] Resolving image: ${src} -> ${imgPath}`);
+    
+    // Try to find the file with various path formats
+    let imgFile = zip.file(imgPath);
+    if (!imgFile) imgFile = zip.file(imgPath.replace(/^\//, ''));
+    if (!imgFile) {
+      // Case-insensitive search
+      const files = Object.keys(zip.files);
+      const lowerPath = imgPath.toLowerCase().replace(/^\//, '');
+      const found = files.find(f => f.toLowerCase() === lowerPath);
+      if (found) imgFile = zip.file(found);
+    }
+    
+    if (!imgFile) {
+      console.warn('[PORTAL] Image not found in zip:', imgPath);
+      continue;
+    }
+    
+    console.log(`[PORTAL] Found image file: ${imgPath}`);
+    
+    try {
+      const isSvg = imgPath.toLowerCase().endsWith('.svg');
+      let imgBlob;
+      
+      if (isSvg) {
+        // Convert SVG to PNG
+        const svgText = await imgFile.async('string');
+        imgBlob = await svgToPng(svgText, MAX_IMG_WIDTH, MAX_IMG_HEIGHT);
+        if (!imgBlob) {
+          console.warn('[PORTAL] Failed to convert SVG:', imgPath);
+          continue;
+        }
+      } else {
+        imgBlob = await imgFile.async('blob');
+      }
+      
+      // Check original dimensions
+      const origDims = await getImageDimensions(imgBlob);
+      
+      // Skip tiny images
+      if (origDims.width < MIN_IMG_SIZE && origDims.height < MIN_IMG_SIZE) {
+        console.log('[PORTAL] Skipping small image:', imgPath, `${origDims.width}x${origDims.height}`);
+        continue;
+      }
+      
+      // Resize/convert for e-ink (grayscale JPG)
+      const resized = await processImage(imgBlob, MAX_IMG_WIDTH, MAX_IMG_HEIGHT, 0.85);
+      
+      if (resized && resized.size > 100) {
+        const imgFilename = `img_${String(imageIndex.count).padStart(3, '0')}.jpg`;
+        imageIndex.count++;
+        
+        // Upload image with delay for ESP32 recovery
+        await uploadBlobFile(`${cacheDir}/images/${imgFilename}`, resized);
+        
+        // Extra delay between images to prevent overwhelming ESP32
+        await new Promise(r => setTimeout(r, 100));
+        
+        const dims = await getImageDimensions(resized);
+        
+        images.push({
+          original: match.fullMatch,
+          marker: `[!IMG:${imgFilename},w=${dims.width},h=${dims.height}]`,
+          filename: imgFilename
+        });
+        
+        console.log(`[PORTAL] Extracted: ${imgFilename} (${dims.width}x${dims.height}) from ${imgPath}`);
+      }
+    } catch (e) {
+      console.warn('[PORTAL] Failed to extract:', imgPath, e.message || e);
+    }
+  }
+  
   return images;
+}
+
+// Convert SVG to PNG using canvas
+async function svgToPng(svgText, maxWidth, maxHeight) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    
+    img.onload = () => {
+      let w = img.width || 400;
+      let h = img.height || 400;
+      
+      // Scale to fit
+      if (w > maxWidth) { h = h * maxWidth / w; w = maxWidth; }
+      if (h > maxHeight) { w = w * maxHeight / h; h = maxHeight; }
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(w);
+      canvas.height = Math.round(h);
+      
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      
+      canvas.toBlob(blob => {
+        URL.revokeObjectURL(img.src);
+        resolve(blob);
+      }, 'image/png', 0.9);
+    };
+    
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src);
+      resolve(null);
+    };
+    
+    // Create blob URL from SVG
+    const svgBlob = new Blob([svgText], { type: 'image/svg+xml' });
+    img.src = URL.createObjectURL(svgBlob);
+  });
 }
 
 async function getImageDimensions(blob) {
@@ -2166,22 +2350,53 @@ function htmlToPlainText(html) {
   // === RICH TEXT MARKERS ===
   
   // Headers: convert to # prefix (before removing tags)
-  text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (m, content) => {
+  // Process headers in order: h1, h2, h3, etc.
+  text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (m, level, content) => {
     // Strip nested tags but preserve word boundaries
     const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!clean) return '';
+    
+    // Check if this is a combined "CHAPTER X. Title" format
+    // Split into separate lines for better e-ink display
+    const chapterMatch = clean.match(/^(CHAPTER\s+[IVXLCDM\d]+\.?)\s*(.*)$/i);
+    if (chapterMatch && chapterMatch[2]) {
+      // Return chapter number and title on separate lines
+      return '\n\n# ' + chapterMatch[1].trim() + '\n# ' + chapterMatch[2].trim() + '\n\n';
+    }
+    
     return '\n\n# ' + clean + '\n\n';
   });
   
-  // Bold: **text** (add space after to prevent concatenation)
+  // Bold: **text** - handle <b>, <strong>, and styled spans
   text = text.replace(/<(b|strong)[^>]*>([\s\S]*?)<\/\1>/gi, (m, tag, content) => {
     const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    return '**' + clean + '** ';
+    if (!clean) return '';
+    return '**' + clean + '**';
+  });
+  // Bold spans with style or class
+  text = text.replace(/<span[^>]*(?:style=["'][^"']*font-weight:\s*bold[^"']*["']|class=["'][^"']*bold[^"']*["'])[^>]*>([\s\S]*?)<\/span>/gi, (m, content) => {
+    const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!clean) return '';
+    return '**' + clean + '**';
   });
   
-  // Italic: *text* (add space after to prevent concatenation)
-  text = text.replace(/<(i|em)[^>]*>([\s\S]*?)<\/\1>/gi, (m, tag, content) => {
+  // Italic: *text* - handle <i>, <em>, <cite>, and styled spans
+  text = text.replace(/<(i|em|cite)[^>]*>([\s\S]*?)<\/\1>/gi, (m, tag, content) => {
     const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    return '*' + clean + '* ';
+    if (!clean) return '';
+    return '*' + clean + '*';
+  });
+  // Also handle mismatched tags like <i>...</em> (some EPUBs have this)
+  text = text.replace(/<(i|em|cite)[^>]*>([\s\S]*?)<\/(i|em|cite)>/gi, (m, openTag, content, closeTag) => {
+    const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!clean) return '';
+    return '*' + clean + '*';
+  });
+  // Italic spans with style or class
+  text = text.replace(/<span[^>]*(?:style=["'][^"']*font-style:\s*italic[^"']*["']|class=["'][^"']*italic[^"']*["'])[^>]*>([\s\S]*?)<\/span>/gi, (m, content) => {
+    const clean = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!clean) return '';
+    return '*' + clean + '*';
   });
   
   // List items: • prefix
@@ -2312,6 +2527,11 @@ async function processImage(blob, maxWidth, maxHeight, quality) {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       
+      // CRITICAL: Fill with white first to handle transparent PNGs
+      // Without this, transparent pixels become black in JPEG output
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, width, height);
+      
       ctx.drawImage(img, 0, 0, width, height);
       
       // Convert to grayscale with contrast enhancement for e-ink
@@ -2395,38 +2615,72 @@ async function ensureDirectory(path) {
   }
 }
 
-async function uploadTextFile(path, content) {
+async function uploadTextFile(path, content, retries = 3) {
   const blob = new Blob([content], { type: 'text/plain' });
   const filename = path.split('/').pop();
   const dir = path.substring(0, path.lastIndexOf('/'));
   
   console.log(`[UPLOAD] Text file: dir='${dir}' filename='${filename}'`);
   
-  const formData = new FormData();
-  // IMPORTANT: path must come BEFORE file for multipart parsing
-  formData.append('path', dir);
-  formData.append('file', new File([blob], filename, { type: 'text/plain' }));
-  
-  const resp = await fetch('/api/files/upload', { method: 'POST', body: formData });
-  if (!resp.ok) {
-    console.error('[UPLOAD] Failed:', resp.status);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const formData = new FormData();
+      // IMPORTANT: path must come BEFORE file for multipart parsing
+      formData.append('path', dir);
+      formData.append('file', new File([blob], filename, { type: 'text/plain' }));
+      
+      const resp = await fetch('/api/files/upload', { method: 'POST', body: formData });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      
+      // Success - add delay to let ESP32 recover
+      await new Promise(r => setTimeout(r, 100));
+      return;
+    } catch (e) {
+      console.warn(`[UPLOAD] Text attempt ${attempt}/${retries} failed:`, e.message || e);
+      if (attempt < retries) {
+        // Wait longer before retry
+        await new Promise(r => setTimeout(r, 500 * attempt));
+      } else {
+        console.error('[UPLOAD] All retries failed for:', path);
+        throw e;
+      }
+    }
   }
 }
 
-async function uploadBlobFile(path, blob) {
+async function uploadBlobFile(path, blob, retries = 3) {
   const filename = path.split('/').pop();
   const dir = path.substring(0, path.lastIndexOf('/'));
   
   console.log(`[UPLOAD] Blob file: dir='${dir}' filename='${filename}'`);
   
-  const formData = new FormData();
-  // IMPORTANT: path must come BEFORE file for multipart parsing
-  formData.append('path', dir);
-  formData.append('file', new File([blob], filename, { type: blob.type }));
-  
-  const resp = await fetch('/api/files/upload', { method: 'POST', body: formData });
-  if (!resp.ok) {
-    console.error('[UPLOAD] Failed:', resp.status);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const formData = new FormData();
+      // IMPORTANT: path must come BEFORE file for multipart parsing
+      formData.append('path', dir);
+      formData.append('file', new File([blob], filename, { type: blob.type }));
+      
+      const resp = await fetch('/api/files/upload', { method: 'POST', body: formData });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      
+      // Success - add delay to let ESP32 recover
+      await new Promise(r => setTimeout(r, 150));
+      return;
+    } catch (e) {
+      console.warn(`[UPLOAD] Attempt ${attempt}/${retries} failed:`, e.message || e);
+      if (attempt < retries) {
+        // Wait longer before retry
+        await new Promise(r => setTimeout(r, 500 * attempt));
+      } else {
+        console.error('[UPLOAD] All retries failed for:', path);
+        throw e;
+      }
+    }
   }
 }
 
@@ -2586,7 +2840,11 @@ async function processExistingBooks() {
       return;
     }
     
-    const books = data.unprocessed;
+    // Sort books by file size (smallest first) to process easier ones first
+    // This helps avoid overwhelming the ESP32 with large image-heavy books early
+    let books = data.unprocessed;
+    books.sort((a, b) => (a.size || 0) - (b.size || 0));
+    console.log('[PORTAL] Processing order (smallest first):', books.map(b => `${b.name} (${b.size || '?'} bytes)`));
     
     // Set up global processing state
     processingState.active = true;
@@ -2803,6 +3061,12 @@ async function processExistingBooks() {
         
         completed++;
         
+        // Give ESP32 time to recover before processing next book
+        if (i < books.length - 1) {
+          if (statusEl) statusEl.innerHTML = `<span style="color: #28a745;">✓ Done - waiting...</span>`;
+          await new Promise(r => setTimeout(r, 2000)); // 2 second delay between books
+        }
+        
       } catch (e) {
         if (stuckTimeout) clearInterval(stuckTimeout);
         console.error('Failed to process:', book.name, e);
@@ -2985,10 +3249,16 @@ async function processExistingEpub(file, onProgress, onCoverReady) {
     }
   }
   
+  // Ensure images directory exists for inline images
+  await ensureDirectory(cacheDir + '/images');
+  
   // Extract chapters with detailed progress
   const chapters = [];
   let totalChars = 0;
   let totalWords = 0;
+  let imageIndex = { count: 0 };  // Shared counter for all images in book
+  
+  console.log(`[PORTAL] Processing ${spine.length} chapters for ${file.name}`);
   
   for (let i = 0; i < spine.length; i++) {
     const idref = spine[i];
@@ -3002,10 +3272,47 @@ async function processExistingEpub(file, onProgress, onCoverReady) {
     const chapterPath = resolveHref(item.href, opfDir);
     const chapterFile = zip.file(chapterPath);
     
+    // Get directory of chapter file for resolving relative image paths
+    const chapterDir = chapterPath.includes('/') 
+      ? chapterPath.substring(0, chapterPath.lastIndexOf('/') + 1)
+      : '';
+    
     if (chapterFile) {
       try {
-        const html = await chapterFile.async('string');
-        const text = htmlToPlainText(html);
+        let html = await chapterFile.async('string');
+        
+        console.log(`[PORTAL] Chapter ${i}: ${chapterPath}, chapterDir: ${chapterDir}`);
+        
+        // Extract inline images BEFORE converting to plain text
+        const images = await extractInlineImages(zip, html, chapterDir, cacheDir, imageIndex);
+        console.log(`[PORTAL] Chapter ${i}: found ${images.length} images`);
+        
+        // Replace <img> tags with markers
+        for (const img of images) {
+          html = html.replace(img.original, img.marker);
+        }
+        
+        // Convert HTML to plain text with rich markers
+        let text = htmlToPlainText(html);
+        
+        // PROTECT image markers from text processing
+        // Extract [!IMG:...] markers before typography/hyphenation mangles them
+        const imgMarkers = [];
+        text = text.replace(/\[!IMG:[^\]]+\]/g, (match) => {
+          imgMarkers.push(match);
+          return `\x00IMGMARKER${imgMarkers.length - 1}\x00`;
+        });
+        
+        // Apply smart typography
+        text = applySmartTypography(text);
+        
+        // Add soft hyphens for better line breaking
+        text = addSoftHyphens(text, metadata.language || 'en');
+        
+        // RESTORE image markers (unchanged)
+        text = text.replace(/\x00IMGMARKER(\d+)\x00/g, (m, idx) => {
+          return imgMarkers[parseInt(idx)];
+        });
         
         if (text.trim().length > 0) {
           const charCount = text.length;
@@ -3021,9 +3328,13 @@ async function processExistingEpub(file, onProgress, onCoverReady) {
             words: wordCount
           });
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn(`[PORTAL] Error processing chapter ${i}:`, e);
+      }
     }
   }
+  
+  console.log(`[PORTAL] Total images extracted: ${imageIndex.count}`);
   
   // Estimate pages: ~1800 chars per e-ink page (conservative estimate for 800x480)
   const CHARS_PER_PAGE = 1800;
@@ -3040,6 +3351,7 @@ async function processExistingEpub(file, onProgress, onCoverReady) {
     totalChapters: chapters.length,
     totalChars: totalChars,
     totalWords: totalWords,
+    totalImages: imageIndex.count,
     estimatedPages: estimatedPages,
     estimatedReadingMins: Math.ceil(totalWords / 250), // ~250 wpm average
     processedAt: Date.now(),
@@ -3135,34 +3447,6 @@ function updateSlider(el, labelId, suffix) {
 // =============================================================================
 function saveReaderSetting(key, value) {
   api('/api/reader/settings', 'POST', {[key]: parseInt(value)});
-}
-
-function toggleReaderOpt(el, key) {
-  el.classList.toggle('on');
-  api('/api/reader/settings', 'POST', {[key]: el.classList.contains('on')});
-}
-
-function updateReaderPreview() {
-  const fontSize = document.getElementById('readerFontSize').value;
-  const lineHeight = document.getElementById('readerLineHeight').value;
-  const margins = document.getElementById('readerMargins').value;
-  const justify = document.getElementById('togJustify').classList.contains('on');
-  
-  // Update value labels
-  document.getElementById('readerFontVal').textContent = fontSize + 'px';
-  document.getElementById('readerLineVal').textContent = lineHeight + '%';
-  document.getElementById('readerMarginVal').textContent = margins + 'px';
-  
-  // Update preview - scale down for the mini preview
-  const preview = document.getElementById('readerPreview');
-  if (preview) {
-    const scaledFont = Math.max(8, Math.round(fontSize * 0.5));
-    const scaledMargin = Math.max(4, Math.round(margins * 0.4));
-    preview.style.fontSize = scaledFont + 'px';
-    preview.style.lineHeight = (lineHeight / 100);
-    preview.style.padding = scaledMargin + 'px';
-    preview.style.textAlign = justify ? 'justify' : 'left';
-  }
 }
 
 // Simple toggle for switches that don't need immediate API call
@@ -3652,17 +3936,7 @@ async function loadSettings() {
   originalConfig = {...builderConfig};
   
   // Restore reader settings
-  if (data.reader) {
-    const r = data.reader;
-    const fsEl = document.getElementById('readerFontSize');
-    const lhEl = document.getElementById('readerLineHeight');
-    const mgEl = document.getElementById('readerMargins');
-    const justifyEl = document.getElementById('togJustify');
-    if (fsEl) { fsEl.value = r.fontSize || 18; updateSlider(fsEl, 'readerFontVal', 'px'); }
-    if (lhEl) { lhEl.value = r.lineHeight || 150; updateSlider(lhEl, 'readerLineVal', '%'); }
-    if (mgEl) { mgEl.value = r.margins || 20; updateSlider(mgEl, 'readerMarginVal', 'px'); }
-    if (justifyEl) { justifyEl.classList.toggle('on', r.textAlign === 1 || r.textAlign === undefined); }
-  }
+  // Reader settings now managed on-device only
   
   // Update all UI elements to match loaded state
   syncUIToConfig();
@@ -3814,6 +4088,133 @@ async function saveTimezone(value) {
       toast('Timezone saved', 'success');
       updateTimeDisplay();
     }
+  }
+}
+
+// Detect precise location using browser geolocation API
+async function detectPreciseLocation() {
+  if (!navigator.geolocation) {
+    toast('Geolocation not supported by browser', 'error');
+    return;
+  }
+  
+  toast('Requesting location...', 'info');
+  
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      
+      // Send to device
+      const result = await api('/api/weather/location', 'POST', { 
+        latitude: lat, 
+        longitude: lon,
+        precise: true  // Flag that this is precise (not IP-based)
+      });
+      
+      if (result?.success) {
+        // Update UI
+        const locDiv = document.getElementById('weatherLocation');
+        const coordsEl = document.getElementById('weatherCoords');
+        
+        if (locDiv) locDiv.textContent = result.location || 'Precise location set';
+        if (coordsEl) {
+          coordsEl.textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+          coordsEl.style.display = 'block';
+        }
+        
+        toast('Precise location saved!', 'success');
+      } else {
+        toast(result?.error || 'Failed to save location', 'error');
+      }
+    },
+    (error) => {
+      switch(error.code) {
+        case error.PERMISSION_DENIED:
+          toast('Location permission denied. Enable in browser settings.', 'error');
+          break;
+        case error.POSITION_UNAVAILABLE:
+          toast('Location unavailable', 'error');
+          break;
+        case error.TIMEOUT:
+          toast('Location request timed out', 'error');
+          break;
+        default:
+          toast('Failed to get location', 'error');
+      }
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+
+// Detect timezone from browser (more accurate than IP)
+async function detectBrowserTimezone() {
+  try {
+    // Get timezone name and offset from browser
+    const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const offsetMinutes = -new Date().getTimezoneOffset(); // JS gives inverted offset
+    const offsetSeconds = offsetMinutes * 60;
+    
+    // Display detected timezone
+    const tzEl = document.getElementById('detectedTz');
+    if (tzEl) tzEl.textContent = tzName;
+    
+    // Send to device
+    const result = await api('/api/weather/timezone', 'POST', { 
+      offset: offsetSeconds,
+      tzName: tzName  // Also send name for reference
+    });
+    
+    if (result?.success) {
+      // Update dropdown to show current selection
+      const select = document.getElementById('timezoneSelect');
+      if (select) {
+        // Check if we have a matching option
+        const options = Array.from(select.options);
+        const match = options.find(opt => parseInt(opt.value) === offsetSeconds);
+        if (match) {
+          select.value = match.value;
+        }
+      }
+      
+      toast(`Timezone set to ${tzName}`, 'success');
+      updateTimeDisplay();
+    } else {
+      toast('Failed to save timezone', 'error');
+    }
+  } catch (e) {
+    console.error('Timezone detection error:', e);
+    toast('Failed to detect timezone', 'error');
+  }
+}
+
+// Auto-setup timezone and location on first WiFi connect
+async function autoSetupTimezoneAndLocation() {
+  try {
+    // Check if timezone/location already configured
+    const settings = await api('/api/settings');
+    const hasLocation = settings?.weather?.latitude && settings?.weather?.latitude !== 0;
+    const hasTimezone = settings?.weather?.timezoneOffset && settings?.weather?.timezoneOffset !== 0;
+    
+    // Auto-set timezone from browser if not configured
+    if (!hasTimezone) {
+      console.log('[SETUP] Auto-detecting timezone from browser...');
+      const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const offsetMinutes = -new Date().getTimezoneOffset();
+      const offsetSeconds = offsetMinutes * 60;
+      
+      await api('/api/weather/timezone', 'POST', { 
+        offset: offsetSeconds,
+        tzName: tzName
+      });
+      console.log(`[SETUP] Timezone auto-set to ${tzName} (UTC${offsetMinutes >= 0 ? '+' : ''}${offsetMinutes/60})`);
+    }
+    
+    // Don't auto-request geolocation - user can click the button if they want precise location
+    // IP-based detection will happen on the device when weather is fetched
+    
+  } catch (e) {
+    console.error('[SETUP] Auto-setup error:', e);
   }
 }
 
@@ -3969,7 +4370,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await applyFeatureFlags();
   await loadSettings();
   renderPlugins();
-  updateReaderPreview();
   
   // If hostname is 192.168.4.1, we already know we're on hotspot (set at top of file)
   // Only do async detection for sumi.local case

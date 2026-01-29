@@ -273,9 +273,12 @@ void setup() {
                     
                     // Enter reader loop
                     bool reading = true;
+                    Button lastBtn = BTN_NONE;
                     while (reading) {
                         Button btn = readButton();
-                        if (btn != BTN_NONE) {
+                        
+                        // Only process on button DOWN (not while held)
+                        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
                             powerManager.resetActivityTimer();
                             if (btn == BTN_POWER) {
                                 delete libraryApp;
@@ -286,6 +289,7 @@ void setup() {
                                 libraryApp->draw();
                             }
                         }
+                        lastBtn = btn;
                         
                         // Check auto-sleep
                         uint8_t sleepMins = settingsManager.display.sleepMinutes;
@@ -293,7 +297,7 @@ void setup() {
                             delete libraryApp;
                             powerManager.enterDeepSleep();
                         }
-                        delay(20);
+                        delay(10);  // Faster polling
                     }
                     delete libraryApp;
                     bootedToBook = true;
@@ -474,7 +478,7 @@ void loop() {
     // WiFi stays OFF by default - only connects briefly for weather/time sync
     // No auto-reconnect needed
     
-    delay(20);  // Small delay to prevent tight loop
+    delay(10);  // Small delay to prevent tight loop
 }
 
 // =============================================================================
@@ -506,8 +510,7 @@ void handleButtons() {
     Button btn = readButton();
     
     if (btn != BTN_NONE && lastButton == BTN_NONE) {
-        Serial.printf("[MAIN] Button detected: %d\n", btn);
-        if (millis() - lastPress > 100) {
+        if (millis() - lastPress > 50) {  // 50ms debounce (was 100ms)
             lastPress = millis();
             powerManager.resetActivityTimer();
             

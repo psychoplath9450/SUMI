@@ -152,24 +152,9 @@
                 </table>
               </div>
               <div>
-                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Reader</div>
-                <table style="width: 100%; font-size: 11px;">
-                  <tr><td style="padding: 4px 0; color: #888;">Font Size</td><td style="text-align: right;" id="sumFontSize">--</td></tr>
-                  <tr><td style="padding: 4px 0; color: #888;">Line Height</td><td style="text-align: right;" id="sumLineHeight">--</td></tr>
-                  <tr><td style="padding: 4px 0; color: #888;">Justify Text</td><td style="text-align: right;" id="sumJustify">--</td></tr>
-                </table>
-              </div>
-            </div>
-            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-              <div>
                 <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Sync</div>
                 <table style="width: 100%; font-size: 11px;">
                   <tr><td style="padding: 4px 0; color: #888;">KOSync</td><td style="text-align: right;" id="sumKosync">--</td></tr>
-                </table>
-              </div>
-              <div>
-                <div style="font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">Keyboard</div>
-                <table style="width: 100%; font-size: 11px;">
                   <tr><td style="padding: 4px 0; color: #888;">Bluetooth</td><td style="text-align: right;" id="sumBluetooth">--</td></tr>
                 </table>
               </div>
@@ -516,40 +501,7 @@
               </div>
             </div>
           </div>
-          <div class="card">
-            <div class="card-header"><span class="card-title">Reader Settings</span></div>
-            <div class="card-body">
-              <div style="display:grid;grid-template-columns:1fr 180px;gap:12px;">
-                <div>
-                  <div class="slider-row">
-                    <span class="slider-label">Font Size</span>
-                    <input type="range" class="slider-input" id="readerFontSize" min="12" max="32" value="18" oninput="updateReaderPreview()">
-                    <span class="slider-value" id="readerFontVal">18px</span>
-                  </div>
-                  <div class="slider-row">
-                    <span class="slider-label">Line Height</span>
-                    <input type="range" class="slider-input" id="readerLineHeight" min="100" max="200" step="10" value="150" oninput="updateReaderPreview()">
-                    <span class="slider-value" id="readerLineVal">150%</span>
-                  </div>
-                  <div class="slider-row">
-                    <span class="slider-label">Margins</span>
-                    <input type="range" class="slider-input" id="readerMargins" min="5" max="40" value="20" oninput="updateReaderPreview()">
-                    <span class="slider-value" id="readerMarginVal">20px</span>
-                  </div>
-                  <div class="toggle">
-                    <span class="toggle-label">Justify Text</span>
-                    <div class="toggle-switch on" id="togJustify" onclick="toggleReaderOpt(this,'textAlign');updateReaderPreview()"></div>
-                  </div>
-                </div>
-                <div>
-                  <div style="font-size:9px;font-weight:bold;margin-bottom:4px;color:var(--mac-gray-dark);">Preview</div>
-                  <div id="readerPreview" style="background:#f5f5f0;border:1px solid var(--mac-black);height:140px;overflow:hidden;padding:8px;font-family:Georgia,serif;">
-                    <p style="margin:0;">It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness...</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+
         </div>
         
         <!-- Images Panel -->
@@ -725,10 +677,15 @@
           <div class="card-header"><span class="card-title">Location</span></div>
           <div class="card-body">
             <div id="weatherLocation" class="mb-8 text-muted">Auto-detected from IP</div>
-            <div class="form-row">
+            <div id="weatherCoords" class="mb-8 text-muted" style="font-size:11px;display:none;"></div>
+            <div class="form-row mb-8">
               <label>ZIP Code:</label>
               <input type="text" class="text-input" id="weatherZip" placeholder="e.g. 80424" style="width:80px;">
               <button class="btn btn-sm" onclick="saveWeatherZip()">Set</button>
+            </div>
+            <div class="form-row">
+              <button class="btn btn-sm btn-secondary" onclick="detectPreciseLocation()">📍 Use Precise Location</button>
+              <span class="text-muted" style="font-size:11px;margin-left:8px;">More accurate than IP</span>
             </div>
           </div>
         </div>
@@ -736,7 +693,11 @@
         <div class="card">
           <div class="card-header"><span class="card-title">Timezone</span></div>
           <div class="card-body">
-            <select id="timezoneSelect" style="width:100%;" onchange="saveTimezone()">
+            <div class="form-row mb-8">
+              <button class="btn btn-sm btn-secondary" onclick="detectBrowserTimezone()">🕐 Use Browser Timezone</button>
+              <span id="detectedTz" class="text-muted" style="font-size:11px;margin-left:8px;"></span>
+            </div>
+            <select id="timezoneSelect" style="width:100%;" onchange="saveTimezone(this.value)">
               <option value="auto">Auto-detect from IP</option>
               <option value="-18000">Eastern (UTC-5)</option>
               <option value="-21600">Central (UTC-6)</option>

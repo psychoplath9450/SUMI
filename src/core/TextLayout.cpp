@@ -43,12 +43,12 @@ TextLayout::TextLayout()
     , _marginBottom(30)        // Extra space for status bar
     , _contentWidth(460)       // 480 - 10 - 10
     , _contentHeight(760)      // 800 - 10 - 30
-    , _lineHeight(40)          // Default for 18pt font
+    , _lineHeight(40)          // Default for 28pt Bookerly MEDIUM
     , _lineHeightMultiplier(1.0f)  // Normal = 1.0
     , _paraSpacing(20)         // Half line height when extra spacing enabled
     , _useParaIndent(false)    // When true, use indent instead of spacing
     , _justify(true)
-    , _font(&FreeSans18pt7b)   // Default to 18pt
+    , _font(&FreeSans18pt7b)   // Default to 18pt (overridden by reader settings)
     , _fontBold(&FreeSansBold18pt7b)
     , _fontItalic(&FreeSans18pt7b)  // Fallback if no italic
     , _fontBoldItalic(&FreeSansBold18pt7b)  // Fallback to bold
@@ -267,7 +267,7 @@ void TextLayout::addRichText(const char* text, size_t len) {
         }
         
         // Check for [!IMG:filename,w=X,h=Y] marker (from portal preprocessing)
-        // This creates a dedicated full-page image display
+        // This creates an inline image within the text flow
         if (c == '[' && i + 5 < len && strncmp(&text[i], "[!IMG:", 6) == 0) {
             flushWord();
             
@@ -301,11 +301,11 @@ void TextLayout::addRichText(const char* text, size_t len) {
                     imgHeight = atoi(hPos + 3);
                 }
                 
-                // Create a dedicated image page
+                // Add as inline image within text flow
                 if (imgFilename[0] != '\0') {
-                    Serial.printf("[LAYOUT] Creating image page: %s (%dx%d)\n", 
+                    Serial.printf("[LAYOUT] Adding inline image: %s (%dx%d)\n", 
                         imgFilename, imgWidth, imgHeight);
-                    createImagePage(imgFilename, imgWidth, imgHeight);
+                    addInlineImage(imgFilename, imgWidth, imgHeight);
                 }
                 
                 i = end + 1;
@@ -429,6 +429,62 @@ void TextLayout::endParagraph() {
     }
 }
 
+void TextLayout::addInlineImage(const char* filename, int origWidth, int origHeight) {
+    // Finish any current line first
+    flushWord();
+    if (_currentLine.wordCount > 0) {
+        finishLine(true);
+    }
+    
+    // Calculate scaled dimensions to fit content width while preserving aspect ratio
+    int maxWidth = _contentWidth;
+    int maxHeight = _contentHeight - 40;  // Leave some room for text above/below
+    
+    float scaleW = (float)maxWidth / origWidth;
+    float scaleH = (float)maxHeight / origHeight;
+    float scale = (scaleW < scaleH) ? scaleW : scaleH;
+    
+    // Don't upscale small images
+    if (scale > 1.0f) scale = 1.0f;
+    
+    int scaledWidth = (int)(origWidth * scale);
+    int scaledHeight = (int)(origHeight * scale);
+    
+    Serial.printf("[LAYOUT] Inline image: %s scaled %dx%d -> %dx%d\n",
+        filename, origWidth, origHeight, scaledWidth, scaledHeight);
+    
+    // Check if image fits on current page
+    int effectiveLineHeight = (int)(_lineHeight * _lineHeightMultiplier);
+    int spaceNeeded = scaledHeight + effectiveLineHeight;  // Image + buffer
+    int spaceAvailable = (_pageHeight - _marginBottom) - _currentY;
+    
+    if (spaceNeeded > spaceAvailable && _currentPage.lineCount > 0) {
+        // Not enough space, start new page
+        finishPage();
+    }
+    
+    // Create an image line
+    LayoutLine imageLine;
+    imageLine.setImage(filename, _currentY, scaledWidth, scaledHeight);
+    
+    // Add to current page
+    if (_currentPage.lineCount < MAX_LINES_PER_PAGE) {
+        _currentPage.lines[_currentPage.lineCount] = imageLine;
+        _currentPage.lineCount++;
+    }
+    
+    // Advance Y past the image with some padding
+    _currentY += scaledHeight + (effectiveLineHeight / 2);
+    
+    // Check for page overflow
+    if (_currentY + effectiveLineHeight > _pageHeight - _marginBottom) {
+        finishPage();
+    }
+    
+    // Mark next line as paragraph start (text after image starts fresh)
+    _nextLineIsParaStart = true;
+}
+
 void TextLayout::setCurrentStyle(FontStyle style) {
     // Flush current word before style change
     flushWord();
@@ -463,11 +519,12 @@ void TextLayout::flushWord() {
     int wordWidth = getTextWidth(_wordBuffer, _currentStyle);
     int spaceWidth = getSpaceWidth();
     
-    // Paragraph indent (about 3 em widths)
+    // Paragraph indent (about 3 em widths) - only if _useParaIndent is enabled
     const int PARA_INDENT = 30;
     
-    // Check if this is the first word of a new paragraph
-    bool applyIndent = (_currentLine.wordCount == 0 && _nextLineIsParaStart && !_isHeaderLine && !_isBulletLine);
+    // Check if this is the first word of a new paragraph AND indent is enabled
+    // When extraParagraphSpacing=true, _useParaIndent=false, so no indent (like CrossPoint)
+    bool applyIndent = (_useParaIndent && _currentLine.wordCount == 0 && _nextLineIsParaStart && !_isHeaderLine && !_isBulletLine);
     
     // Debug: log when indent would be applied
     if (_currentLine.wordCount == 0 && _nextLineIsParaStart) {
@@ -476,15 +533,28 @@ void TextLayout::flushWord() {
     }
     
     // Check if word fits on current line
+    // Use MINIMUM spacing for fit check - justification will expand to fill
+    // This allows tighter packing like CrossPoint's algorithm
+    int minSpaceWidth = (spaceWidth * 75) / 100;  // 75% of normal space = minimum for fitting
     int neededWidth = wordWidth;
     if (_currentLine.wordCount > 0) {
-        neededWidth += spaceWidth;  // Space before word
+        neededWidth += minSpaceWidth;  // Use minimum space for fitting check
     } else if (applyIndent) {
         neededWidth += PARA_INDENT;  // Account for indent on first word
     }
     
-    if (_currentLineWidth + neededWidth > _contentWidth) {
-        // Word doesn't fit, finish current line and start new
+    // Also check against normal spacing - if it fits comfortably, use that
+    int normalNeeded = wordWidth;
+    if (_currentLine.wordCount > 0) {
+        normalNeeded += spaceWidth;
+    } else if (applyIndent) {
+        normalNeeded += PARA_INDENT;
+    }
+    bool fitsComfortably = (_currentLineWidth + normalNeeded <= _contentWidth);
+    bool fitsTightly = (_currentLineWidth + neededWidth <= _contentWidth);
+    
+    if (!fitsTightly) {
+        // Word doesn't fit even with tight spacing, finish current line and start new
         if (_currentLine.wordCount > 0) {
             finishLine(false);
         }
@@ -516,7 +586,8 @@ void TextLayout::flushWord() {
                 }
             }
         } else {
-            _currentLineWidth += spaceWidth + wordWidth;
+            // Use minimum space width for tracking - this allows tighter packing
+            _currentLineWidth += minSpaceWidth + wordWidth;
         }
         _currentLine.width = _currentLineWidth;
     }
@@ -623,7 +694,7 @@ void TextLayout::justifyLine(LayoutLine& line) {
     int gaps = line.wordCount - 1;
     
     if (gaps <= 0 || extraSpace <= 0) {
-        // Fall back to left-align
+        // Fall back to left-align with minimum spacing
         int x = _marginLeft + line.indent;
         int spaceWidth = getSpaceWidth();
         for (int i = 0; i < line.wordCount; i++) {
@@ -633,22 +704,16 @@ void TextLayout::justifyLine(LayoutLine& line) {
         return;
     }
     
-    // Calculate space per gap
+    // Get normal and minimum space widths
+    int normalSpace = getSpaceWidth();
+    int minSpace = (normalSpace * 75) / 100;  // 75% minimum for readability
+    
+    // Calculate space per gap - no max limit, always justify edge-to-edge like CrossPoint
     float spacePerGap = (float)extraSpace / gaps;
     
-    // Cap maximum gap size at 2.0x normal space width to avoid huge gaps
-    // This happens when a line has few words (e.g. end of paragraph or short lines)
-    int normalSpace = getSpaceWidth();
-    float maxGap = normalSpace * 2.0f;
-    
-    if (spacePerGap > maxGap) {
-        // Too much space - fall back to left-align
-        int x = _marginLeft + line.indent;
-        for (int i = 0; i < line.wordCount; i++) {
-            line.words[i].x = x;
-            x += line.words[i].width + normalSpace;
-        }
-        return;
+    // Ensure minimum spacing
+    if (spacePerGap < minSpace) {
+        spacePerGap = minSpace;
     }
     
     // Distribute space evenly
@@ -793,38 +858,24 @@ bool TextLayout::loadPageFromCache(int pageNum, LayoutPage& out) {
 
 void TextLayout::renderPage(int pageNum, GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT>& display) {
     if (pageNum < 0 || pageNum >= _pageCount) {
-        Serial.printf("[LAYOUT] Invalid page: %d (max %d)\n", pageNum, _pageCount);
         return;
     }
     
     // Static to avoid stack overflow - LayoutPage is large (~15KB)
     static LayoutPage page;
     if (!loadPageFromCache(pageNum, page)) {
-        Serial.printf("[LAYOUT] Failed to load page %d from cache path: %s\n", pageNum, _cachePath.c_str());
         return;
-    }
-    
-    // Only log once (not for each buffer pass)
-    static int lastLoggedPage = -1;
-    static bool debugLogDone = false;
-    if (pageNum != lastLoggedPage) {
-        Serial.printf("[LAYOUT] Rendering page %d: %d lines\n", pageNum, page.lineCount);
-        if (page.lineCount > 0) {
-            const LayoutLine& line = page.lines[0];
-            Serial.printf("[LAYOUT] Line 0: y=%d, %d words\n", line.y, line.wordCount);
-            for (int w = 0; w < min((int)line.wordCount, 5); w++) {
-                Serial.printf("[LAYOUT]   Word %d: x=%d w=%d '%s'\n", 
-                    w, line.words[w].x, line.words[w].width, line.words[w].text);
-            }
-        }
-        lastLoggedPage = pageNum;
-        debugLogDone = false;
     }
     
     display.setTextColor(GxEPD_BLACK);
     
     for (int i = 0; i < page.lineCount; i++) {
         const LayoutLine& line = page.lines[i];
+        
+        // Skip image lines - they're rendered separately by Library_render
+        if (line.isImage) {
+            continue;
+        }
         
         for (int j = 0; j < line.wordCount; j++) {
             const LayoutWord& word = line.words[j];
@@ -835,6 +886,28 @@ void TextLayout::renderPage(int pageNum, GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPL
             // Draw word at its calculated position
             display.setCursor(word.x, line.y);
             display.print(word.text);
+        }
+    }
+}
+
+void TextLayout::getInlineImages(int pageNum, InlineImageCallback callback, void* userData) {
+    if (pageNum < 0 || pageNum >= _pageCount || !callback) {
+        return;
+    }
+    
+    // Static to avoid stack allocation
+    static LayoutPage page;
+    if (!loadPageFromCache(pageNum, page)) {
+        return;
+    }
+    
+    for (int i = 0; i < page.lineCount; i++) {
+        const LayoutLine& line = page.lines[i];
+        
+        if (line.isImage && line.imagePath[0] != '\0') {
+            // Calculate centered X position
+            int x = _marginLeft + (_contentWidth - line.imageWidth) / 2;
+            callback(line.imagePath, x, line.y, line.imageWidth, line.imageHeight, userData);
         }
     }
 }
@@ -885,14 +958,11 @@ int TextLayout::getSpaceWidth() {
     
     int spaceWidth = w2 - (2 * w1);
     
-    Serial.printf("[LAYOUT] SpaceWidth: 'n'=%d, 'n n'=%d, raw=%d\n", w1, w2, spaceWidth);
-    
     // Use the actual measured space width, with reasonable bounds
     if (spaceWidth < 5) spaceWidth = 5;
     if (spaceWidth > 12) spaceWidth = 12;
     
     _cachedSpaceWidth = spaceWidth;
-    Serial.printf("[LAYOUT] Cached spaceWidth = %d (will be used for entire chapter)\n", _cachedSpaceWidth);
     
     return _cachedSpaceWidth;
 }

@@ -9,6 +9,7 @@
 
 #include "plugins/Library.h"
 #include <ArduinoJson.h>
+#include <WiFi.h>
 
 #if FEATURE_READER
 
@@ -214,6 +215,9 @@ void LibraryApp::scanDirectory() {
     Serial.printf("[LIBRARY] Scanning: %s\n", currentPath);
     MEM_LOG("scan_start");
     
+    // Show loading overlay immediately
+    showLoadingScreen("Scanning...");
+    
     state = ViewState::INDEXING;
     indexingProgress = 0;
     
@@ -254,7 +258,11 @@ void LibraryApp::scanDirectory() {
     while (File entry = dir.openNextFile()) {
         if (count >= LIBRARY_MAX_BOOKS) { entry.close(); break; }
         
-        const char* name = entry.name();
+        // Copy name BEFORE closing - entry.name() returns pointer to internal buffer
+        char name[64];
+        strncpy(name, entry.name(), sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+        
         if (name[0] == '.') { entry.close(); continue; }
         
         bool isDir = entry.isDirectory();
@@ -265,7 +273,7 @@ void LibraryApp::scanDirectory() {
         
         if (!isDir && !isEpub && !isTxt) { entry.close(); continue; }
         
-        entry.close();
+        entry.close();;
         
         // Compute hash matching portal's simpleHash(filename) algorithm
         // JS: hash = ((hash << 5) - hash) + charCode; hash = hash >>> 0;
@@ -503,7 +511,12 @@ void LibraryApp::loadBookMetadata(BookEntry& book, const char* fullPath) {
     if (tempCache.loadProgress(savedChapter, savedPage)) {
         book.lastChapter = savedChapter;
         book.lastPage = savedPage;
-        book.progress = (float)savedChapter / 10.0f;
+        // Calculate progress based on actual chapter count
+        if (book.totalChapters > 0) {
+            book.progress = (float)savedChapter / (float)book.totalChapters;
+        } else {
+            book.progress = 0;
+        }
         if (book.progress > 1.0f) book.progress = 1.0f;
     }
     tempCache.close();
@@ -549,10 +562,6 @@ void LibraryApp::openBook(int index) {
     
     showLoadingScreen("Loading...");
     
-    // Suspend WiFi for memory
-    suspendForReading();
-    stats.load();
-    
     BookEntry book;
     if (!getBook(index, book)) {
         showErrorScreen("Failed to load book");
@@ -562,7 +571,11 @@ void LibraryApp::openBook(int index) {
     
     snprintf(currentBookPath, sizeof(currentBookPath), "%s/%s", currentPath, book.filename);
     strncpy(currentBook, book.title, sizeof(currentBook) - 1);
-    currentBookHash = book.cacheHash;  // Use stored hash (computed from full filename before truncation)
+    currentBookHash = book.cacheHash;
+    
+    // Suspend WiFi for memory
+    suspendForReading();
+    stats.load();
     
     // Build and store the preprocessed directory path - this is used for chapter loading
     snprintf(bookCacheDir, sizeof(bookCacheDir), "/.sumi/books/%08x", book.cacheHash);
@@ -608,9 +621,11 @@ void LibraryApp::openBook(int index) {
     // Restore progress
     int savedChapter = 0, savedPage = 0;
     if (pageCache->loadProgress(savedChapter, savedPage)) {
+        Serial.printf("[LIBRARY] Restoring progress: ch%d pg%d\n", savedChapter, savedPage);
         if (savedChapter < totalChapters) currentChapter = savedChapter;
         currentPage = savedPage;
     } else {
+        Serial.println("[LIBRARY] No saved progress, starting from beginning");
         currentChapter = 0;
         currentPage = 0;
     }
@@ -624,7 +639,7 @@ void LibraryApp::openBook(int index) {
     renderTaskHandle = nullptr;
     renderMutex = nullptr;
     
-    Serial.printf("[LIBRARY] Using sync loading (heap=%d)\n", ESP.getFreeHeap());
+    Serial.printf("[LIBRARY] Will load chapter %d (heap=%d)\n", currentChapter, ESP.getFreeHeap());
     
     // Skip empty chapters (like cover pages)
     int chapToLoad = currentChapter;
@@ -657,8 +672,17 @@ void LibraryApp::openBook(int index) {
     firstRenderAfterOpen = true;
     state = ViewState::READING;
     
+    // Save last book info immediately so widget updates
+    saveLastBookInfo();
+    
+    // Check server for newer progress
+    syncProgressFromKOSync();
+    
     // Start preloading next page
     preloadNextPage();
+    
+    // Start session tracking
+    stats.startSession();
     
     Serial.printf("[LIBRARY] Book open: ch=%d pg=%d/%d (heap=%d)\n",
                   currentChapter, currentPage, totalPages, ESP.getFreeHeap());
@@ -793,6 +817,46 @@ void LibraryApp::closeBook() {
     MEM_LOG("closeBook_start");
     
     saveProgress();
+    
+    // Update book entry in library index with new progress
+    BookEntry book;
+    if (getBook(cursor, book)) {
+        book.lastChapter = currentChapter;
+        book.lastPage = currentPage;
+        book.progress = getReadingProgress();
+        updateBook(cursor, book);
+    }
+    
+    // Upload progress to KOSync if enabled (brief WiFi call)
+    if (koSync.isEnabled() && settingsManager.wifi.savedCount > 0) {
+        showLoadingScreen("Syncing...");
+        
+        // Get preferred network credentials
+        int netIdx = settingsManager.wifi.preferredIndex;
+        if (netIdx >= settingsManager.wifi.savedCount) netIdx = 0;
+        
+        const char* ssid = settingsManager.wifi.networks[netIdx].ssid;
+        const char* pass = settingsManager.wifi.networks[netIdx].password;
+        
+        // Briefly enable WiFi for sync
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(ssid, pass);
+        
+        // Wait up to 5 seconds for connection
+        unsigned long start = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - start < 5000) {
+            delay(100);
+        }
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            syncProgressToKOSync();
+        }
+        
+        // Turn WiFi back off
+        WiFi.disconnect();
+        WiFi.mode(WIFI_OFF);
+    }
+    
     stats.endSession();
     stats.save();
     

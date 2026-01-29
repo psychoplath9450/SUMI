@@ -1,10 +1,10 @@
 /**
  * @file Images.cpp
  * @brief Image viewer implementation
- * @version 1.3.0
+ * @version 1.5.0
  * 
- * Optimized with raw button handling
- * Fixed: Only lists file formats that are actually supported (.bmp, .raw)
+ * Displays BMP and RAW images from SD card with slideshow mode.
+ * Supports 1-bit, 8-bit grayscale, and 24-bit color BMPs.
  */
 
 #include <SD.h>

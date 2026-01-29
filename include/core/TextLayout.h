@@ -87,17 +87,26 @@ struct LayoutWord {
 };
 
 // =============================================================================
-// Line Structure
+// Line Structure - supports both text and inline images
 // =============================================================================
 struct LayoutLine {
     LayoutWord words[MAX_WORDS_PER_LINE];
     uint8_t wordCount;
-    int16_t y;              // Y position (baseline)
-    int16_t width;          // Total width of words
+    int16_t y;              // Y position (baseline for text, top for images)
+    int16_t width;          // Total width of words (or image width)
     int16_t indent;         // Paragraph indent (0 if none)
     bool justified;         // Whether spacing was applied
     
-    LayoutLine() : wordCount(0), y(0), width(0), indent(0), justified(false) {}
+    // Inline image support
+    bool isImage;           // True if this line is an inline image
+    char imagePath[IMAGE_PATH_SIZE];  // Image filename (e.g., "img_001.jpg")
+    uint16_t imageWidth;    // Scaled image width
+    uint16_t imageHeight;   // Scaled image height
+    
+    LayoutLine() : wordCount(0), y(0), width(0), indent(0), justified(false),
+                   isImage(false), imageWidth(0), imageHeight(0) {
+        imagePath[0] = '\0';
+    }
     
     void clear() {
         wordCount = 0;
@@ -105,6 +114,20 @@ struct LayoutLine {
         width = 0;
         indent = 0;
         justified = false;
+        isImage = false;
+        imagePath[0] = '\0';
+        imageWidth = 0;
+        imageHeight = 0;
+    }
+    
+    void setImage(const char* path, int16_t yPos, uint16_t w, uint16_t h) {
+        isImage = true;
+        y = yPos;
+        strncpy(imagePath, path, IMAGE_PATH_SIZE - 1);
+        imagePath[IMAGE_PATH_SIZE - 1] = '\0';
+        imageWidth = w;
+        imageHeight = h;
+        wordCount = 0;
     }
 };
 
@@ -138,6 +161,12 @@ struct LayoutPage {
             f.write((const uint8_t*)&line.indent, sizeof(line.indent));
             f.write((const uint8_t*)&line.justified, sizeof(line.justified));
             
+            // Inline image support
+            f.write((const uint8_t*)&line.isImage, sizeof(line.isImage));
+            f.write((const uint8_t*)line.imagePath, IMAGE_PATH_SIZE);
+            f.write((const uint8_t*)&line.imageWidth, sizeof(line.imageWidth));
+            f.write((const uint8_t*)&line.imageHeight, sizeof(line.imageHeight));
+            
             for (int j = 0; j < line.wordCount; j++) {
                 const LayoutWord& word = line.words[j];
                 f.write((const uint8_t*)word.text, sizeof(word.text));
@@ -165,6 +194,12 @@ struct LayoutPage {
             if (f.read((uint8_t*)&line.width, sizeof(line.width)) != sizeof(line.width)) return false;
             if (f.read((uint8_t*)&line.indent, sizeof(line.indent)) != sizeof(line.indent)) return false;
             if (f.read((uint8_t*)&line.justified, sizeof(line.justified)) != sizeof(line.justified)) return false;
+            
+            // Inline image support
+            if (f.read((uint8_t*)&line.isImage, sizeof(line.isImage)) != sizeof(line.isImage)) return false;
+            if (f.read((uint8_t*)line.imagePath, IMAGE_PATH_SIZE) != IMAGE_PATH_SIZE) return false;
+            if (f.read((uint8_t*)&line.imageWidth, sizeof(line.imageWidth)) != sizeof(line.imageWidth)) return false;
+            if (f.read((uint8_t*)&line.imageHeight, sizeof(line.imageHeight)) != sizeof(line.imageHeight)) return false;
             
             if (line.wordCount > MAX_WORDS_PER_LINE) return false;
             
@@ -230,6 +265,15 @@ public:
     void endParagraph();
     
     /**
+     * Add inline image at current position
+     * Image will be scaled to fit content width while preserving aspect ratio
+     * @param filename Image filename (e.g., "img_001.jpg")
+     * @param width Original image width
+     * @param height Original image height
+     */
+    void addInlineImage(const char* filename, int width, int height);
+    
+    /**
      * Set current style for subsequent text
      */
     void setCurrentStyle(FontStyle style);
@@ -258,6 +302,17 @@ public:
      * Returns false if page is not an image
      */
     bool getImageInfo(int pageNum, char* pathOut, size_t pathSize, int* widthOut, int* heightOut) const;
+    
+    /**
+     * Callback for inline images
+     */
+    typedef void (*InlineImageCallback)(const char* filename, int x, int y, int width, int height, void* userData);
+    
+    /**
+     * Iterate through inline images on a text page
+     * Calls callback for each inline image found
+     */
+    void getInlineImages(int pageNum, InlineImageCallback callback, void* userData);
     
     /**
      * Render a specific page to display

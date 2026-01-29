@@ -1,9 +1,10 @@
 /**
  * @file PowerManager.cpp
  * @brief Power management implementation
- * @version 1.3.0
+ * @version 1.5.0
  * 
- * Fixed: Added BMP loading support for sleep screen images
+ * Handles deep sleep, wake detection, sleep screen images (BMP/JPEG/RAW),
+ * battery monitoring integration, and WiFi power states.
  */
 
 #include "core/PowerManager.h"
@@ -585,6 +586,19 @@ void PowerManager::enterDeepSleep() {
     int w = display.width();
     int h = display.height();
     
+    // Show immediate feedback overlay (partial refresh - fast)
+    display.setPartialWindow(w/2 - 100, h/2 - 25, 200, 50);
+    display.firstPage();
+    do {
+        display.fillRect(w/2 - 100, h/2 - 25, 200, 50, GxEPD_WHITE);
+        display.drawRect(w/2 - 100, h/2 - 25, 200, 50, GxEPD_BLACK);
+        display.drawRect(w/2 - 99, h/2 - 24, 198, 48, GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(w/2 - 55, h/2 + 5);
+        display.print("Sleeping...");
+    } while (display.nextPage());
+    
     // Get sleep style setting: 0=Book Cover, 1=Shuffle Images, 2=Wake Me Up
     uint8_t sleepStyle = settingsManager.display.sleepStyle;
     Serial.printf("[POWER] Sleep style: %d\n", sleepStyle);
@@ -618,7 +632,7 @@ void PowerManager::enterDeepSleep() {
     display.powerOff();
     WiFi.mode(WIFI_OFF);
     
-    // === FIXED: Use correct ESP32-C3 deep sleep wake configuration ===
+    // Configure ESP32-C3 deep sleep wake on GPIO3 (power button)
     // GPIO3 is the power button - configure it as wake source
     pinMode(BTN_GPIO3, INPUT_PULLUP);
     

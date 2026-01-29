@@ -409,6 +409,7 @@ void SumiWebServer::setupAPIRoutes() {
                                     book["author"] = metaDoc["author"] | "Unknown";
                                     book["totalChapters"] = metaDoc["totalChapters"] | 0;
                                     book["totalWords"] = metaDoc["totalWords"] | 0;
+                                    book["totalImages"] = metaDoc["totalImages"] | 0;
                                     book["estimatedPages"] = metaDoc["estimatedPages"] | 0;
                                     book["estimatedReadingMins"] = metaDoc["estimatedReadingMins"] | 0;
                                     book["processedAt"] = metaDoc["processedAt"] | 0;
@@ -1436,11 +1437,11 @@ void SumiWebServer::handleWiFiConnect(AsyncWebServerRequest* request, uint8_t* d
     bool success = wifiManager.connect(ssid, password ? password : "");
     
     if (success) {
-        // Fetch timezone from IP location API
-        Serial.println("[WEB] Fetching timezone from IP...");
+        // Fetch timezone AND location from IP geolocation API
+        Serial.println("[WEB] Fetching timezone and location from IP...");
         WiFiClient client;
         if (client.connect("ip-api.com", 80)) {
-            client.print("GET /json/?fields=status,offset HTTP/1.1\r\n");
+            client.print("GET /json/?fields=status,city,regionName,country,lat,lon,offset HTTP/1.1\r\n");
             client.print("Host: ip-api.com\r\n");
             client.print("Connection: close\r\n\r\n");
             
@@ -1462,10 +1463,31 @@ void SumiWebServer::handleWiFiConnect(AsyncWebServerRequest* request, uint8_t* d
             if (!deserializeJson(tzDoc, payload)) {
                 const char* status = tzDoc["status"] | "fail";
                 if (strcmp(status, "success") == 0) {
+                    // Save timezone offset
                     int32_t tzOffset = tzDoc["offset"] | 0;
                     settingsManager.weather.timezoneOffset = tzOffset;
-                    settingsManager.markDirty();
                     Serial.printf("[WEB] Timezone offset: %d seconds\n", tzOffset);
+                    
+                    // Save location for weather (if not already set)
+                    if (settingsManager.weather.latitude == 0 && settingsManager.weather.longitude == 0) {
+                        float lat = tzDoc["lat"] | 0.0f;
+                        float lon = tzDoc["lon"] | 0.0f;
+                        if (lat != 0.0f || lon != 0.0f) {
+                            settingsManager.weather.latitude = lat;
+                            settingsManager.weather.longitude = lon;
+                            const char* city = tzDoc["city"] | "";
+                            const char* region = tzDoc["regionName"] | "";
+                            if (strlen(city) > 0) {
+                                snprintf(settingsManager.weather.location, 
+                                         sizeof(settingsManager.weather.location),
+                                         "%s, %s", city, region);
+                            }
+                            Serial.printf("[WEB] Auto-detected location: %s (%.4f, %.4f)\n", 
+                                          settingsManager.weather.location, lat, lon);
+                        }
+                    }
+                    
+                    settingsManager.markDirty();
                 }
             }
         }
@@ -1625,78 +1647,199 @@ void SumiWebServer::handleWeatherLocation(AsyncWebServerRequest* request, uint8_
         return;
     }
     
-    const char* zipCode = doc["zipCode"];
-    if (!zipCode || strlen(zipCode) != 5) {
-        sendError(request, "Invalid ZIP code");
-        return;
+    float lat = 0, lon = 0;
+    bool hasPreciseCoords = false;
+    
+    // Check for direct lat/lon from browser geolocation
+    if (doc["latitude"].is<float>() && doc["longitude"].is<float>()) {
+        lat = doc["latitude"].as<float>();
+        lon = doc["longitude"].as<float>();
+        hasPreciseCoords = (lat != 0 || lon != 0);
+        
+        if (hasPreciseCoords) {
+            Serial.printf("[WEB] Received precise location: %.4f, %.4f\n", lat, lon);
+            
+            settingsManager.weather.latitude = lat;
+            settingsManager.weather.longitude = lon;
+            
+            // Try to get city name from reverse geocoding
+            WiFiClient geoClient;
+            if (geoClient.connect("nominatim.openstreetmap.org", 80)) {
+                char geoUrl[128];
+                snprintf(geoUrl, sizeof(geoUrl), 
+                         "GET /reverse?format=json&lat=%.4f&lon=%.4f&zoom=10 HTTP/1.0",
+                         lat, lon);
+                geoClient.println(geoUrl);
+                geoClient.println("Host: nominatim.openstreetmap.org");
+                geoClient.println("User-Agent: SUMI-Reader/1.5");
+                geoClient.println("Connection: close");
+                geoClient.println();
+                
+                unsigned long timeout = millis() + 5000;
+                while (!geoClient.available() && millis() < timeout) {
+                    delay(10);
+                }
+                
+                if (geoClient.available()) {
+                    // Skip headers
+                    while (geoClient.available()) {
+                        String line = geoClient.readStringUntil('\n');
+                        if (line == "\r") break;
+                    }
+                    
+                    String payload = geoClient.readString();
+                    geoClient.stop();
+                    
+                    JsonDocument geoDoc;
+                    if (!deserializeJson(geoDoc, payload)) {
+                        JsonObject address = geoDoc["address"];
+                        const char* city = address["city"] | address["town"] | address["village"] | "";
+                        const char* state = address["state"] | "";
+                        
+                        if (strlen(city) > 0) {
+                            snprintf(settingsManager.weather.location, 
+                                     sizeof(settingsManager.weather.location),
+                                     "%s, %s", city, state);
+                        } else {
+                            snprintf(settingsManager.weather.location, 
+                                     sizeof(settingsManager.weather.location),
+                                     "%.4f, %.4f", lat, lon);
+                        }
+                    }
+                } else {
+                    geoClient.stop();
+                    snprintf(settingsManager.weather.location, 
+                             sizeof(settingsManager.weather.location),
+                             "%.4f, %.4f", lat, lon);
+                }
+            } else {
+                snprintf(settingsManager.weather.location, 
+                         sizeof(settingsManager.weather.location),
+                         "%.4f, %.4f", lat, lon);
+            }
+            
+            Serial.printf("[WEB] Location set: %s\n", settingsManager.weather.location);
+        }
     }
     
-    Serial.printf("[WEB] Looking up ZIP: %s\n", zipCode);
-    
-    // Lookup ZIP code via zippopotam.us API
-    WiFiClient client;
-    if (!client.connect("api.zippopotam.us", 80)) {
-        sendError(request, "Could not connect to location service");
-        return;
-    }
-    
-    char url[64];
-    snprintf(url, sizeof(url), "GET /us/%s HTTP/1.0", zipCode);
-    client.println(url);
-    client.println("Host: api.zippopotam.us");
-    client.println("Connection: close");
-    client.println();
-    
-    unsigned long timeout = millis() + 5000;
-    while (!client.available() && millis() < timeout) {
-        delay(10);
-    }
-    
-    if (!client.available()) {
+    // If no precise coords, try ZIP code lookup
+    if (!hasPreciseCoords) {
+        const char* zipCode = doc["zipCode"];
+        if (!zipCode || strlen(zipCode) != 5) {
+            sendError(request, "Invalid ZIP code");
+            return;
+        }
+        
+        Serial.printf("[WEB] Looking up ZIP: %s\n", zipCode);
+        
+        // Lookup ZIP code via zippopotam.us API
+        WiFiClient client;
+        if (!client.connect("api.zippopotam.us", 80)) {
+            sendError(request, "Could not connect to location service");
+            return;
+        }
+        
+        char url[64];
+        snprintf(url, sizeof(url), "GET /us/%s HTTP/1.0", zipCode);
+        client.println(url);
+        client.println("Host: api.zippopotam.us");
+        client.println("Connection: close");
+        client.println();
+        
+        unsigned long timeout = millis() + 5000;
+        while (!client.available() && millis() < timeout) {
+            delay(10);
+        }
+        
+        if (!client.available()) {
+            client.stop();
+            sendError(request, "Location service timeout");
+            return;
+        }
+        
+        // Skip HTTP headers
+        while (client.available()) {
+            String line = client.readStringUntil('\n');
+            if (line == "\r") break;
+        }
+        
+        String payload = client.readString();
         client.stop();
-        sendError(request, "Location service timeout");
-        return;
+        
+        JsonDocument zipDoc;
+        if (deserializeJson(zipDoc, payload)) {
+            sendError(request, "Invalid ZIP code or not found");
+            return;
+        }
+        
+        // Extract location data
+        JsonArray places = zipDoc["places"].as<JsonArray>();
+        if (places.size() == 0) {
+            sendError(request, "ZIP code not found");
+            return;
+        }
+        
+        JsonObject place = places[0];
+        lat = place["latitude"].as<String>().toFloat();
+        lon = place["longitude"].as<String>().toFloat();
+        const char* city = place["place name"];
+        const char* state = place["state abbreviation"];
+        
+        // Save to settings
+        settingsManager.weather.latitude = lat;
+        settingsManager.weather.longitude = lon;
+        snprintf(settingsManager.weather.location, sizeof(settingsManager.weather.location), 
+                 "%s, %s", city, state);
+        strncpy(settingsManager.weather.zipCode, zipCode, sizeof(settingsManager.weather.zipCode) - 1);
+        
+        Serial.printf("[WEB] Location saved: %s (%.4f, %.4f)\n", 
+                      settingsManager.weather.location, lat, lon);
     }
     
-    // Skip HTTP headers
-    while (client.available()) {
-        String line = client.readStringUntil('\n');
-        if (line == "\r") break;
+    // Fetch timezone for these coordinates from Open-Meteo
+    WiFiClient tzClient;
+    if (tzClient.connect("api.open-meteo.com", 80)) {
+        char tzUrl[128];
+        snprintf(tzUrl, sizeof(tzUrl), 
+                 "GET /v1/forecast?latitude=%.4f&longitude=%.4f&timezone=auto&forecast_days=1 HTTP/1.0",
+                 lat, lon);
+        tzClient.println(tzUrl);
+        tzClient.println("Host: api.open-meteo.com");
+        tzClient.println("Connection: close");
+        tzClient.println();
+        
+        unsigned long tzTimeout = millis() + 5000;
+        while (!tzClient.available() && millis() < tzTimeout) {
+            delay(10);
+        }
+        
+        if (tzClient.available()) {
+            // Skip headers
+            while (tzClient.available()) {
+                String line = tzClient.readStringUntil('\n');
+                if (line == "\r") break;
+            }
+            
+            String tzPayload = tzClient.readString();
+            tzClient.stop();
+            
+            JsonDocument tzDoc;
+            if (!deserializeJson(tzDoc, tzPayload)) {
+                int32_t utcOffset = tzDoc["utc_offset_seconds"] | 0;
+                if (utcOffset != 0) {
+                    settingsManager.weather.timezoneOffset = utcOffset;
+                    // Apply immediately
+                    configTime(utcOffset, 0, "pool.ntp.org", "time.nist.gov");
+                    Serial.printf("[WEB] Timezone offset updated: %d seconds\n", utcOffset);
+                }
+            }
+        } else {
+            tzClient.stop();
+        }
     }
     
-    String payload = client.readString();
-    client.stop();
-    
-    JsonDocument zipDoc;
-    if (deserializeJson(zipDoc, payload)) {
-        sendError(request, "Invalid ZIP code or not found");
-        return;
-    }
-    
-    // Extract location data
-    JsonArray places = zipDoc["places"].as<JsonArray>();
-    if (places.size() == 0) {
-        sendError(request, "ZIP code not found");
-        return;
-    }
-    
-    JsonObject place = places[0];
-    float lat = place["latitude"].as<String>().toFloat();
-    float lon = place["longitude"].as<String>().toFloat();
-    const char* city = place["place name"];
-    const char* state = place["state abbreviation"];
-    
-    // Save to settings
-    settingsManager.weather.latitude = lat;
-    settingsManager.weather.longitude = lon;
-    snprintf(settingsManager.weather.location, sizeof(settingsManager.weather.location), 
-             "%s, %s", city, state);
-    strncpy(settingsManager.weather.zipCode, zipCode, sizeof(settingsManager.weather.zipCode) - 1);
     settingsManager.markDirty();
     settingsManager.save();
-    
-    Serial.printf("[WEB] Location saved: %s (%.4f, %.4f)\n", 
-                  settingsManager.weather.location, lat, lon);
     
     // Send response
     JsonDocument resp;

@@ -51,7 +51,7 @@ void SettingsManager::loadDefaults() {
     display.showClockHome = true;
     display.showDate = true;
     display.showWifi = false;
-    display.sleepStyle = 0;  // 0=Book Cover (current), 1=Shuffle Images, 2=Wake Me Up
+    display.sleepStyle = 1;  // 0=Book Cover (current), 1=Shuffle Images, 2=Wake Me Up
     display.clockStyle = 0;  // Digital
     display.homeLayout = 0;  // Grid
     display.invertColors = false;
@@ -96,9 +96,9 @@ void SettingsManager::loadDefaults() {
     display.showWeatherWidget = true;
     display.showOrientWidget = false;
     
-    // Reader defaults
-    reader.fontSize = 18;
-    reader.lineHeight = 150;
+    // Reader defaults - 18pt with tighter word packing
+    reader.fontSize = 24;        // Maps to LARGE (21-26 in sync)
+    reader.lineHeight = 140;     // Maps to NORMAL (121-160 in sync)
     reader.margins = 20;
     reader.paraSpacing = 10;
     reader.sceneBreakSpacing = 30;  // Extra spacing for scene breaks
@@ -381,7 +381,7 @@ void SettingsManager::load() {
     display.showClockHome = _prefs.getBool("d_clkh", true);
     display.showDate = _prefs.getBool("d_date", true);
     display.showWifi = _prefs.getBool("d_wifi", false);
-    display.sleepStyle = _prefs.getUChar("d_slps", 0);
+    display.sleepStyle = _prefs.getUChar("d_slps", 1);
     display.clockStyle = _prefs.getUChar("d_clks", 0);
     display.homeLayout = _prefs.getUChar("d_home", 0);
     display.invertColors = _prefs.getBool("d_inv", false);
@@ -421,9 +421,9 @@ void SettingsManager::load() {
     display.showWeatherWidget = _prefs.getBool("d_wwth", true);
     display.showOrientWidget = _prefs.getBool("d_wori", false);
     
-    // Reader
-    reader.fontSize = _prefs.getUChar("r_fs", 18);
-    reader.lineHeight = _prefs.getUChar("r_lh", 150);
+    // Reader (~18 lines/page)
+    reader.fontSize = _prefs.getUChar("r_fs", 24);      // LARGE (18pt)
+    reader.lineHeight = _prefs.getUChar("r_lh", 140);   // NORMAL
     reader.margins = _prefs.getUChar("r_mg", 20);
     reader.paraSpacing = _prefs.getUChar("r_ps", 10);
     reader.textAlign = _prefs.getUChar("r_al", 1);

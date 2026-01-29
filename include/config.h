@@ -248,7 +248,7 @@ enum BackPressType {
  * Use MEM_LOG() liberally to track memory usage
  */
 #ifndef SUMI_MEM_DEBUG
-#define SUMI_MEM_DEBUG 1  // Enable by default for development
+#define SUMI_MEM_DEBUG 0  // Set to 1 for development debugging
 #endif
 
 #if SUMI_MEM_DEBUG

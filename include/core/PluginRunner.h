@@ -15,6 +15,8 @@
 
 #include <Arduino.h>
 #include <GxEPD2_BW.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
 #include "config.h"
 #include "core/RefreshManager.h"
 #include "core/PowerManager.h"
@@ -550,6 +552,8 @@ void runPluginAllocSelfRefresh(const char* title) {
  * Run a plugin that handles ALL its own display refresh
  * Plugin's draw() methods must include their own firstPage/nextPage loops
  * Used for complex plugins like Library that need fine-grained control
+ * 
+ * Features button repeat for LEFT/RIGHT to enable rapid navigation through cover art
  */
 template<typename T>
 void runPluginAllocDirect(const char* title) {
@@ -573,17 +577,37 @@ void runPluginAllocDirect(const char* title) {
     
     Button lastBtn = BTN_NONE;
     unsigned long lastBtnTime = 0;
-    const unsigned long debounceMs = 150;  // Debounce time
+    unsigned long lastProcessTime = 0;  // When we last processed a button
+    const unsigned long debounceMs = 50;  // Short debounce for responsiveness
+    const unsigned long repeatDelayMs = 100;  // Allow repeat after this delay post-draw
     
     while (true) {
         Button btn = readButton();
         unsigned long now = millis();
         
-        // Only process button if it's new AND enough time has passed
-        if (btn != BTN_NONE && lastBtn == BTN_NONE && (now - lastBtnTime >= debounceMs)) {
-            Serial.printf("[PLUGIN] Button: %d\n", btn);
+        bool shouldProcess = false;
+        
+        // Process button if: 
+        // 1. New button press (btn != lastBtn) after debounce, OR
+        // 2. Navigation button (LEFT/RIGHT) held after draw completed (enables rapid browsing)
+        if (btn != BTN_NONE && (now - lastBtnTime >= debounceMs)) {
+            if (lastBtn == BTN_NONE) {
+                // New button press
+                shouldProcess = true;
+            } else if ((btn == BTN_LEFT || btn == BTN_RIGHT) && btn == lastBtn) {
+                // Same navigation button held - allow repeat after draw completes
+                // This is the key fix: allow browsing while holding button
+                if (now - lastProcessTime >= repeatDelayMs) {
+                    shouldProcess = true;
+                }
+            }
+        }
+        
+        if (shouldProcess) {
+            Serial.printf("[PLUGIN] Button: %d (repeat=%d)\n", btn, lastBtn == btn);
             powerManager.resetActivityTimer();
             lastBtnTime = now;
+            lastProcessTime = now;
             
             if (btn == BTN_POWER) {
                 delete plugin;
@@ -604,12 +628,41 @@ void runPluginAllocDirect(const char* title) {
             // Only call draw if plugin indicates it needs redraw
             if (plugin->needsRedraw()) {
                 plugin->draw();
+                
+                // After draw completes, allow immediate repeat if holding LEFT/RIGHT
+                // Update lastProcessTime so the repeat delay starts from draw completion
+                lastProcessTime = millis();
+                
+                // Check if still holding a navigation button for rapid browsing
+                Button postDrawBtn = readButton();
+                if (postDrawBtn == BTN_LEFT || postDrawBtn == BTN_RIGHT) {
+                    // Keep lastBtn set to the direction button to enable repeat
+                    // Don't reset - the repeat logic will trigger on next iteration
+                    lastBtnTime = millis();
+                } else if (postDrawBtn == BTN_NONE) {
+                    // Button released - reset for immediate new press
+                    lastBtn = BTN_NONE;
+                    lastBtnTime = millis() - debounceMs;
+                }
             }
         }
         
         lastBtn = btn;
-        delay(30);
+        delay(15);  // Fast polling for responsive input
     }
+    
+    // Show closing overlay
+    display.setPartialWindow(display.width()/2 - 100, display.height()/2 - 25, 200, 50);
+    display.firstPage();
+    do {
+        display.fillRect(display.width()/2 - 100, display.height()/2 - 25, 200, 50, GxEPD_WHITE);
+        display.drawRect(display.width()/2 - 100, display.height()/2 - 25, 200, 50, GxEPD_BLACK);
+        display.drawRect(display.width()/2 - 99, display.height()/2 - 24, 198, 48, GxEPD_BLACK);
+        display.setFont(&FreeSans9pt7b);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(display.width()/2 - 40, display.height()/2 + 5);
+        display.print("Closing...");
+    } while (display.nextPage());
     
     // Cleanup
     Serial.printf("[PLUGIN] Freeing: %s\n", title);

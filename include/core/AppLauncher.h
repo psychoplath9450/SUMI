@@ -21,4 +21,7 @@ void openAppByItemIndex(uint8_t itemIndex);
 // Open an app by selection position on current home page
 void openApp(int selectionIndex);
 
+// Open Library and immediately resume last book (for book widget)
+void openLibraryWithResume();
+
 #endif // SUMI_APP_LAUNCHER_H

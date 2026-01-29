@@ -2,12 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.3] - 2026-01-29
+
+### Added
+- **Inline images in EPUB** - Images now render with automatic grayscale conversion and Bayer dithering for e-ink display
+- **Image extraction in portal** - Portal extracts and processes images during EPUB upload
+- **Reading progress persistence** - Progress now survives font/margin changes (was being deleted on layout cache rebuild)
+
+### Fixed
+- **Black images bug** - Fixed PNG transparency handling (transparent areas now fill with white instead of black)
+- **Progress not restoring** - Fixed bug where `invalidateBook()` was deleting progress.bin
+
+### Changed
+- **Image processing** - Canvas fills with white background before drawing to handle transparent PNGs
+- **Cache invalidation** - Layout cache rebuild no longer deletes reading progress
+
 ## [1.5.0] - 2026-01-28
 
 ### Breaking Changes
 - **All EPUBs must be preprocessed via portal** - On-device EPUB parsing removed
 - Old books will show "Process this book in the portal first" message
 - **Home WiFi required for book processing** - Hotspot mode is games-only
+- **Default font size changed** - Now uses 12pt (MEDIUM) by default instead of 18pt for more text per page
 
 ### Added
 - **Web Flasher** - Flash SUMI directly from your browser at `docs/flasher/`
@@ -30,8 +46,20 @@ All notable changes to this project will be documented in this file.
 - **Reader settings live preview** - Font size, margins, spacing changes apply immediately
 - **Chess piece rendering** - Newspaper diagram style (proper black/white piece contrast)
 - **GitHub Pages landing page** - Project info and quick links at `docs/index.html`
+- **Precise location detection** - Use browser GPS for accurate weather location
+- **Browser timezone detection** - Auto-set timezone from browser on WiFi connect
+- **ATTRIBUTIONS.md** - Full credits for all libraries, APIs, and inspiration sources
 
 ### Changed
+- **Text layout improvements** - Better word fitting and justification
+  - Tighter word packing (60% minimum space width)
+  - Reduced maximum gap for justified text (1.8x instead of 2.0x)
+  - No paragraph indentation (uses spacing instead)
+  - Line spacing multiplier: 1.0x (was 1.05x)
+- **Library browsing responsiveness** - Faster response to button presses
+  - Reduced debounce from 150ms to 80ms
+  - Input detected immediately after e-ink render completes
+  - Faster polling (20ms instead of 30ms)
 - **Setup wizard** - Now emphasizes home WiFi requirement for books
 - **Portal banners** - Red warning when in hotspot mode (books unavailable)
 - **Library navigation** - Improved button debouncing for faster response
@@ -45,6 +73,7 @@ All notable changes to this project will be documented in this file.
 - **Justification gaps** - Capped word spacing at 2x normal to prevent excessive gaps
 - **Reader settings cursor** - Menu cursor now aligns with displayed options
 - **Portal textAlign toggle** - Now accepts both boolean and integer values
+- **Paragraph indentation** - Now respects extraParagraphSpacing setting correctly
 
 ### Removed (Dead Code Cleanup)
 - `EpubParser.cpp/h` (1,148 lines) - On-device EPUB parsing

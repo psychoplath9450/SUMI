@@ -23,19 +23,19 @@
 // Enums
 // =============================================================================
 
-// Font size options (maps to actual pixel sizes)
+// Font size options (scaled up to match CrossPoint visual appearance)
 enum class FontSize : uint8_t {
-    SMALL = 0,      // 12pt equivalent
-    MEDIUM = 1,     // 14pt equivalent (default)
-    LARGE = 2,      // 16pt equivalent
-    EXTRA_LARGE = 3 // 18pt equivalent
+    SMALL = 0,      // 24pt Bookerly (visually ~12pt)
+    MEDIUM = 1,     // 28pt Bookerly (visually ~14pt) - default
+    LARGE = 2,      // 32pt Bookerly (visually ~16pt)
+    EXTRA_LARGE = 3 // FreeSans24pt fallback
 };
 
-// Line spacing options (compression multiplier)
+// Line spacing options (multiplier for line height)
 enum class LineSpacing : uint8_t {
     TIGHT = 0,      // 0.95x (more lines per page)
-    NORMAL = 1,     // 1.0x (default)
-    WIDE = 2        // 1.1x (easier reading)
+    NORMAL = 1,     // 1.05x (default)
+    WIDE = 2        // 1.2x (easiest reading, fewer lines)
 };
 
 // Text alignment
@@ -66,7 +66,8 @@ namespace ViewableMargins {
     constexpr int LEFT = 3;
     
     // Status bar area at bottom (for page numbers, chapter title)
-    constexpr int STATUS_BAR_HEIGHT = 22;
+    // Reduced from 22 to fit one more line of text
+    constexpr int STATUS_BAR_HEIGHT = 14;
 }
 
 // =============================================================================
@@ -74,7 +75,7 @@ namespace ViewableMargins {
 // =============================================================================
 
 #define READER_SETTINGS_MAGIC   0x52534554  // "RSET"
-#define READER_SETTINGS_VERSION 3           // Bumped for new fields
+#define READER_SETTINGS_VERSION 14          // Bookerly Italic fonts
 #define READER_SETTINGS_PATH    "/.sumi/reader.bin"
 
 struct LibReaderSettings {
@@ -105,28 +106,28 @@ struct LibReaderSettings {
     void setDefaults() {
         magic = READER_SETTINGS_MAGIC;
         version = READER_SETTINGS_VERSION;
-        fontSize = FontSize::LARGE;  // Default to Large (18pt)
-        lineSpacing = LineSpacing::NORMAL;
+        fontSize = FontSize::MEDIUM;  // 14pt Bookerly - the user's requested size
+        lineSpacing = LineSpacing::NORMAL;  // 1.0x multiplier
         textAlign = TextAlign::JUSTIFIED;
         screenMargin = 5;
-        extraParagraphSpacing = true;
+        extraParagraphSpacing = true;  // Use spacing, not indent
         showPageNumbers = true;
         showChapterTitle = true;
-        refreshFrequency = 15;
+        refreshFrequency = 15;  // Full refresh every 15 pages (matches CrossPoint)
         memset(reserved, 0, sizeof(reserved));
     }
     
     // === Computed Layout Values ===
     
     // Get base line height for font size (before compression)
-    // Based on actual FreeSans font heights (~1.2x font size)
+    // Values match the yAdvance of our Bookerly GFXfonts (scaled up to match CrossPoint visual size)
     int getBaseFontHeight() const {
         switch (fontSize) {
-            case FontSize::SMALL:       return 22;  // 9pt font
-            case FontSize::MEDIUM:      return 28;  // 12pt font
-            case FontSize::LARGE:       return 40;  // 18pt font
-            case FontSize::EXTRA_LARGE: return 52;  // 24pt font
-            default: return 40;
+            case FontSize::SMALL:       return 35;  // 24pt Bookerly (yAdvance=35)
+            case FontSize::MEDIUM:      return 40;  // 28pt Bookerly (yAdvance=40) - DEFAULT
+            case FontSize::LARGE:       return 45;  // 32pt Bookerly (yAdvance=45)
+            case FontSize::EXTRA_LARGE: return 52;  // FreeSans24pt fallback
+            default: return 40;  // Default to MEDIUM
         }
     }
     
@@ -134,8 +135,8 @@ struct LibReaderSettings {
     float getLineCompression() const {
         switch (lineSpacing) {
             case LineSpacing::TIGHT:  return 0.95f;
-            case LineSpacing::NORMAL: return 1.0f;
-            case LineSpacing::WIDE:   return 1.1f;
+            case LineSpacing::NORMAL: return 1.0f;   // Standard (was 1.05)
+            case LineSpacing::WIDE:   return 1.1f;   // Relaxed (was 1.2)
             default: return 1.0f;
         }
     }
@@ -262,14 +263,13 @@ public:
         // Handle version migration
         if (temp.version < READER_SETTINGS_VERSION) {
             Serial.printf("[SETTINGS] Migrating from version %d to %d\n", temp.version, READER_SETTINGS_VERSION);
-            // Copy compatible fields
-            _settings.fontSize = temp.fontSize;
+            // Start with defaults (new font size and line spacing)
+            _settings.setDefaults();
+            // Copy only non-typography fields from old settings
             _settings.showPageNumbers = temp.showPageNumbers;
             _settings.showChapterTitle = temp.showChapterTitle;
             _settings.refreshFrequency = temp.refreshFrequency;
-            // Use defaults for new fields
-            _settings.magic = READER_SETTINGS_MAGIC;
-            _settings.version = READER_SETTINGS_VERSION;
+            // fontSize and lineSpacing use NEW defaults
             save();  // Save migrated settings
             return true;
         }

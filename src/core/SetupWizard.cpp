@@ -7,6 +7,7 @@
 #include "core/SetupWizard.h"
 #include "core/WiFiManager.h"
 #include "core/ButtonInput.h"
+#include "core/PowerManager.h"
 #include <WiFi.h>
 
 // External display instance
@@ -267,6 +268,11 @@ void animateDeployedBorder() {
     while (true) {
         // Poll buttons frequently
         Button btn = readButton();
+        if (btn == BTN_POWER) {
+            // Power button goes to sleep even during setup
+            powerManager.enterDeepSleep();
+            return;
+        }
         if (btn != BTN_NONE) {
             Serial.printf("[DEPLOY] Button %d pressed - exiting\n", btn);
             delay(200);  // Debounce

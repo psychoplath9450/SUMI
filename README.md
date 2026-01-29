@@ -7,9 +7,9 @@ Custom firmware for the Xteink X4
 ---
 
 <p align="center">
-  <img src="docs/images/home_screen.jpg" width="280" alt="Home Screen">
-  <img src="docs/images/reading_view.jpg" width="280" alt="Reading">
-  <img src="docs/images/weather_app.jpg" width="280" alt="Weather">
+  <img src="docs/images/peter_rabbit.jpg" width="280" alt="Peter Rabbit with Inline Images">
+  <img src="docs/images/book_of_wonder.jpg" width="280" alt="Book of Wonder Illustration">
+  <img src="docs/images/middlemarch.jpg" width="280" alt="Middlemarch Reading View">
 </p>
 
 ---
@@ -149,7 +149,6 @@ Let me be real about where things stand:
 
 - **Images App** - Supports BMP and JPEG only. PNG support coming eventually.
 - **Maps** - Placeholder, not actually implemented.
-- **Inline EPUB Images** - Currently shows placeholders. Full support planned for future release.
 
 ---
 
@@ -345,21 +344,24 @@ When you upload EPUBs, your browser pre-processes everything: extracts chapters 
 ### E-Reader
 
 <p align="center">
-  <img src="docs/images/library_browser.jpg" width="280" alt="Library Browser">
-  <img src="docs/images/reading_view.jpg" width="280" alt="Reading View">
+  <img src="docs/images/peter_rabbit.jpg" width="280" alt="Inline Images">
+  <img src="docs/images/middlemarch.jpg" width="280" alt="Reading View">
   <img src="docs/images/reader_settings.jpg" width="280" alt="Reader Settings">
 </p>
 
 Full EPUB2, EPUB3, and TXT support with:
+- **Inline images** with automatic grayscale conversion and dithering for e-ink
 - **Instant page turns** (next page pre-cached in memory)
 - Flippable cover browser for your library
 - Rich text formatting (bold, italic, headers preserved from EPUB)
 - Smart typography (curly quotes, em-dashes, ellipses)
 - Soft hyphenation for better line wrapping
-- Justified text with adjustable fonts, margins, and line spacing
+- Justified text with optimal word fitting
+- Adjustable fonts, margins, and line spacing
 - Chapter navigation with extracted TOC
 - Bookmarks and reading statistics
 - Progress tracking (chapter and page)
+- KOSync support for syncing progress with KOReader
 - Quick-resume to your last position
 
 Books are processed once through the portal (see "Getting Your Books Ready"), then you can read them forever with instant, reliable performance.
@@ -418,7 +420,7 @@ Access WiFi settings, open the portal, adjust display settings, and reboot the d
 |---------|--------|-------|
 | Home Screen | ✅ Working | Customizable grid, widgets, time/battery display |
 | Portal | ✅ Working | Web-based configuration, EPUB processing, file management |
-| E-Reader | ✅ Working | EPUB2/EPUB3/TXT, instant page turns, rich text, bookmarks, stats |
+| E-Reader | ✅ Working | EPUB2/EPUB3/TXT, inline images, instant page turns, rich text, bookmarks, stats |
 | Weather | ✅ Working | 7-day forecast, auto-location, widget display |
 | Chess | ✅ Working | Play against simple AI |
 | Sudoku | ✅ Working | Multiple difficulties |
@@ -524,9 +526,23 @@ MIT. Do whatever you want with it.
 
 ## Acknowledgments
 
-- [GxEPD2](https://github.com/ZinggJM/GxEPD2) for the display library
-- [Open-Meteo](https://open-meteo.com/) for the free weather API
-- Everyone who's worked on ESP32 Arduino libraries
+See [ATTRIBUTIONS.md](ATTRIBUTIONS.md) for a complete list of libraries and APIs used.
+
+### References
+
+- **[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** - Typography reference for line spacing and word fitting
+
+### Libraries
+
+- **[GxEPD2](https://github.com/ZinggJM/GxEPD2)** - E-paper display library
+- **[ArduinoJson](https://arduinojson.org/)** - JSON parsing
+- **[JSZip](https://stuk.github.io/jszip/)** - EPUB extraction in browser
+
+### APIs
+
+- **[Open-Meteo](https://open-meteo.com/)** - Weather data
+- **[KOSync](https://github.com/koreader/koreader-sync-server)** - Reading progress sync
+- **[Project Gutenberg](https://www.gutenberg.org/)** - Sample books
 
 ---
 
