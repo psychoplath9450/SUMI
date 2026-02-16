@@ -1,0 +1,12 @@
+{
+  "name": "SUMI",
+  "version": "0.3.2",
+  "builds": [
+    {
+      "chipFamily": "ESP32-C3",
+      "parts": [
+        { "path": "firmware/sumi-v0.3.2-full.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

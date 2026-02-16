@@ -1,0 +1,8 @@
+{
+  "name": "AsyncTask",
+  "version": "1.0.0",
+  "description": "Safe FreeRTOS task utilities for ESP32 - cooperative cancellation, RAII mutex",
+  "keywords": ["freertos", "esp32", "task", "mutex", "async"],
+  "frameworks": ["arduino", "espidf"],
+  "platforms": ["espressif32"]
+}

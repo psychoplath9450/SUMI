@@ -1,218 +1,49 @@
 # SUMI Changelog
 
-All notable changes to this project will be documented in this file.
+Built on [Papyrix](https://github.com/crosspoint-reader/crosspoint-reader) 1.6.5 by Dave Allie.
 
-## [1.6.3] - 2026-01-29
+## [0.3.2] — 2026-02-15
 
-### Added
-- **Inline images in EPUB** - Images now render with automatic grayscale conversion and Bayer dithering for e-ink display
-- **Image extraction in portal** - Portal extracts and processes images during EPUB upload
-- **Reading progress persistence** - Progress now survives font/margin changes (was being deleted on layout cache rebuild)
+Table rendering and content hint pipeline. Tables now render as actual column-aligned layouts with borders instead of `[Table omitted]` — the parser collects cell data, calculates proportional column widths, and positions cell text with `+--+` grid borders. Header rows render in bold with a separator line. Cells truncate gracefully when the table is wider than the screen.
 
-### Fixed
-- **Black images bug** - Fixed PNG transparency handling (transparent areas now fill with white instead of black)
-- **Progress not restoring** - Fixed bug where `invalidateBook()` was deleting progress.bin
+Also added content hints: EPUBs from sumi.page now embed `dc:subject` tags that tell the firmware what kind of content it's looking at. The OPF parser picks them up, stores them in the book cache (v6) and library index (v2), and the file browser renders labels like `MNGA 42%` or `NEWS` next to your reading progress. The converter, newspaper builder, and web clipper all tag their output automatically. EPUB passthrough injects `sumi:book` if nothing's there.
 
-### Changed
-- **Image processing** - Canvas fills with white background before drawing to handle transparent PNGs
-- **Cache invalidation** - Layout cache rebuild no longer deletes reading progress
+## [0.3.1] — 2026-02-14
 
-## [1.5.0] - 2026-01-28
+Big sumi.page expansion — font converter (TTF/OTF → .bin with a live e-ink preview canvas), web clipper (URL → EPUB with Readability-style extraction), EPUB optimizer for fixing up messy third-party files. Flashcard creator now ships 37 premade language decks and an AI generator. Plugin creator has 11 templates and keyboard controls.
 
-### Breaking Changes
-- **All EPUBs must be preprocessed via portal** - On-device EPUB parsing removed
-- Old books will show "Process this book in the portal first" message
-- **Home WiFi required for book processing** - Hotspot mode is games-only
-- **Default font size changed** - Now uses 12pt (MEDIUM) by default instead of 18pt for more text per page
+## [0.3.0] — 2026-02-12
 
-### Added
-- **Web Flasher** - Flash SUMI directly from your browser at `docs/flasher/`
-  - One-click install of latest SUMI firmware
-  - Uses ESP Web Tools for reliable browser-based flashing
-  - Link to Web ESPTool for custom .bin files
-  - Classic Mac OS-style UI matching the portal
-- **Ready-to-use SD card contents** (`sample_sd/` folder)
-  - 4 classic novels from Project Gutenberg
-  - 20+ language flashcard decks
-  - 10 e-ink optimized wallpapers
-  - Chess pieces and weather icons
-  - ASL alphabet images
-- **EPUB3 support** - Both EPUB2 and EPUB3 formats now work seamlessly
-- **Page preloading** - Next page pre-read into RAM for instant page turns
-- **TOC extraction** - Chapter titles extracted from NCX (EPUB2) or nav.xhtml (EPUB3)
-- **Smart typography** - Straight quotes → curly quotes, -- → em-dash, ... → ellipsis
-- **Soft hyphenation** - Words get automatic break points for better line wrapping
-- **Portal cache management** - New buttons to clear cache and reprocess all books
-- **Reader settings live preview** - Font size, margins, spacing changes apply immediately
-- **Chess piece rendering** - Newspaper diagram style (proper black/white piece contrast)
-- **GitHub Pages landing page** - Project info and quick links at `docs/index.html`
-- **Precise location detection** - Use browser GPS for accurate weather location
-- **Browser timezone detection** - Auto-set timezone from browser on WiFi connect
-- **ATTRIBUTIONS.md** - Full credits for all libraries, APIs, and inspiration sources
+File browser overhaul. New `LibraryIndex` tracks per-book progress in `/.sumi/library.bin` so the file list shows reading percentages without having to open each book. Unsupported formats get a "convert" badge pointing to sumi.page. Directories sort first, then EPUBs, then convertible files.
 
-### Changed
-- **Text layout improvements** - Better word fitting and justification
-  - Tighter word packing (60% minimum space width)
-  - Reduced maximum gap for justified text (1.8x instead of 2.0x)
-  - No paragraph indentation (uses spacing instead)
-  - Line spacing multiplier: 1.0x (was 1.05x)
-- **Library browsing responsiveness** - Faster response to button presses
-  - Reduced debounce from 150ms to 80ms
-  - Input detected immediately after e-ink render completes
-  - Faster polling (20ms instead of 30ms)
-- **Setup wizard** - Now emphasizes home WiFi requirement for books
-- **Portal banners** - Red warning when in hotspot mode (books unavailable)
-- **Library navigation** - Improved button debouncing for faster response
-- **Widget refresh** - Better partial refresh handling for weather widget borders
-- **Installation options** - Web Flasher now primary recommendation
+## [0.2.4] — 2026-02-11
 
-### Fixed
-- **Book loading failures** - Fixed critical bug where PageCache was deleting portal's preprocessed chapter files
-- **Hash mismatch for long filenames** - Books with 64+ character filenames now load correctly
-- **TOC href matching** - Chapter select now properly maps TOC entries to chapters
-- **Justification gaps** - Capped word spacing at 2x normal to prevent excessive gaps
-- **Reader settings cursor** - Menu cursor now aligns with displayed options
-- **Portal textAlign toggle** - Now accepts both boolean and integer values
-- **Paragraph indentation** - Now respects extraParagraphSpacing setting correctly
+BLE keyboards working. Pair in Settings, type in Notes. Spent way too long on a NimBLE issue where modifier keys were getting dropped — `onNotify` fires per-characteristic, not per-report, so the modifier byte was getting lost on multi-characteristic HID devices. Buffering the full 8-byte report before parsing fixed it. Page turners work too — PAGE_NEXT/PAGE_PREV are mapped and wired into ReaderState.
 
-### Removed (Dead Code Cleanup)
-- `EpubParser.cpp/h` (1,148 lines) - On-device EPUB parsing
-- `ExpatHtmlParser.cpp/h` (531 lines) - XML parsing
-- `StreamingHtmlProcessor.h` (23KB) - Unused streaming processor
-- `ZipReader.cpp/h` + miniz library (~65KB) - ZIP decompression
-- `lib/expat/` - XML parsing library (~500KB source)
-- `lib/miniz/` - ZIP library (~100KB source)
+## [0.2.3] — 2026-02-10
 
-### Technical Improvements
-- **~45KB more RAM** for reading (no ZIP buffer, no parsing libraries)
-- **~110KB smaller firmware** (removed parsing code)
-- **Instant page turns** - Next page pre-cached in RAM
-- **Cleaner codebase** - 1,700+ lines of parsing code removed
-- **Portal preprocessing v4** - TOC, smart quotes, soft hyphens, language detection
+Pulled over SUMI settings that Papyrix didn't have — show images toggle, hyphenation, paragraph indent levels, more font size steps (12 instead of 8). Added settings pages for Plugins and Bluetooth. Binary format stays compatible with old settings.bin.
 
-## [1.4.3] - 2026-01-26
+## [0.2.2] — 2026-02-09
 
-### Added
-- **Improved text layout** - better rendering for e-ink displays
-  - Line height compression multiplier (Tight: 0.95x, Normal: 1.0x, Wide: 1.1x)
-  - Viewable margins that account for e-ink panel edges
-  - Extra Large font size option (4 sizes total)
-- **Rich text support** in preprocessed books
-  - **Bold** text preserved from EPUB
-  - *Italic* text preserved from EPUB
-  - Headers centered and bold
-  - List bullets preserved
-- **Paragraph indent mode** - em-dash indent when extra spacing disabled
-- **Flashcard settings in portal** - configure from web interface
-- **Memory fragmentation protection** - friendly reboot message instead of crash
-- **Processing stuck detection** - Portal shows retry option after 30 seconds
+Second batch of plugins. Solitaire, Minesweeper, Checkers, TodoList, ToolSuite, Cube3D. Solitaire card overlap was leaving partial refresh artifacts — ended up tracking dirty rects per stack instead of per card. ToolSuite shows heap stats and SD benchmark which has been useful for catching memory issues.
 
-### Changed
-- Portal preprocessor outputs rich text markers
-- Margins display as pixel values in settings
-- Settings structure updated to v3
+## [0.2.1] — 2026-02-07
 
-### Fixed
-- Book widget cover not displaying
-- Words concatenated in reader
-- Portal tag stripping
-- Home screen grid layout
-- Library crash after portal use
+First plugins running — Chess, Sudoku, Flashcards, Notes, Images, Maps. Chess legal move validation is ~800 lines on its own thanks to castling-through-check and en passant edge cases. Sudoku's cell-first navigation with a valid-number popup actually works really well on the 5-way d-pad.
 
-## [1.4.2] - 2026-01-25
+## [0.2.0] — 2026-02-06
 
-### Added
-- **Browser-based EPUB processing** - Pre-processed in browser using JSZip
-- **"Require Pre-processing" setting** (default: ON)
-- **Rich book metadata** - word count, estimated pages, reading time
-- **"My SUMI" summary page** - comprehensive config overview
-- **Connection status banner** - 3-state network indicator
-- **Unified "Open Portal" menu** - merged WiFi and Portal options
+Plugin system. `PluginInterface` base class, `PluginRenderer` with GxEPD2-compatible drawing API, `PluginHostState` for sandboxed execution. Any `.h` dropped in `src/plugins/` and registered in main.cpp becomes a launchable app. No plugins yet at this point, just proving the architecture compiles and the host state doesn't break the reader.
 
-### Changed
-- Portal requires internet for book processing
-- Library scan skips EPUB parsing when preprocessing required
-- Improved directory creation
+## [0.1.2] — 2026-02-04
 
-### Fixed
-- File descriptor leak in download endpoint
-- mkdir endpoint returning 400
-- Upload paths going to SD root
-- Cover art scaling issues
+Home screen and branding. Replaced the Papyrix home with sumi-e ink art — Atkinson-dithered down to 1-bit, stored as 48KB PROGMEM. Cover art, title, progress, and battery render as overlays on top. New boot splash. Updated file entry styling and menu spacing.
 
-## [1.4.1] - 2026-01-20
+## [0.1.1] — 2026-02-03
 
-### Added
-- Soft hyphen and zero-width character filtering
-- KOReader sync support (KOSync protocol)
-- Configurable full refresh frequency
+Ripped out WiFi. Removed the network driver, web server, credential store, Calibre sync, and all the network/sync states and views — 21 files, ~4,400 lines plus the Calibre lib. Clean compile, no WiFi references left. Frees up ~100KB of heap for the plugin system and BLE.
 
-### Fixed
-- UTF-8 BOM handling in EPUB chapters
-- Progress display during chapter loading
+## [0.1.0] — 2026-02-01
 
-## [1.4.0] - 2026-01-15
-
-### Added
-- Two-tier book metadata caching (RAM + SD card)
-- Streaming EPUB parser using Expat XML library
-- Activity lifecycle for proper resource management
-
-### Changed
-- Library split into multiple source files
-- Book list stored as binary index on SD card
-- Chapter content streamed in 1KB chunks
-
-### Fixed
-- Memory fragmentation during long reading sessions
-- WiFi memory cleanup when returning to reader
-
-## [1.3.0] - 2026-01-10
-
-### Added
-- Cover image extraction and caching
-- Reading statistics tracking
-- Bookmark support with timestamps
-
-### Changed
-- Improved EPUB 2/3 TOC parsing
-- Better error handling for malformed EPUBs
-
-### Fixed
-- Display buffer overflow on large chapters
-- Progress saving on chapter change
-
-## [1.2.0] - 2026-01-06
-
-### Added
-- TXT file support in reader
-- Chapter selection menu
-- Last book resume on startup
-
-### Changed
-- Switched to paged display buffer mode (saves ~38KB RAM)
-- Improved text layout justification
-
-## [1.1.0] - 2026-01-03
-
-### Added
-- Basic EPUB reading support
-- Library browser with flip and list views
-- Reader settings (font size, margins, line spacing)
-
-### Fixed
-- SD card initialization on some devices
-- Button debouncing issues
-
-## [1.0.0] - 2026-01-01
-
-### Added
-- Initial release
-- Home screen with app grid
-- Settings portal via WiFi
-- Weather widget
-- Flashcards app
-- Games: Chess, Checkers, Sudoku, Minesweeper, Solitaire
-- Notes app
-- Image viewer
-- Power management with deep sleep
+Fresh start on Papyrix 1.6.5. Renamed `namespace papyrix` → `sumi`, all defines and paths updated, `PapyrixSettings` → `SumiSettings` with binary compat. Cache directory migrates from `.papyrix/` to `.sumi/` on first boot. Compiles and runs on X4 hardware out of the box.

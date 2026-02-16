@@ -1,0 +1,16 @@
+{
+  "name": "Group5",
+  "version": "1.0.0",
+  "description": "Group5 1-bit image compression library based on CCITT T.6",
+  "license": "GPL-3.0-or-later",
+  "authors": [
+    {
+      "name": "Larry Bank",
+      "email": "bitbank@pobox.com"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bitbank2/bb_epaper"
+  }
+}

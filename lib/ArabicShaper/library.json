@@ -1,0 +1,5 @@
+{
+  "name": "ArabicShaper",
+  "version": "1.0.0",
+  "description": "Arabic text shaping with contextual forms and RTL support"
+}

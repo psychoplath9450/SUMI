@@ -1,0 +1,155 @@
+#pragma once
+
+#include <expat.h>
+
+#include <climits>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "../ParsedText.h"
+#include "../RenderConfig.h"
+#include "../blocks/ImageBlock.h"
+#include "../blocks/TextBlock.h"
+#include "../css/CssParser.h"
+#include "DataUriStripper.h"
+
+class Page;
+class GfxRenderer;
+class Print;
+
+#define MAX_WORD_SIZE 200
+constexpr int MAX_XML_DEPTH = 100;
+
+class ChapterHtmlSlimParser {
+  const std::string filepath;
+  GfxRenderer& renderer;
+  std::function<bool(std::unique_ptr<Page>)> completePageFn;  // Returns false to stop parsing
+  std::function<void(int)> progressFn;                        // Progress callback (0-100)
+  int depth = 0;
+  int skipUntilDepth = INT_MAX;
+  bool insideBody_ = false;  // Don't emit text before <body>
+  int boldUntilDepth = INT_MAX;
+  int italicUntilDepth = INT_MAX;
+  int cssBoldUntilDepth = INT_MAX;
+  int cssItalicUntilDepth = INT_MAX;
+  int underlineUntilDepth = INT_MAX;
+  int strikethroughUntilDepth = INT_MAX;
+  int cssUnderlineUntilDepth = INT_MAX;
+  int cssStrikethroughUntilDepth = INT_MAX;
+  // buffer for building up words from characters, will auto break if longer than this
+  // leave one char at end for null pointer
+  char partWordBuffer[MAX_WORD_SIZE + 1] = {};
+  int partWordBufferIndex = 0;
+  std::unique_ptr<ParsedText> currentTextBlock = nullptr;
+  std::unique_ptr<Page> currentPage = nullptr;
+  int16_t currentPageNextY = 0;
+  RenderConfig config;
+
+  // Image support
+  std::string chapterBasePath;
+  std::string imageCachePath;
+  std::function<bool(const std::string&, Print&, size_t)> readItemFn;
+
+  // CSS support
+  const CssParser* cssParser_ = nullptr;
+
+  // XML parser handle for stopping mid-parse
+  XML_Parser xmlParser_ = nullptr;
+  bool stopRequested_ = false;
+  bool pendingEmergencySplit_ = false;
+  bool pendingRtl_ = false;
+  int rtlUntilDepth_ = INT_MAX;
+  bool aborted_ = false;
+
+  // External abort callback for cooperative cancellation
+  std::function<bool()> externalAbortCallback_ = nullptr;
+
+  // Image failure rate limiting - skip remaining images after consecutive failures
+  uint8_t consecutiveImageFailures_ = 0;
+  static constexpr uint8_t MAX_CONSECUTIVE_IMAGE_FAILURES = 3;
+
+  // Table parsing state
+  struct TableCell {
+    std::string text;
+    bool isHeader = false;
+  };
+  bool inTable_ = false;
+  bool inTableCell_ = false;
+  int nestedTableDepth_ = 0;  // Track nested tables to skip them
+  std::vector<std::vector<TableCell>> tableRows_;
+  void renderTable();
+  std::string trimWhitespace(const std::string& s);
+  std::string truncateToFit(const std::string& text, int maxWidth, EpdFontFamily::Style style);
+
+  // Parser safety - timeout and memory checks
+  uint32_t parseStartTime_ = 0;
+  uint16_t loopCounter_ = 0;
+  uint16_t pagesCreated_ = 0;
+  uint16_t elementCounter_ = 0;
+  bool cssHeapOk_ = true;
+  static constexpr uint32_t MAX_PARSE_TIME_MS = 20000;     // 20 second timeout
+  static constexpr uint16_t YIELD_CHECK_INTERVAL = 100;    // Check every 100 iterations
+  static constexpr uint16_t CSS_HEAP_CHECK_INTERVAL = 64;  // Check heap for CSS every 64 elements
+  static constexpr size_t MIN_FREE_HEAP = 8192;            // 8KB minimum free heap
+
+  // Pre-parse data URI stripper to prevent expat OOM on large embedded images
+  DataUriStripper dataUriStripper_;
+
+  // Anchor-to-page mapping: element id → page index (0-based)
+  std::vector<std::pair<std::string, uint16_t>> anchorMap_;
+
+  // Check if parsing should abort due to timeout or memory pressure
+  bool shouldAbort() const;
+
+  void startNewTextBlock(TextBlock::BLOCK_STYLE style);
+  void flushPartWordBuffer();
+  void makePages();
+  std::string cacheImage(const std::string& src);
+  void addImageToPage(std::shared_ptr<ImageBlock> image);
+  // XML callbacks
+  static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
+  static void XMLCALL characterData(void* userData, const XML_Char* s, int len);
+  static void XMLCALL endElement(void* userData, const XML_Char* name);
+  static void XMLCALL defaultHandler(void* userData, const XML_Char* s, int len);
+
+  // Suspend/resume state
+  FsFile file_;
+  size_t totalSize_ = 0;
+  size_t bytesRead_ = 0;
+  int lastProgress_ = -1;
+  bool suspended_ = false;  // True when parser is suspended mid-parse (can resume)
+
+  bool initParser();
+  bool parseLoop();
+  void cleanupParser();
+
+ public:
+  explicit ChapterHtmlSlimParser(const std::string& filepath, GfxRenderer& renderer, const RenderConfig& config,
+                                 const std::function<bool(std::unique_ptr<Page>)>& completePageFn,
+                                 const std::function<void(int)>& progressFn = nullptr,
+                                 const std::string& chapterBasePath = "", const std::string& imageCachePath = "",
+                                 const std::function<bool(const std::string&, Print&, size_t)>& readItemFn = nullptr,
+                                 const CssParser* cssParser = nullptr,
+                                 const std::function<bool()>& externalAbortCallback = nullptr)
+      : filepath(filepath),
+        renderer(renderer),
+        config(config),
+        completePageFn(completePageFn),
+        progressFn(progressFn),
+        chapterBasePath(chapterBasePath),
+        imageCachePath(imageCachePath),
+        readItemFn(readItemFn),
+        cssParser_(cssParser),
+        externalAbortCallback_(externalAbortCallback) {}
+  ~ChapterHtmlSlimParser();
+  bool parseAndBuildPages();
+  bool resumeParsing();
+  bool isSuspended() const { return suspended_; }
+  void addLineToPage(std::shared_ptr<TextBlock> line);
+  bool wasAborted() const { return aborted_; }
+  const std::vector<std::pair<std::string, uint16_t>>& getAnchorMap() const { return anchorMap_; }
+};

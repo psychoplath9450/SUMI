@@ -1,185 +1,198 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SUMI - Custom Firmware for Xteink X4</title>
-    <style>
-        :root {
-            --mac-white: #ffffff;
-            --mac-black: #000000;
-            --mac-gray: #dddddd;
-            --mac-gray-dark: #999999;
-            --mac-gray-light: #eeeeee;
-            --mac-highlight: #3366cc;
-            --mac-desktop: #6699cc;
-        }
-        
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        
-        body {
-            font-family: 'Chicago', 'Charcoal', 'Geneva', 'Helvetica Neue', Helvetica, sans-serif;
-            font-size: 12px;
-            background: var(--mac-desktop);
-            min-height: 100vh;
-            color: var(--mac-black);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        
-        .window {
-            width: 100%;
-            max-width: 360px;
-            background: var(--mac-white);
-            border: 2px solid var(--mac-black);
-            border-radius: 8px;
-            box-shadow: 4px 4px 0 rgba(0,0,0,0.3);
-        }
-        
-        .title-bar {
-            background: linear-gradient(180deg, #fff 0%, #fff 50%, #ccc 50%, #ccc 100%);
-            background-size: 100% 2px;
-            border-bottom: 1px solid var(--mac-black);
-            padding: 4px 8px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            border-radius: 6px 6px 0 0;
-        }
-        
-        .window-controls {
-            display: flex;
-            gap: 6px;
-        }
-        
-        .window-control {
-            width: 12px;
-            height: 12px;
-            border: 1px solid var(--mac-black);
-            background: var(--mac-white);
-        }
-        
-        .title-bar h1 {
-            flex: 1;
-            text-align: center;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        
-        .window-body {
-            padding: 20px;
-            background: var(--mac-gray-light);
-            text-align: center;
-        }
-        
-        .logo {
-            font-size: 48px;
-            font-weight: 300;
-            letter-spacing: 0.2em;
-            margin-bottom: 4px;
-        }
-        
-        .tagline {
-            color: var(--mac-gray-dark);
-            margin-bottom: 24px;
-            font-size: 11px;
-        }
-        
-        .links {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        .link-btn {
-            display: block;
-            padding: 10px 16px;
-            background: linear-gradient(180deg, var(--mac-white), var(--mac-gray));
-            border: 1px solid var(--mac-black);
-            border-radius: 4px;
-            color: var(--mac-black);
-            text-decoration: none;
-            font-family: inherit;
-            font-size: 12px;
-            box-shadow: 0 1px 0 var(--mac-black);
-            transition: all 0.1s;
-        }
-        
-        .link-btn:hover {
-            background: linear-gradient(180deg, var(--mac-gray), var(--mac-white));
-        }
-        
-        .link-btn:active {
-            box-shadow: none;
-            transform: translateY(1px);
-        }
-        
-        .link-btn.primary {
-            background: linear-gradient(180deg, #4488ee, #2266cc);
-            color: white;
-            border-color: #1155aa;
-        }
-        
-        .link-btn.primary:hover {
-            background: linear-gradient(180deg, #5599ff, #3377dd);
-        }
-        
-        .link-title {
-            font-weight: bold;
-            margin-bottom: 2px;
-        }
-        
-        .link-desc {
-            font-size: 10px;
-            opacity: 0.8;
-        }
-        
-        footer {
-            margin-top: 20px;
-            padding-top: 12px;
-            border-top: 1px solid var(--mac-gray);
-            color: var(--mac-gray-dark);
-            font-size: 10px;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SUMI — Firmware Flasher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--ink:#111;--paper:#f5f0e8;--paper-dark:#e8e0d0;--muted:#777;--border:#ccc;--accent:#8b4513;--success:#2d6a2e;--error:#8b1a1a;
+  --font:'Cormorant Garamond',Georgia,serif;--mono:'JetBrains Mono',monospace}
+html{scroll-behavior:smooth}
+body{font-family:var(--font);background:var(--paper);color:var(--ink);min-height:100vh;line-height:1.6}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  background-repeat:repeat;opacity:0.6}
+
+.header{text-align:center;padding:40px 20px 24px;border-bottom:1px solid var(--border);position:relative}
+.header h1{font-size:36px;font-weight:700;letter-spacing:-1px}
+.header p{font-style:italic;color:var(--muted);margin-top:4px}
+.header .back{position:absolute;left:20px;top:44px;font-family:var(--mono);font-size:12px;text-decoration:none;color:var(--ink);letter-spacing:1px;text-transform:uppercase}
+
+.container{max-width:860px;margin:0 auto;padding:40px 20px}
+
+/* Steps */
+.steps{display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin-bottom:48px}
+@media(max-width:600px){.steps{grid-template-columns:1fr}}
+.step{text-align:center;padding:24px 16px;border:1px solid var(--border)}
+.step-num{font-family:var(--mono);font-size:36px;font-weight:700;display:block;margin-bottom:8px;color:var(--accent)}
+.step h4{font-size:17px;margin-bottom:4px;font-weight:700}
+.step p{font-size:13px;color:var(--muted)}
+
+/* Firmware cards */
+.firmware-cards{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:40px}
+@media(max-width:700px){.firmware-cards{grid-template-columns:1fr}}
+
+.fw-card{border:2px solid var(--border);padding:28px;position:relative;transition:all .15s;cursor:pointer}
+.fw-card:hover{border-color:var(--ink);transform:translateY(-2px);box-shadow:4px 4px 0 var(--ink)}
+.fw-card.selected{border-color:var(--ink);background:var(--ink);color:var(--paper)}
+.fw-card.selected .tag{border-color:rgba(255,255,255,.4);color:var(--paper)}
+.fw-card.selected .number{color:rgba(255,255,255,.4)}
+.fw-card.selected p{color:rgba(255,255,255,.7)}
+.fw-card .number{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:2px;margin-bottom:12px;text-transform:uppercase}
+.fw-card h3{font-size:24px;font-weight:700;margin-bottom:8px}
+.fw-card p{font-size:14px;line-height:1.5;color:var(--muted);margin-bottom:14px}
+.tag{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:1px;text-transform:uppercase;border:1px solid var(--border);padding:3px 8px;margin-right:4px}
+
+/* Flash section */
+.flash-section{border:2px solid var(--ink);padding:40px 32px;text-align:center;margin-bottom:40px;position:relative}
+.flash-section::before{content:'FLASH';position:absolute;top:-12px;left:24px;background:var(--paper);padding:0 8px;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--muted)}
+.flash-section h3{font-size:24px;margin-bottom:12px}
+.flash-section p{color:var(--muted);font-size:14px;margin-bottom:24px}
+
+.btn{font-family:var(--mono);font-size:13px;letter-spacing:1px;text-transform:uppercase;padding:14px 32px;border:2px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer;transition:all .15s;display:inline-block}
+.btn:hover{background:var(--ink);color:var(--paper)}
+
+esp-web-install-button{display:inline-block}
+esp-web-install-button::part(button){
+  font-family:var(--mono);font-size:13px;letter-spacing:1px;text-transform:uppercase;
+  padding:14px 32px;border:2px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer;transition:all .15s}
+esp-web-install-button::part(button):hover{background:transparent;color:var(--ink)}
+
+.erase-opt{margin-top:20px}
+.erase-opt label{font-family:var(--mono);font-size:12px;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.erase-opt input[type="checkbox"]{accent-color:var(--ink)}
+
+/* Partition diagram */
+.partition-block{font-family:var(--mono);font-size:12px;line-height:1.8;background:var(--ink);color:#e0d8c8;padding:24px;white-space:pre;overflow-x:auto;margin:20px 0}
+
+/* Info boxes */
+.info{border:1px solid var(--border);padding:20px;margin-bottom:16px;font-size:14px;line-height:1.6}
+.info h4{font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+.info code{font-family:var(--mono);font-size:12px;background:var(--paper-dark);padding:1px 4px}
+.info p+p{margin-top:8px}
+
+/* Divider */
+.divider{width:100%;height:2px;background:var(--ink);margin:40px auto;max-width:860px;
+  mask-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 960 2' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 1 Q240 0 480 1 T960 1' stroke='black' stroke-width='2' fill='none'/%3E%3C/svg%3E")}
+</style>
 </head>
 <body>
-    <div class="window">
-        <div class="title-bar">
-            <div class="window-controls">
-                <div class="window-control"></div>
-            </div>
-            <h1>SUMI</h1>
-            <div style="width: 12px;"></div>
-        </div>
-        
-        <div class="window-body">
-            <div class="logo">SUMI</div>
-            <p class="tagline">Custom Firmware for Xteink X4</p>
-            
-            <div class="links">
-                <a href="flasher/" class="link-btn primary">
-                    <div class="link-title">⚡ Web Flasher</div>
-                    <div class="link-desc">Flash SUMI directly from your browser</div>
-                </a>
-                
-                <a href="https://github.com/psychoplath9450/SUMI" class="link-btn">
-                    <div class="link-title">📖 Documentation</div>
-                    <div class="link-desc">Setup guide, features, and more</div>
-                </a>
-                
-                <a href="https://github.com/psychoplath9450/SUMI/releases" class="link-btn">
-                    <div class="link-title">📦 Releases</div>
-                    <div class="link-desc">Download firmware and changelog</div>
-                </a>
-            </div>
-            
-            <footer>
-                An open source e-reader firmware project
-            </footer>
-        </div>
-    </div>
+
+<div class="header">
+  <a href="../" class="back">← GitHub</a>
+  <h1>Firmware Flasher</h1>
+  <p>Flash SUMI directly from your browser via USB</p>
+</div>
+
+<div class="container">
+
+<div class="steps">
+  <div class="step"><span class="step-num">1</span><h4>Select</h4><p>Choose SUMI, SumiBoy, or both for dual boot</p></div>
+  <div class="step"><span class="step-num">2</span><h4>Connect</h4><p>Plug in via USB, hold BOOT during power-on</p></div>
+  <div class="step"><span class="step-num">3</span><h4>Flash</h4><p>Click flash. Takes about 30 seconds.</p></div>
+</div>
+
+<div class="firmware-cards">
+  <div class="fw-card selected" id="card-lite" onclick="selectFirmware('lite')">
+    <div class="number">App0 — 0x10000</div>
+    <h3>SUMI</h3>
+    <p>Complete reader firmware. EPUB, TXT, Markdown, XTC. Newspapers, flashcards, notes, chess, Game Boy emulator, BLE keyboards, and sumi-e UI.</p>
+    <span class="tag">v0.3.2</span>
+    <span class="tag">3MB</span>
+    <span class="tag">Reader</span>
+  </div>
+  <div class="fw-card" id="card-emu" onclick="selectFirmware('emu')">
+    <div class="number">App1 — 0x310000</div>
+    <h3>SumiBoy</h3>
+    <p>Game Boy emulator with MBC3 banking, save states, Bayer dithering, and ROM patches. Dual-boots with SUMI.</p>
+    <span class="tag">v1.0.0</span>
+    <span class="tag">3MB</span>
+    <span class="tag">Emulator</span>
+  </div>
+</div>
+
+<div class="flash-section">
+  <h3 id="flashTitle">Flash SUMI</h3>
+  <p id="flashDesc">Requires Chrome or Edge with Web Serial API. Connect your Xteink X4 via USB.</p>
+
+  <div id="flashButtons">
+    <esp-web-install-button id="espFlasher" manifest="./manifest-sumi.json">
+      <span slot="unsupported">
+        <p style="color:var(--error);font-size:14px;margin-bottom:12px">
+          Web Serial not supported in this browser.<br>Please use Chrome or Edge.
+        </p>
+      </span>
+      <span slot="not-allowed">
+        <p style="color:var(--error);font-size:14px">
+          Serial access blocked. Check browser permissions.
+        </p>
+      </span>
+    </esp-web-install-button>
+  </div>
+
+  <div class="erase-opt">
+    <label><input type="checkbox" id="eraseBefore" checked> Erase flash before writing (recommended for first install)</label>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<div class="info">
+  <h4>Flash Layout (16MB)</h4>
+  <pre class="partition-block">  ┌──────────────────────────────────────────────────┐
+  │ 0x0000   Bootloader          (16KB)              │
+  │ 0x8000   Partition Table     (4KB)               │
+  │ 0x9000   NVS                 (20KB)              │
+  │ 0xE000   OTA Data            (8KB)               │
+  ├──────────────────────────────────────────────────┤
+  │ 0x10000  app0: SUMI          (3MB)    ← Reader  │
+  ├──────────────────────────────────────────────────┤
+  │ 0x310000 app1: SumiBoy       (3MB)    ← Emulator│
+  ├──────────────────────────────────────────────────┤
+  │ 0x610000 SPIFFS              (~10MB)  ← Data    │
+  └──────────────────────────────────────────────────┘</pre>
+</div>
+
+<div class="info">
+  <h4>Dual Boot</h4>
+  <p>When both firmwares are installed, SUMI boots by default. Select "SumiBoy" from the home screen to switch. The emulator saves state and reboots to app1. Press BACK on the emulator's landing screen to return to SUMI.</p>
+</div>
+
+<div class="info">
+  <h4>Troubleshooting</h4>
+  <p><b>Device not detected?</b> Hold the BOOT button while plugging in USB. Release after 2 seconds. The device should appear as a serial port.</p>
+  <p><b>Flash failed?</b> Try erasing flash first (checkbox above), then flash again. If issues persist, use PlatformIO: <code>pio run -t upload</code></p>
+  <p><b>Manual flash:</b> <code>python -m esptool --chip esp32c3 write_flash 0x10000 firmware.bin</code></p>
+</div>
+
+</div>
+
+<script>
+let selectedFirmware = 'lite';
+
+function selectFirmware(fw) {
+  selectedFirmware = fw;
+  document.getElementById('card-lite').classList.toggle('selected', fw === 'lite');
+  document.getElementById('card-emu').classList.toggle('selected', fw === 'emu');
+
+  const flasher = document.getElementById('espFlasher');
+  const title = document.getElementById('flashTitle');
+  const desc = document.getElementById('flashDesc');
+
+  if (fw === 'lite') {
+    flasher.setAttribute('manifest', './manifest-sumi.json');
+    title.textContent = 'Flash SUMI';
+    desc.textContent = 'Writes to app0 (0x10000). This is the main reader firmware.';
+  } else {
+    flasher.setAttribute('manifest', './manifest-sumiboy.json');
+    title.textContent = 'Flash SumiBoy';
+    desc.textContent = 'Writes to app1 (0x310000). Requires SUMI in app0 for dual boot.';
+  }
+}
+</script>
 </body>
 </html>

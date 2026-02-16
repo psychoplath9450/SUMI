@@ -1,777 +1,665 @@
-/**
- * @file main.cpp
- * @brief Sumi Firmware - Open source e-reader for ESP32-C3
- * @version 1.3.0
- *
- * Main entry point for Sumi firmware. Handles initialization, display setup,
- * button input processing, and the main event loop.
- *
- * Boot sequence:
- * 1. Initialize hardware (buttons, battery, SD card, display)
- * 2. Load settings from SD card
- * 3. Check if first boot (setup mode) or normal operation
- * 4. Enter appropriate mode (WiFi portal or home screen)
- *
- * @see docs/ARCHITECTURE.md for system design details
- */
-
 #include <Arduino.h>
+#include <EInkDisplay.h>
+#include <Epub.h>
+#include <GfxRenderer.h>
+#include <InputManager.h>
+#include <SDCardManager.h>
+// SdFat and FS.h both define FILE_READ/FILE_WRITE - undef before LittleFS re-includes FS.h
+#undef FILE_READ
+#undef FILE_WRITE
+#include <LittleFS.h>
 #include <SPI.h>
-#include <SD.h>
-#include <GxEPD2_BW.h>
-#include <WiFi.h>
-#include <esp_sleep.h>
-#include <climits>
+#include <builtinFonts/reader_2b.h>
+#include <builtinFonts/reader_bold_2b.h>
+#include <builtinFonts/reader_italic_2b.h>
+// XSmall font (12pt)
+#include <builtinFonts/reader_xsmall_bold_2b.h>
+#include <builtinFonts/reader_xsmall_italic_2b.h>
+#include <builtinFonts/reader_xsmall_regular_2b.h>
+#include <driver/gpio.h>
+#include <esp_system.h>
+#include <esp_task_wdt.h>
+// Medium font (16pt)
+#include <builtinFonts/reader_medium_2b.h>
+#include <builtinFonts/reader_medium_bold_2b.h>
+#include <builtinFonts/reader_medium_italic_2b.h>
+// Large font (18pt)
+#include <builtinFonts/reader_large_2b.h>
+#include <builtinFonts/reader_large_bold_2b.h>
+#include <builtinFonts/reader_large_italic_2b.h>
+#include <builtinFonts/small14.h>
+#include <builtinFonts/ui_12.h>
+#include <builtinFonts/ui_bold_12.h>
 
+#include "Battery.h"
+#include "FontManager.h"
+#include "MappedInputManager.h"
+#include "ThemeManager.h"
 #include "config.h"
+#include "content/ContentTypes.h"
+#include "ui/Elements.h"
 
-// =============================================================================
-// Core Systems
-// =============================================================================
-#include "core/WiFiManager.h"
-#include "core/SettingsManager.h"
-#include "core/BatteryMonitor.h"
-#include "core/HomeItems.h"
-#include "core/RefreshManager.h"
-#include "core/PowerManager.h"
-#include "core/ButtonInput.h"
-#include "core/SetupWizard.h"
-#include "core/HomeScreen.h"
-#include "core/SettingsScreen.h"
-#include "core/AppLauncher.h"
-#include "core/SettingsState.h"
+// New refactored core system
+#include "core/BootMode.h"
+#include "core/Core.h"
+#include "core/StateMachine.h"
+#include "images/SumiLogo.h"
+#include "states/ErrorState.h"
+#include "states/FileListState.h"
+#include "states/HomeState.h"
+#include "states/ReaderState.h"
+#include "states/SettingsState.h"
+#include "states/SleepState.h"
+#include "states/StartupState.h"
+#include "ui/views/BootSleepViews.h"
 
-// Global RefreshManager instance
-RefreshManager refreshManager;
+// Plugin system
+#if FEATURE_PLUGINS
+#include "states/PluginHostState.h"
+#include "states/PluginListState.h"
+#include "plugins/PluginRenderer.h"
 
-#if FEATURE_WEBSERVER
-    #include "core/WebServer.h"
+// Games
+#if FEATURE_GAMES
+#include "plugins/Minesweeper.h"
+#include "plugins/Checkers.h"
+#include "plugins/Solitaire.h"
+#include "plugins/Sudoku.h"
+#include "plugins/ChessGame.h"
+#include "plugins/Cube3D.h"
+#include "plugins/SumiBoy.h"
 #endif
 
-#if FEATURE_BLUETOOTH
-    #include "core/BluetoothManager.h"
-#endif
+// Productivity
+#include "plugins/TodoList.h"
+#include "plugins/Notes.h"
+#include "plugins/ToolSuite.h"
+#include "plugins/Images.h"
+#include "plugins/Maps.h"
 
-// =============================================================================
-// PLUGINS - Include headers (implementations compile separately in src/plugins/)
-// =============================================================================
-
-// Library is CORE - always included when READER is enabled
-#if FEATURE_READER
-#include "plugins/Library.h"
-#endif
-
-// Flashcards - separate feature
 #if FEATURE_FLASHCARDS
 #include "plugins/Flashcards.h"
 #endif
+#endif  // FEATURE_PLUGINS
 
-// Weather - separate feature (uses WiFi for API calls)
-#if FEATURE_WEATHER
-#include "plugins/Weather.h"
-#endif
+#define SPI_FQ 40000000
+// Display SPI pins (custom pins for XteinkX4, not hardware SPI defaults)
+#define EPD_SCLK 8   // SPI Clock
+#define EPD_MOSI 10  // SPI MOSI (Master Out Slave In)
+#define EPD_CS 21    // Chip Select
+#define EPD_DC 4     // Data/Command
+#define EPD_RST 5    // Reset
+#define EPD_BUSY 6   // Busy
 
-// Games and productivity plugins - only when FEATURE_GAMES is enabled
-#if FEATURE_GAMES
-#include "plugins/Notes.h"
-#include "plugins/ChessGame.h"
-#include "plugins/Checkers.h"
-#include "plugins/Sudoku.h"
-#include "plugins/Minesweeper.h"
-#include "plugins/Solitaire.h"
-#include "plugins/TodoList.h"
-#include "plugins/Images.h"
-#include "plugins/ToolSuite.h"
-#endif
+#define UART0_RXD 20  // Used for USB connection detection
 
-// Include plugin runner templates (after plugin headers)
-#include "core/PluginRunner.h"
+#define SD_SPI_MISO 7
 
-// =============================================================================
-// Display
-// =============================================================================
-GxEPD2_BW<GxEPD2_426_GDEQ0426T82, DISPLAY_BUFFER_HEIGHT> display(
-    GxEPD2_426_GDEQ0426T82(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY)
-);
+#define SERIAL_INIT_DELAY_MS 10
+#define SERIAL_READY_TIMEOUT_MS 3000
 
-// =============================================================================
-// Global State
-// =============================================================================
-bool sd_card_present = false;
-bool setup_mode = false;
-bool portal_active = false;
+EInkDisplay einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
+InputManager inputManager;
+MappedInputManager mappedInputManager(inputManager);
+GfxRenderer renderer(einkDisplay);
 
-enum AppScreen { APP_SCREEN_HOME, APP_SCREEN_SETTINGS };
-AppScreen currentAppScreen = APP_SCREEN_HOME;
+// Extern references for driver wrappers
+EInkDisplay& display = einkDisplay;
+MappedInputManager& mappedInput = mappedInputManager;
 
-// =============================================================================
-// Function Declarations
-// =============================================================================
-void initDisplay();
-void initSDCard();
-void handleButtons();
-
-// For button state tracking
-static Button lastButton = BTN_NONE;
-
-// =============================================================================
-// Bluetooth Keyboard Support
-// =============================================================================
-#if FEATURE_BLUETOOTH
-// Callback for BLE keyboard input - converts HID keycodes to Button presses
-void onBluetoothKey(const KeyEvent& event) {
-    if (!event.pressed) return;  // Only handle key down
-    
-    Button btn = BTN_NONE;
-    
-    // Convert HID keycodes to Button enum
-    switch (event.keyCode) {
-        case 0x52: btn = BTN_UP; break;      // Up arrow
-        case 0x51: btn = BTN_DOWN; break;    // Down arrow
-        case 0x50: btn = BTN_LEFT; break;    // Left arrow
-        case 0x4F: btn = BTN_RIGHT; break;   // Right arrow
-        case 0x28: btn = BTN_CONFIRM; break; // Enter
-        case 0x29: btn = BTN_BACK; break;    // Escape
-        case 0x2C: btn = BTN_CONFIRM; break; // Space
-        // WASD support
-        case 0x1A: btn = BTN_UP; break;      // W
-        case 0x16: btn = BTN_DOWN; break;    // S
-        case 0x04: btn = BTN_LEFT; break;    // A
-        case 0x07: btn = BTN_RIGHT; break;   // D
-    }
-    
-    if (btn != BTN_NONE) {
-        Serial.printf("[BT] Key: 0x%02X -> %s\n", event.keyCode, getButtonName(btn));
-        injectButton(btn);
-    }
-}
-#endif
-
-// =============================================================================
-// Wake-up Verification
-// Prevents accidental wake from brief button contact during deep sleep
-// =============================================================================
-void verifyWakeupLongPress() {
-    pinMode(BTN_GPIO3, INPUT_PULLUP);
-    
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    if (cause != ESP_SLEEP_WAKEUP_GPIO) {
-        return;  // Not waking from sleep, proceed normally
-    }
-    
-    Serial.println("[POWER] Verifying wake-up long press...");
-    
-    // Wait for button release or timeout
-    unsigned long start = millis();
-    while (digitalRead(BTN_GPIO3) == LOW) {
-        if (millis() - start >= POWER_BUTTON_WAKEUP_MS) {
-            Serial.println("[POWER] Wake-up confirmed!");
-            return;
-        }
-        delay(10);
-    }
-    
-    // Button released too early - go back to sleep
-    Serial.println("[POWER] Wake-up cancelled - returning to sleep");
-    powerManager.enterDeepSleep();
+// Core system
+namespace sumi {
+Core core;
 }
 
-// =============================================================================
-// Setup
-// =============================================================================
-void setup() {
+// State instances (pre-allocated, no heap per transition)
+static sumi::StartupState startupState;
+static sumi::HomeState homeState(renderer);
+static sumi::FileListState fileListState(renderer);
+static sumi::ReaderState readerState(renderer);
+static sumi::SettingsState settingsState(renderer);
+static sumi::SleepState sleepState(renderer);
+static sumi::ErrorState errorState(renderer);
+static sumi::StateMachine stateMachine;
+
+// Plugin system instances
+#if FEATURE_PLUGINS
+static sumi::PluginRenderer pluginRenderer(renderer);
+static sumi::PluginListState pluginListState(renderer);
+static sumi::PluginHostState pluginHostState(renderer);
+#endif
+
+RTC_DATA_ATTR uint16_t rtcPowerButtonDurationMs = 400;
+
+// Fonts - XSmall (12pt)
+EpdFont readerXSmallFont(&reader_xsmall_regular_2b);
+EpdFont readerXSmallBoldFont(&reader_xsmall_bold_2b);
+EpdFont readerXSmallItalicFont(&reader_xsmall_italic_2b);
+EpdFontFamily readerXSmallFontFamily(&readerXSmallFont, &readerXSmallBoldFont, &readerXSmallItalicFont,
+                                     &readerXSmallBoldFont);
+
+// Fonts - Small (14pt, default)
+EpdFont readerFont(&reader_2b);
+EpdFont readerBoldFont(&reader_bold_2b);
+EpdFont readerItalicFont(&reader_italic_2b);
+EpdFontFamily readerFontFamily(&readerFont, &readerBoldFont, &readerItalicFont, &readerBoldFont);
+
+// Fonts - Medium (16pt)
+EpdFont readerMediumFont(&reader_medium_2b);
+EpdFont readerMediumBoldFont(&reader_medium_bold_2b);
+EpdFont readerMediumItalicFont(&reader_medium_italic_2b);
+EpdFontFamily readerMediumFontFamily(&readerMediumFont, &readerMediumBoldFont, &readerMediumItalicFont,
+                                     &readerMediumBoldFont);
+
+// Fonts - Large (18pt)
+EpdFont readerLargeFont(&reader_large_2b);
+EpdFont readerLargeBoldFont(&reader_large_bold_2b);
+EpdFont readerLargeItalicFont(&reader_large_italic_2b);
+EpdFontFamily readerLargeFontFamily(&readerLargeFont, &readerLargeBoldFont, &readerLargeItalicFont,
+                                    &readerLargeBoldFont);
+
+EpdFont smallFont(&small14);
+EpdFontFamily smallFontFamily(&smallFont);
+
+EpdFont ui12Font(&ui_12);
+EpdFont uiBold12Font(&ui_bold_12);
+EpdFontFamily uiFontFamily(&ui12Font, &uiBold12Font);
+
+bool isUsbConnected() { return digitalRead(UART0_RXD) == HIGH; }
+
+struct WakeupInfo {
+  esp_reset_reason_t resetReason;
+  bool isPowerButton;
+};
+
+WakeupInfo getWakeupInfo() {
+  const bool usbConnected = isUsbConnected();
+  const auto wakeupCause = esp_sleep_get_wakeup_cause();
+  const auto resetReason = esp_reset_reason();
+
+  // Without USB: power button triggers a full power-on reset (not GPIO wakeup)
+  // With USB: power button wakes from deep sleep via GPIO
+  const bool isPowerButton =
+      (!usbConnected && wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON) ||
+      (usbConnected && wakeupCause == ESP_SLEEP_WAKEUP_GPIO && resetReason == ESP_RST_DEEPSLEEP);
+
+  return {resetReason, isPowerButton};
+}
+
+// Verify long press on wake-up from deep sleep
+void verifyWakeupLongPress(esp_reset_reason_t resetReason) {
+  if (resetReason == ESP_RST_SW) {
+    Serial.printf("[%lu] [   ] Skipping wakeup verification (software restart)\n", millis());
+    return;
+  }
+
+  // Fast path for short press mode - skip verification entirely.
+  // Uses settings directly (not RTC variable) so it works even after a full power cycle
+  // where RTC memory is lost. Needed because inputManager.isPressed() may take up to
+  // ~500ms to return the correct state after wake-up.
+  if (sumi::core.settings.shortPwrBtn == sumi::Settings::PowerSleep) {
+    Serial.printf("[%lu] [   ] Skipping wakeup verification (short press mode)\n", millis());
+    return;
+  }
+
+  // Give the user up to 1000ms to start holding the power button, and must hold for the configured duration
+  const auto start = millis();
+  bool abort = false;
+  const uint16_t requiredPressDuration = sumi::core.settings.getPowerButtonDuration();
+
+  inputManager.update();
+  // Verify the user has actually pressed
+  while (!inputManager.isPressed(InputManager::BTN_POWER) && millis() - start < 1000) {
+    delay(10);  // only wait 10ms each iteration to not delay too much in case of short configured duration.
+    inputManager.update();
+  }
+
+  if (inputManager.isPressed(InputManager::BTN_POWER)) {
+    do {
+      delay(10);
+      inputManager.update();
+    } while (inputManager.isPressed(InputManager::BTN_POWER) && inputManager.getHeldTime() < requiredPressDuration);
+    abort = inputManager.getHeldTime() < requiredPressDuration;
+  } else {
+    abort = true;
+  }
+
+  if (abort) {
+    // Button released too early. Returning to sleep.
+    // IMPORTANT: Re-arm the wakeup trigger before sleeping again
+    esp_deep_sleep_enable_gpio_wakeup(1ULL << InputManager::POWER_BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+    // Hold all GPIO pins at their current state during deep sleep to keep the X4's LDO enabled.
+    // Without this, floating pins can cause increased power draw during sleep.
+    gpio_deep_sleep_hold_en();
+    esp_deep_sleep_start();
+  }
+}
+
+void waitForPowerRelease() {
+  inputManager.update();
+  while (inputManager.isPressed(InputManager::BTN_POWER)) {
+    delay(50);
+    inputManager.update();
+  }
+}
+
+void setupDisplayAndFonts() {
+  einkDisplay.begin();
+  renderer.begin();
+  Serial.printf("[%lu] [   ] Display initialized\n", millis());
+  renderer.insertFont(READER_FONT_ID_XSMALL, readerXSmallFontFamily);
+  renderer.insertFont(READER_FONT_ID, readerFontFamily);
+  renderer.insertFont(READER_FONT_ID_MEDIUM, readerMediumFontFamily);
+  renderer.insertFont(READER_FONT_ID_LARGE, readerLargeFontFamily);
+  renderer.insertFont(UI_FONT_ID, uiFontFamily);
+  renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  Serial.printf("[%lu] [   ] Fonts setup\n", millis());
+}
+
+void applyThemeFonts() {
+  Theme& theme = THEME_MANAGER.mutableCurrent();
+
+  // Reset UI font to builtin first in case custom font loading fails
+  theme.uiFontId = UI_FONT_ID;
+
+  // Apply custom UI font if specified (small, always safe to load)
+  if (theme.uiFontFamily[0] != '\0') {
+    int customUiFontId = FONT_MANAGER.getFontId(theme.uiFontFamily, UI_FONT_ID);
+    if (customUiFontId != UI_FONT_ID) {
+      theme.uiFontId = customUiFontId;
+      Serial.printf("[%lu] [FONT] UI font: %s (ID: %d)\n", millis(), theme.uiFontFamily, customUiFontId);
+    }
+  }
+
+  // Only load the reader font that matches current font size setting
+  // This saves ~500KB+ of RAM by not loading all three sizes
+  const char* fontFamilyName = nullptr;
+  int* targetFontId = nullptr;
+  int builtinFontId = 0;
+
+  switch (sumi::core.settings.fontSize) {
+    case sumi::Settings::FontXSmall:
+      fontFamilyName = theme.readerFontFamilyXSmall;
+      targetFontId = &theme.readerFontIdXSmall;
+      builtinFontId = READER_FONT_ID_XSMALL;
+      break;
+    case sumi::Settings::FontMedium:
+      fontFamilyName = theme.readerFontFamilyMedium;
+      targetFontId = &theme.readerFontIdMedium;
+      builtinFontId = READER_FONT_ID_MEDIUM;
+      break;
+    case sumi::Settings::FontLarge:
+      fontFamilyName = theme.readerFontFamilyLarge;
+      targetFontId = &theme.readerFontIdLarge;
+      builtinFontId = READER_FONT_ID_LARGE;
+      break;
+    default:  // FontSmall
+      fontFamilyName = theme.readerFontFamilySmall;
+      targetFontId = &theme.readerFontId;
+      builtinFontId = READER_FONT_ID;
+      break;
+  }
+
+  // Reset to builtin first in case custom font loading fails
+  *targetFontId = builtinFontId;
+
+  if (fontFamilyName && fontFamilyName[0] != '\0') {
+    int customFontId = FONT_MANAGER.getFontId(fontFamilyName, builtinFontId);
+    if (customFontId != builtinFontId) {
+      *targetFontId = customFontId;
+      Serial.printf("[%lu] [FONT] Reader font: %s (ID: %d)\n", millis(), fontFamilyName, customFontId);
+    }
+  }
+}
+
+void showErrorScreen(const char* message) {
+  renderer.clearScreen(false);
+  renderer.drawCenteredText(UI_FONT_ID, 100, message, true, BOLD);
+  renderer.displayBuffer();
+}
+
+// Track current boot mode for loop behavior
+static sumi::BootMode currentBootMode = sumi::BootMode::UI;
+
+// Early initialization - common to both boot modes
+// Returns false if critical initialization failed
+bool earlyInit() {
+  // Disable task watchdog — setup takes >5s (ADC reads + SD init + display refresh)
+  esp_task_wdt_deinit();
+
+  // Only start serial if USB connected
+  pinMode(UART0_RXD, INPUT);
+  gpio_deep_sleep_hold_dis();  // Release GPIO hold from deep sleep to allow fresh readings
+  if (isUsbConnected()) {
     Serial.begin(115200);
-    delay(100);
-    
-    Serial.println();
-    Serial.println("[SUMI] ========================================");
-    Serial.println("[SUMI]   SUMI E-READER STARTING");
-    Serial.printf("[SUMI]   Version: %s\n", SUMI_VERSION);
-    Serial.println("[SUMI] ========================================");
-    
-    // Memory baseline at startup
-    Serial.printf("[MEM:BOOT] Heap Total: %d, Free: %d, Min Ever: %d\n",
-                  ESP.getHeapSize(), ESP.getFreeHeap(), ESP.getMinFreeHeap());
-    
-    // Report stack size at startup
-    UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
-    Serial.printf("[SUMI] Loop task stack high water: %d words (%d bytes free)\n", 
-                  (int)stackHighWater, (int)(stackHighWater * 4));
-    
-    // Initialize button pins FIRST
-    pinMode(BTN_GPIO1, INPUT);
-    pinMode(BTN_GPIO2, INPUT);
-    pinMode(BTN_GPIO3, INPUT_PULLUP);
-    
-    // Verify intentional wake-up (long press required)
-    verifyWakeupLongPress();
-    
-    // Initialize battery monitoring
-    batteryMonitor.begin();
-    Serial.printf("[MEM:BATT] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());;
-    
-    // Initialize SD card before display (required for proper SPI bus sharing)
-    initSDCard();
-    Serial.printf("[MEM:SD] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());;
-    
-    // Load settings from SD card
-    if (sd_card_present) {
-        settingsManager.begin();
-        Serial.println("[SUMI] Settings loaded from SD");
-        Serial.printf("[MEM:SETTINGS] Free: %d, Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+    delay(SERIAL_INIT_DELAY_MS);  // Allow USB CDC to initialize
+    unsigned long start = millis();
+    while (!Serial && (millis() - start) < SERIAL_READY_TIMEOUT_MS) {
+      delay(SERIAL_INIT_DELAY_MS);
     }
-    
-    // Check if setup is needed BEFORE allocating large buffers
-    setup_mode = !settingsManager.isSetupComplete();
-    
-    // Initialize display (after SD)
-    initDisplay();
-    Serial.printf("[MEM:DISP] Free: %d, Min: %d (after display buffer)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
-    
-    // Set orientation from settings
-    bool isHorizontal = (settingsManager.display.orientation == 0);
-    display.setRotation(isHorizontal ? 0 : 3);
-    setButtonOrientation(isHorizontal);
-    
-    // Initialize WiFi manager (loads saved credentials from NVS)
-    wifiManager.begin();
-    
-    if (setup_mode) {
-        Serial.println("[SUMI] First boot - entering setup mode");
-        
-        // Start WiFi AP immediately so it's ready when user sees setup screen
-        wifiManager.startAP();
-        portal_active = true;
-        
-        #if FEATURE_WEBSERVER
-        webServer.begin();
-        #endif
-        
-        // Play animation (ends with setup screen displayed)
-        playDeployAnimation();
-    } else {
-        Serial.println("[SUMI] Normal boot - loading home screen");
-        
-        // Build home screen items
-        buildHomeScreenItems();
-        updateGridLayout();
-        
-        // PRE-RENDER: Cache cover and calculate layout (makes showHomeScreen instant)
-        prepareHomeScreen();
-        
-        // Check if we should boot directly to last book
-        bool bootedToBook = false;
-        if (settingsManager.display.bootToLastBook) {
-            // Check if we have a last book saved
-            if (SD.exists("/.sumi/lastbook.bin")) {
-                Serial.println("[SUMI] Boot to last book enabled - launching reader");
-                #if FEATURE_READER
-                LibraryApp* libraryApp = new LibraryApp();
-                if (libraryApp) {
-                    libraryApp->init(display.width(), display.height());
-                    libraryApp->resumeLastBook();  // This will load and display the last book
-                    
-                    // Enter reader loop
-                    bool reading = true;
-                    Button lastBtn = BTN_NONE;
-                    while (reading) {
-                        Button btn = readButton();
-                        
-                        // Only process on button DOWN (not while held)
-                        if (btn != BTN_NONE && lastBtn == BTN_NONE) {
-                            powerManager.resetActivityTimer();
-                            if (btn == BTN_POWER) {
-                                delete libraryApp;
-                                powerManager.enterDeepSleep();
-                            }
-                            reading = libraryApp->handleInput(btn);
-                            if (reading) {
-                                libraryApp->draw();
-                            }
-                        }
-                        lastBtn = btn;
-                        
-                        // Check auto-sleep
-                        uint8_t sleepMins = settingsManager.display.sleepMinutes;
-                        if (sleepMins > 0 && powerManager.getIdleTime() >= sleepMins * 60000UL) {
-                            delete libraryApp;
-                            powerManager.enterDeepSleep();
-                        }
-                        delay(10);  // Faster polling
-                    }
-                    delete libraryApp;
-                    bootedToBook = true;
-                }
-                #endif
-            }
-        }
-        
-        // Show home screen (if we didn't boot to book, or after exiting reader)
-        if (!bootedToBook) {
-            showHomeScreen();
-        } else {
-            // Returned from reader - show home screen
-            showHomeScreen();
-        }
-        
-        // Start background time sync if needed (non-blocking)
-        // User sees home screen immediately while WiFi connects in background
-        if (powerManager.needsTimeSync()) {
-            powerManager.startBackgroundTimeSync();
-        }
+  }
+
+  inputManager.begin();
+
+  // Initialize SPI and SD card before wakeup verification so settings are available
+  SPI.begin(EPD_SCLK, SD_SPI_MISO, EPD_MOSI, EPD_CS);
+  if (!SdMan.begin()) {
+    Serial.printf("[%lu] [   ] SD card initialization failed\n", millis());
+    setupDisplayAndFonts();
+    showErrorScreen("SD card error");
+    return false;
+  }
+
+  // Migrate data directory from .papyrix to .sumi (one-time)
+  if (SdMan.exists("/.papyrix") && !SdMan.exists("/.sumi")) {
+    Serial.println("[MIGRATE] Renaming /.papyrix -> /.sumi");
+    SdMan.rename("/.papyrix", "/.sumi");
+  }
+
+  // Load settings before wakeup verification - without this, a full power cycle
+  // (no USB) resets RTC memory and the short power button setting is ignored
+  sumi::core.settings.loadFromFile();
+  rtcPowerButtonDurationMs = sumi::core.settings.getPowerButtonDuration();
+
+  const auto wakeup = getWakeupInfo();
+  if (wakeup.isPowerButton) {
+    verifyWakeupLongPress(wakeup.resetReason);
+  }
+
+  Serial.printf("[%lu] [   ] Starting SUMI version " SUMI_VERSION "\n", millis());
+
+  // Initialize battery ADC pin with proper attenuation for 0-3.3V range
+  analogSetPinAttenuation(BAT_GPIO0, ADC_11db);
+
+  // Initialize internal flash filesystem for font storage
+  if (!LittleFS.begin(false)) {
+    Serial.printf("[%lu] [FS] LittleFS mount failed, attempting format\n", millis());
+    if (!LittleFS.format() || !LittleFS.begin(false)) {
+      Serial.printf("[%lu] [FS] LittleFS recovery failed\n", millis());
+      showErrorScreen("Internal storage error");
+      return false;
     }
-    
-    // Initialize Bluetooth
-    #if FEATURE_BLUETOOTH
-    bluetoothManager.begin();
-    bluetoothManager.setKeyCallback(onBluetoothKey);
-    #endif
-    
-    // Start activity timer
-    powerManager.resetActivityTimer();
-    
-    printMemoryReport();
+    Serial.printf("[%lu] [FS] LittleFS formatted and mounted\n", millis());
+  } else {
+    Serial.printf("[%lu] [FS] LittleFS mounted\n", millis());
+  }
+
+  return true;
 }
 
-// =============================================================================
-// Main Loop
-// =============================================================================
+// Initialize UI mode - full state registration, all resources
+void initUIMode() {
+  Serial.printf("[%lu] [BOOT] Initializing UI mode\n", millis());
+  Serial.printf("[%lu] [BOOT] [UI mode] Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+
+  // Initialize theme and font managers (full)
+  FONT_MANAGER.init(renderer);
+  THEME_MANAGER.loadTheme(sumi::core.settings.themeName);
+  THEME_MANAGER.createDefaultThemeFiles();
+  Serial.printf("[%lu] [   ] Theme loaded: %s\n", millis(), THEME_MANAGER.currentThemeName());
+
+  setupDisplayAndFonts();
+  applyThemeFonts();
+
+  // Show boot splash only on cold boot (not mode transition)
+  const auto& preInitTransition = sumi::getTransition();
+  if (!preInitTransition.isValid()) {
+    ui::BootView bootView;
+    bootView.setLogo(SumiLogo, 128, 128);
+    bootView.setVersion(SUMI_VERSION);
+    bootView.setStatus("BOOTING");
+    ui::render(renderer, THEME, bootView);
+  }
+
+  // Register ALL states for UI mode
+  stateMachine.registerState(&startupState);
+  stateMachine.registerState(&homeState);
+  stateMachine.registerState(&fileListState);
+  stateMachine.registerState(&readerState);
+  stateMachine.registerState(&settingsState);
+  stateMachine.registerState(&sleepState);
+  stateMachine.registerState(&errorState);
+
+#if FEATURE_PLUGINS
+  // Register plugin states
+  pluginListState.setHostState(&pluginHostState);
+  stateMachine.registerState(&pluginListState);
+  stateMachine.registerState(&pluginHostState);
+
+  // Register available plugins
+#if FEATURE_GAMES
+  sumi::PluginListState::registerPlugin("Chess", "Games", []() -> sumi::PluginInterface* {
+    return new sumi::ChessGame(pluginRenderer);
+  }, CHESS_SAVE_PATH);
+  sumi::PluginListState::registerPlugin("Sudoku", "Games", []() -> sumi::PluginInterface* {
+    return new sumi::SudokuGame(pluginRenderer);
+  }, SUDOKU_SAVE_PATH);
+  sumi::PluginListState::registerPlugin("Minesweeper", "Games", []() -> sumi::PluginInterface* {
+    return new sumi::MinesweeperGame(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("Checkers", "Games", []() -> sumi::PluginInterface* {
+    return new sumi::CheckersGame(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("Solitaire", "Games", []() -> sumi::PluginInterface* {
+    return new sumi::SolitaireGame(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("Benchmark", "Tools", []() -> sumi::PluginInterface* {
+    return new sumi::Cube3DApp(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("SumiBoy", "Games", []() -> sumi::PluginInterface* {
+    return new sumi::SumiBoyApp(pluginRenderer);
+  });
+#endif  // FEATURE_GAMES
+
+  sumi::PluginListState::registerPlugin("Notes", "Productivity", []() -> sumi::PluginInterface* {
+    return new sumi::NotesApp(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("Todo List", "Productivity", []() -> sumi::PluginInterface* {
+    return new sumi::TodoApp(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("Tools", "Productivity", []() -> sumi::PluginInterface* {
+    return new sumi::ToolSuiteApp(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("Images", "Productivity", []() -> sumi::PluginInterface* {
+    return new sumi::ImagesApp(pluginRenderer);
+  });
+  sumi::PluginListState::registerPlugin("Maps", "Productivity", []() -> sumi::PluginInterface* {
+    return new sumi::MapsApp(pluginRenderer);
+  });
+
+#if FEATURE_FLASHCARDS
+  sumi::PluginListState::registerPlugin("Flashcards", "Learning", []() -> sumi::PluginInterface* {
+    return new sumi::FlashcardsApp(pluginRenderer);
+  });
+#endif
+
+  Serial.printf("[BOOT] Registered %d plugins\n", sumi::PluginListState::pluginCount);
+#endif  // FEATURE_PLUGINS
+
+  // Initialize core
+  auto result = sumi::core.init();
+  if (!result.ok()) {
+    Serial.printf("[%lu] [CORE] Init failed: %s\n", millis(), sumi::errorToString(result.err));
+    showErrorScreen("Core init failed");
+    return;
+  }
+
+  Serial.printf("[%lu] [CORE] State machine starting (UI mode)\n", millis());
+  mappedInputManager.setSettings(&sumi::core.settings);
+  ui::setFrontButtonLayout(sumi::core.settings.frontButtonLayout);
+
+  // Determine initial state - check for return from reader mode
+  sumi::StateId initialState = sumi::StateId::Home;
+  const auto& transition = sumi::getTransition();
+
+  if (transition.returnTo == sumi::ReturnTo::FILE_MANAGER) {
+    initialState = sumi::StateId::FileList;
+    Serial.printf("[%lu] [BOOT] Returning to FileList from Reader\n", millis());
+  } else {
+    Serial.printf("[%lu] [BOOT] Starting at Home\n", millis());
+  }
+
+  stateMachine.init(sumi::core, initialState);
+
+  // Force initial render
+  Serial.printf("[%lu] [CORE] Forcing initial render\n", millis());
+  stateMachine.update(sumi::core);
+
+  Serial.printf("[%lu] [BOOT] [UI mode] After init - Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+}
+
+// Initialize Reader mode - minimal state registration, single font size
+void initReaderMode() {
+  Serial.printf("[%lu] [BOOT] Initializing READER mode\n", millis());
+  Serial.printf("[%lu] [BOOT] [READER mode] Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+
+  // Detect content type early to decide if we need custom fonts
+  // XTC/XTCH files contain pre-rendered bitmaps and don't need fonts for page rendering
+  const auto& transition = sumi::getTransition();
+  sumi::ContentType contentType = sumi::detectContentType(transition.bookPath);
+  bool needsCustomFonts = (contentType != sumi::ContentType::Xtc);
+
+  // Initialize theme and font managers (minimal - no cache)
+  FONT_MANAGER.init(renderer);
+  THEME_MANAGER.loadTheme(sumi::core.settings.themeName);
+  // Skip createDefaultThemeFiles() - not needed in reader mode
+  Serial.printf("[%lu] [   ] Theme loaded: %s (reader mode)\n", millis(), THEME_MANAGER.currentThemeName());
+
+  setupDisplayAndFonts();  // Builtin fonts - always needed for UI
+
+  if (needsCustomFonts) {
+    applyThemeFonts();  // Custom fonts - skip for XTC/XTCH to save ~500KB+ RAM
+  } else {
+    Serial.printf("[%lu] [BOOT] Skipping custom fonts for XTC content\n", millis());
+  }
+
+  // Register ONLY states needed for Reader mode
+  stateMachine.registerState(&readerState);
+  stateMachine.registerState(&sleepState);
+  stateMachine.registerState(&errorState);
+
+  // Initialize core
+  auto result = sumi::core.init();
+  if (!result.ok()) {
+    Serial.printf("[%lu] [CORE] Init failed: %s\n", millis(), sumi::errorToString(result.err));
+    showErrorScreen("Core init failed");
+    return;
+  }
+
+  Serial.printf("[%lu] [CORE] State machine starting (READER mode)\n", millis());
+  mappedInputManager.setSettings(&sumi::core.settings);
+  ui::setFrontButtonLayout(sumi::core.settings.frontButtonLayout);
+
+  if (transition.bookPath[0] != '\0') {
+    // Copy path to shared buffer for ReaderState to consume
+    strncpy(sumi::core.buf.path, transition.bookPath, sizeof(sumi::core.buf.path) - 1);
+    sumi::core.buf.path[sizeof(sumi::core.buf.path) - 1] = '\0';
+    Serial.printf("[%lu] [BOOT] Opening book: %s\n", millis(), sumi::core.buf.path);
+  } else {
+    // No book path - fall back to UI mode to avoid boot loop
+    Serial.printf("[%lu] [BOOT] ERROR: No book path in transition, falling back to UI\n", millis());
+    initUIMode();
+    return;
+  }
+
+  stateMachine.init(sumi::core, sumi::StateId::Reader);
+
+  // Force initial render
+  Serial.printf("[%lu] [CORE] Forcing initial render\n", millis());
+  stateMachine.update(sumi::core);
+
+  Serial.printf("[%lu] [BOOT] [READER mode] After init - Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+}
+
+void setup() {
+  // Early initialization (common to both modes)
+  if (!earlyInit()) {
+    return;  // Critical failure
+  }
+
+  // Detect boot mode from RTC memory or settings
+  currentBootMode = sumi::detectBootMode();
+
+  if (currentBootMode == sumi::BootMode::READER) {
+    initReaderMode();
+  } else {
+    initUIMode();
+  }
+
+  // Ensure we're not still holding the power button before leaving setup
+  waitForPowerRelease();
+}
+
 void loop() {
-    static unsigned long lastMemReport = 0;
-    static int minFreeEver = INT_MAX;
-    
-    // Track lowest memory we've ever seen
-    int currentFree = ESP.getFreeHeap();
-    if (currentFree < minFreeEver) {
-        minFreeEver = currentFree;
-        Serial.printf("[MEM:NEW_LOW] Free dropped to: %d bytes!\n", currentFree);
-    }
-    
-    // Memory report every 10 seconds for debugging
-    #if SUMI_MEM_DEBUG
-    if (millis() - lastMemReport > 10000) {
-        lastMemReport = millis();
-        UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
-        Serial.printf("[MEM:LOOP] Free: %d | Min: %d | Stack Free: %d words | Uptime: %lu sec\n", 
-                      ESP.getFreeHeap(), ESP.getMinFreeHeap(), 
-                      (int)stackHighWater, millis() / 1000);
-    }
-    #else
-    // Less frequent in production
-    if (millis() - lastMemReport > 30000) {
-        lastMemReport = millis();
-        Serial.printf("[MEM] Free: %d  Min: %d\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
-    }
-    #endif
-    
-    // Handle button input
-    if (!setup_mode) {
-        handleButtons();
-    }
-    
-    // Auto-sleep check (only when not in setup mode)
-    if (!setup_mode && !portal_active) {
-        uint8_t sleepMins = settingsManager.display.sleepMinutes;
-        if (sleepMins > 0) {
-            unsigned long idleMs = powerManager.getIdleTime();
-            unsigned long sleepMs = sleepMins * 60000UL;
-            if (idleMs >= sleepMs) {
-                Serial.printf("[POWER] Idle for %lu seconds - entering sleep\n", idleMs / 1000);
-                powerManager.enterDeepSleep();
-            }
-        }
-    }
-    
-    // Only process WiFi when portal is active
-    if (portal_active) {
-        wifiManager.update();
-        
-        // Track setup step changes and refresh screen when step changes
-        static int lastSetupStep = 0;
-        if (setup_mode) {
-            int currentStep = getSetupStep();
-            
-            if (currentStep != lastSetupStep) {
-                Serial.printf("[SUMI] Setup step changed: %d -> %d\n", lastSetupStep, currentStep);
-                lastSetupStep = currentStep;
-                
-                // Refresh screen with new step highlighted
-                stopRippleAnimation();
-                showSetupScreen();
-                startRippleAnimation();
-            }
-            
-            // Update ripple animation (non-blocking, 2Hz)
-            if (isRippleAnimationActive()) {
-                updateRippleAnimation();
-            }
-        }
-    }
-    
-    // Check background time sync progress (non-blocking)
-    powerManager.checkBackgroundTimeSync();
-    
-    #if FEATURE_BLUETOOTH
-    // Update Bluetooth manager (scan completion, etc.)
-    bluetoothManager.update();
-    #endif
-    
-    #if FEATURE_WEBSERVER
-    // Check for portal events
-    if (g_wifiJustConnected) {
-        g_wifiJustConnected = false;
-        Serial.println("[SUMI] WiFi connected via portal");
-        // Refresh screen to update status bar (SUMI connected but step may not change)
-        if (setup_mode) {
-            stopRippleAnimation();
-            showSetupScreen();
-            startRippleAnimation();
-        }
-        // Time sync is handled by WebServer with proper timezone - don't override here
-    }
-    
-    if (g_settingsDeployed) {
-        g_settingsDeployed = false;
-        Serial.println("[SUMI] Settings deployed - transitioning to home screen");
-        
-        // Stop ripple animation
-        stopRippleAnimation();
-        
-        // Clean up portal resources to free memory
-        cleanupPortalResources();
-        
-        // Disconnect WiFi - we don't want it running in the background
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("[SUMI] Disconnecting WiFi after deploy");
-            WiFi.disconnect();
-        }
-        WiFi.mode(WIFI_OFF);
-        
-        // Reload settings and switch to normal mode
-        settingsManager.load();
-        setup_mode = false;
-        
-        // Set up display orientation
-        bool isHorizontal = (settingsManager.display.orientation == 0);
-        display.setRotation(isHorizontal ? 0 : 3);
-        setButtonOrientation(isHorizontal);
-        
-        // Build home screen items (loads widget data)
-        buildHomeScreenItems();
-        updateGridLayout();
-        
-        // Prepare home screen (caches cover, pre-calculates layout)
-        prepareHomeScreen();
-        
-        Serial.println("[SUMI] Background loading complete");
-        printMemoryReport();
-        
-        // Go straight to home screen
-        currentAppScreen = APP_SCREEN_HOME;
-        settingsInit();  // Reset settings state so next visit starts fresh
-        showHomeScreen();
-        
-        Serial.println("[SUMI] Portal fully shut down, WiFi off");
-    }
-    #endif
-    
-    // WiFi stays OFF by default - only connects briefly for weather/time sync
-    // No auto-reconnect needed
-    
-    delay(10);  // Small delay to prevent tight loop
-}
+  static unsigned long maxLoopDuration = 0;
+  const unsigned long loopStartTime = millis();
+  static unsigned long lastMemPrint = 0;
 
-// =============================================================================
-// Display Init
-// =============================================================================
-void initDisplay() {
-    display.init(115200, true, 50, false);
-    display.setTextColor(GxEPD_BLACK);
-    display.setTextWrap(false);
-    Serial.println("[DISPLAY] Initialized");
-}
+  inputManager.update();
 
-void initSDCard() {
-    // SPI setup: use EPD_CS as SS pin for SPI.begin (EPD_CS=21, not SD_CS=12)
-    SPI.begin(SD_SCK, SD_MISO, SD_MOSI, EPD_CS);
-    
-    // Now init SD with its actual CS pin
-    sd_card_present = SD.begin(SD_CS, SPI, 4000000);  // 4MHz for reliability
-    
-    Serial.printf("[SD] %s\n", sd_card_present ? "Card detected" : "No card");
-}
+  if (Serial && millis() - lastMemPrint >= 10000) {
+    Serial.printf("[%lu] [MEM] Free: %d bytes, Total: %d bytes, Min Free: %d bytes\n", millis(), ESP.getFreeHeap(),
+                  ESP.getHeapSize(), ESP.getMinFreeHeap());
+    lastMemPrint = millis();
+  }
 
-// =============================================================================
-// Button Handling
-// =============================================================================
-void handleButtons() {
-    static unsigned long lastPress = 0;
-    
-    Button btn = readButton();
-    
-    if (btn != BTN_NONE && lastButton == BTN_NONE) {
-        if (millis() - lastPress > 50) {  // 50ms debounce (was 100ms)
-            lastPress = millis();
-            powerManager.resetActivityTimer();
-            
-            // Power button triggers deep sleep
-            if (btn == BTN_POWER) {
-                Serial.println("[BTN] POWER - entering deep sleep");
-                powerManager.enterDeepSleep();
-                return;
-            }
-            
-            if (setup_mode) {
-                if (btn == BTN_BACK) showSetupScreen();
-            } else if (currentAppScreen == APP_SCREEN_SETTINGS) {
-                Serial.printf("[MAIN] Settings screen, btn=%d\n", btn);
-                switch (btn) {
-                    case BTN_UP:
-                        settingsUp();
-                        showSettingsScreen();
-                        break;
-                    case BTN_DOWN:
-                        settingsDown();
-                        showSettingsScreen();
-                        break;
-                    case BTN_CONFIRM:
-                        {
-                            bool wasLandscape = (settingsManager.display.orientation == 0);
-                            settingsSelect();
-                            
-                            // Check if orientation changed
-                            bool nowLandscape = (settingsManager.display.orientation == 0);
-                            if (wasLandscape != nowLandscape) {
-                                setButtonOrientation(nowLandscape);
-                                display.setRotation(nowLandscape ? 0 : 3);
-                                updateGridLayout();
-                            }
-                            
-                            // Exit settings check
-                            if (settingsShouldExit()) {
-                                currentAppScreen = APP_SCREEN_HOME;
-                                showHomeScreen();
-                            } else {
-                                showSettingsScreen();
-                            }
-                        }
-                        break;
-                    case BTN_BACK:
-                        Serial.println("[MAIN] Settings back pressed");
-                        settingsBack();
-                        if (settingsShouldExit()) {
-                            Serial.println("[MAIN] Exiting to home screen");
-                            currentAppScreen = APP_SCREEN_HOME;
-                            showHomeScreen();
-                        } else {
-                            Serial.println("[MAIN] Staying in settings");
-                            showSettingsScreen();
-                        }
-                        break;
-                    default:
-                        break;
-                }
-            } else {
-                // Home screen
-                int itemsOnPage = getItemsOnCurrentPage();
-                int totalPages = getTotalPages();
-                int numWidgets = getWidgetCount();
-                
-                // Check if we're in widget selection mode
-                if (widgetSelection >= 0) {
-                    bool isLandscape = (settingsManager.display.orientation == 0);
-                    Serial.printf("[HOME] Widget nav: selection=%d, numWidgets=%d, btn=%d, landscape=%d\n", 
-                                  widgetSelection, numWidgets, btn, isLandscape);
-                    
-                    // Widget navigation - direction depends on orientation AND widget layout
-                    // 
-                    // PORTRAIT LAYOUT (widgets 0=Book, 1=Weather, 2=Orient):
-                    //   [Book Cover]  [Weather ]
-                    //                 [Orient  ]
-                    // - From Book: RIGHT→Orient, DOWN→grid(left col)
-                    // - From Orient: LEFT→Book, UP→Weather, DOWN→grid(right col)  
-                    // - From Weather: DOWN→Orient
-                    //
-                    // LANDSCAPE LAYOUT (widgets stacked vertically on left):
-                    //   [Book   ] | [Grid]
-                    //   [Weather] | [Grid]
-                    //   [Orient ] | [Grid]
-                    // - UP/DOWN navigates between widgets
-                    // - DOWN from last widget exits to grid
-                    
-                    switch (btn) {
-                        case BTN_UP:
-                            if (isLandscape) {
-                                // Landscape: UP moves to previous widget
-                                if (widgetSelection > 0) {
-                                    int oldWidget = widgetSelection;
-                                    widgetSelection--;
-                                    Serial.printf("[HOME] Widget UP: %d -> %d\n", oldWidget, widgetSelection);
-                                    refreshWidgetSelection(oldWidget, widgetSelection);
-                                }
-                            } else {
-                                // Portrait: UP from Orient(2) → Weather(1)
-                                // Weather and Book can't go UP
-                                if (widgetSelection == numWidgets - 1 && numWidgets >= 2) {
-                                    // From Orient → Weather (middle widget)
-                                    int oldWidget = widgetSelection;
-                                    widgetSelection = 1;  // Weather is index 1
-                                    Serial.printf("[HOME] Portrait Orient UP → Weather: %d -> %d\n", oldWidget, widgetSelection);
-                                    refreshWidgetSelection(oldWidget, widgetSelection);
-                                }
-                            }
-                            break;
-                        case BTN_DOWN:
-                            if (isLandscape) {
-                                // Landscape: DOWN exits to grid
-                                Serial.println("[HOME] Widget DOWN: exit to grid");
-                                widgetSelection = -1;
-                                showHomeScreenPartialFast();
-                            } else {
-                                // Portrait: DOWN exits to grid
-                                // From Book → exit to grid left column
-                                // From Orient → exit to grid right column  
-                                // From Weather → go to Orient
-                                if (widgetSelection == 1 && numWidgets >= 3) {
-                                    // Weather → Orient
-                                    int oldWidget = widgetSelection;
-                                    widgetSelection = numWidgets - 1;
-                                    Serial.printf("[HOME] Portrait Weather DOWN → Orient: %d -> %d\n", oldWidget, widgetSelection);
-                                    refreshWidgetSelection(oldWidget, widgetSelection);
-                                } else {
-                                    // Book or Orient → exit to grid
-                                    int exitCol = (widgetSelection == 0) ? 0 : 1;
-                                    Serial.printf("[HOME] Portrait widget %d DOWN: exit to grid col %d\n", widgetSelection, exitCol);
-                                    widgetSelection = -1;
-                                    homeSelection = exitCol;  // Set to appropriate column
-                                    showHomeScreenPartialFast();
-                                }
-                            }
-                            break;
-                        case BTN_LEFT:
-                            if (isLandscape && widgetSelection > 0) {
-                                // Landscape: LEFT moves between side-by-side widgets
-                                int oldWidget = widgetSelection;
-                                widgetSelection--;
-                                Serial.printf("[HOME] Widget LEFT: %d -> %d\n", oldWidget, widgetSelection);
-                                refreshWidgetSelection(oldWidget, widgetSelection);
-                            } else if (!isLandscape) {
-                                // Portrait: LEFT from Orient/Weather → Book
-                                if (widgetSelection > 0 && numWidgets >= 2) {
-                                    int oldWidget = widgetSelection;
-                                    widgetSelection = 0;  // Go to Book
-                                    Serial.printf("[HOME] Portrait LEFT → Book: %d -> %d\n", oldWidget, widgetSelection);
-                                    refreshWidgetSelection(oldWidget, widgetSelection);
-                                }
-                            }
-                            break;
-                        case BTN_RIGHT:
-                            if (isLandscape && widgetSelection < numWidgets - 1) {
-                                // Landscape: RIGHT moves between side-by-side widgets  
-                                int oldWidget = widgetSelection;
-                                widgetSelection++;
-                                Serial.printf("[HOME] Widget RIGHT: %d -> %d\n", oldWidget, widgetSelection);
-                                refreshWidgetSelection(oldWidget, widgetSelection);
-                            } else if (!isLandscape) {
-                                // Portrait: RIGHT from Book → Orient (skip Weather)
-                                if (widgetSelection == 0 && numWidgets >= 2) {
-                                    int oldWidget = widgetSelection;
-                                    widgetSelection = numWidgets - 1;  // Go to Orient (last)
-                                    Serial.printf("[HOME] Portrait Book RIGHT → Orient: %d -> %d\n", oldWidget, widgetSelection);
-                                    refreshWidgetSelection(oldWidget, widgetSelection);
-                                }
-                            }
-                            break;
-                        case BTN_CONFIRM:
-                            activateWidget(widgetSelection);
-                            break;
-                        case BTN_BACK:
-                            widgetSelection = -1;
-                            showHomeScreenPartialFast();
-                            break;
-                        default:
-                            break;
-                    }
-                } else {
-                    // Grid navigation
-                    switch (btn) {
-                        case BTN_UP:
-                            if (homeSelection >= homeCols) {
-                                int oldSel = homeSelection;
-                                homeSelection -= homeCols;
-                                refreshChangedCells(oldSel, homeSelection);
-                            } else if (numWidgets > 0 && homePageIndex == 0) {
-                                // At top row of grid, go to widgets
-                                bool isLandscape = (settingsManager.display.orientation == 0);
-                                
-                                if (isLandscape) {
-                                    // Landscape: widgets stacked, enter at bottom (orientation)
-                                    widgetSelection = numWidgets - 1;
-                                } else {
-                                    // Portrait: widgets side by side
-                                    // Left column (col 0) → Book widget (index 0)
-                                    // Right column (col 1) → Orientation widget (last index)
-                                    int col = homeSelection % homeCols;
-                                    if (col == 0) {
-                                        // Coming from left column - go to Book (if shown) or first widget
-                                        widgetSelection = 0;
-                                    } else {
-                                        // Coming from right column - go to Orientation (last widget)
-                                        widgetSelection = numWidgets - 1;
-                                    }
-                                    Serial.printf("[HOME] Portrait UP from col %d -> widget %d\n", col, widgetSelection);
-                                }
-                                showHomeScreenPartialFast();
-                            }
-                            break;
-                        case BTN_DOWN:
-                            if (homeSelection + homeCols < itemsOnPage) {
-                                int oldSel = homeSelection;
-                                homeSelection += homeCols;
-                                refreshChangedCells(oldSel, homeSelection);
-                            }
-                            break;
-                        case BTN_LEFT:
-                            if (homeSelection > 0) {
-                                int oldSel = homeSelection;
-                                homeSelection--;
-                                refreshChangedCells(oldSel, homeSelection);
-                            } else if (homePageIndex > 0) {
-                                homePageIndex--;
-                                homeSelection = getItemsOnCurrentPage() - 1;
-                                widgetSelection = -1;  // Reset when leaving page 0
-                                showHomeScreenPartial(true);
-                            }
-                            break;
-                        case BTN_RIGHT:
-                            if (homeSelection < itemsOnPage - 1) {
-                                int oldSel = homeSelection;
-                                homeSelection++;
-                                refreshChangedCells(oldSel, homeSelection);
-                            } else if (homePageIndex < totalPages - 1) {
-                                homePageIndex++;
-                                homeSelection = 0;
-                                widgetSelection = -1;  // Reset when leaving page 0
-                                showHomeScreenPartial(true);
-                            }
-                            break;
-                        case BTN_CONFIRM:
-                            openApp(homeSelection);
-                            break;
-                        case BTN_BACK:
-                            if (homePageIndex > 0) {
-                                homePageIndex = 0;
-                                homeSelection = 0;
-                                showHomeScreenPartial(true);
-                            }
-                            break;
-                        default:
-                            break;
-                    }
-                }
-            }
-        }
+  // Poll input and push events to queue
+  sumi::core.input.poll();
+
+  // Auto-sleep after inactivity
+  const auto autoSleepTimeout = sumi::core.settings.getAutoSleepTimeoutMs();
+  if (autoSleepTimeout > 0 && sumi::core.input.idleTimeMs() >= autoSleepTimeout) {
+    Serial.printf("[%lu] [SLP] Auto-sleep after %lu ms idle\n", millis(), autoSleepTimeout);
+    stateMachine.init(sumi::core, sumi::StateId::Sleep);
+    return;
+  }
+
+  // Power button sleep check: track held time that excludes long rendering gaps
+  // where button state changes could have been missed by inputManager
+  {
+    static unsigned long powerHeldSinceMs = 0;
+    static unsigned long prevPowerCheckMs = 0;
+    const unsigned long loopGap = loopStartTime - prevPowerCheckMs;
+    prevPowerCheckMs = loopStartTime;
+
+    if (inputManager.isPressed(InputManager::BTN_POWER)) {
+      if (powerHeldSinceMs == 0 || loopGap > 100) {
+        powerHeldSinceMs = loopStartTime;
+      }
+      if (loopStartTime - powerHeldSinceMs > sumi::core.settings.getPowerButtonDuration()) {
+        stateMachine.init(sumi::core, sumi::StateId::Sleep);
+        return;
+      }
+    } else {
+      powerHeldSinceMs = 0;
     }
-    
-    lastButton = btn;
+  }
+
+  // Update state machine (handles transitions and rendering)
+  const unsigned long activityStartTime = millis();
+  stateMachine.update(sumi::core);
+  const unsigned long activityDuration = millis() - activityStartTime;
+
+  const unsigned long loopDuration = millis() - loopStartTime;
+  if (loopDuration > maxLoopDuration) {
+    maxLoopDuration = loopDuration;
+    if (maxLoopDuration > 50) {
+      Serial.printf("[%lu] [LOOP] New max loop duration: %lu ms (activity: %lu ms)\n", millis(), maxLoopDuration,
+                    activityDuration);
+    }
+  }
+
+  // Add delay at the end of the loop to prevent tight spinning
+  // Increase delay after idle to save power (~4x less CPU load)
+  // Idea: https://github.com/crosspoint-reader/crosspoint-reader/commit/0991782 by @ngxson (https://github.com/ngxson)
+  static constexpr unsigned long kIdlePowerSavingMs = 3000;
+  if (sumi::core.input.idleTimeMs() >= kIdlePowerSavingMs) {
+    delay(50);
+  } else {
+    delay(10);
+  }
 }

@@ -1,0 +1,13 @@
+{
+  "name": "ImageConverter",
+  "version": "1.0.0",
+  "description": "Unified image conversion factory for JPEG/PNG/BMP to BMP",
+  "dependencies": {
+    "JpegToBmpConverter": "*",
+    "PngToBmpConverter": "*",
+    "FsHelpers": "*",
+    "SDCardManager": "*"
+  },
+  "platforms": "espressif32",
+  "frameworks": ["arduino", "espidf"]
+}
