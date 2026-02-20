@@ -19,6 +19,8 @@
 #include <driver/gpio.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 // Medium font (16pt)
 #include <builtinFonts/reader_medium_2b.h>
 #include <builtinFonts/reader_medium_bold_2b.h>
@@ -42,6 +44,7 @@
 // New refactored core system
 #include "core/BootMode.h"
 #include "core/Core.h"
+#include "core/MemoryArena.h"
 #include "core/StateMachine.h"
 #include "images/SumiLogo.h"
 #include "states/ErrorState.h"
@@ -79,6 +82,7 @@
 
 #if FEATURE_FLASHCARDS
 #include "plugins/Flashcards.h"
+#include "ble/BleFileTransfer.h"
 #endif
 #endif  // FEATURE_PLUGINS
 
@@ -97,6 +101,93 @@
 
 #define SERIAL_INIT_DELAY_MS 10
 #define SERIAL_READY_TIMEOUT_MS 3000
+
+// =============================================================================
+// Boot loop detection - persists across soft resets (ESP.restart / panic)
+// but resets on full power cycle, which is the desired behavior.
+// =============================================================================
+RTC_DATA_ATTR static uint8_t rtcBootCount = 0;
+RTC_DATA_ATTR static uint32_t rtcBootTimestamp = 0;  // millis() at last boot
+static constexpr uint8_t BOOT_LOOP_THRESHOLD = 4;    // 4 rapid reboots = boot loop
+static constexpr uint32_t BOOT_LOOP_WINDOW_MS = 15000;  // reboots within 15s count as rapid
+static bool bootLoopRecovered = false;  // Set if recovery was triggered this boot
+
+/**
+ * Check for boot loops and recover if detected.
+ * Must be called very early in startup, before any complex init.
+ * Uses RTC memory (survives soft resets) to track rapid reboot count.
+ * If the device reboots BOOT_LOOP_THRESHOLD times within BOOT_LOOP_WINDOW_MS,
+ * we assume a boot loop and force the OTA boot partition back to app0 (SUMI).
+ */
+static void bootLoopGuard() {
+  // On power-on reset, RTC memory is garbage - detect and reset
+  esp_reset_reason_t reason = esp_reset_reason();
+  if (reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT) {
+    rtcBootCount = 0;
+    rtcBootTimestamp = 0;
+  }
+
+  uint32_t now = millis();
+
+  // If we're within the rapid-boot window, increment counter
+  if (rtcBootCount > 0 && (now - rtcBootTimestamp) < BOOT_LOOP_WINDOW_MS) {
+    rtcBootCount++;
+  } else {
+    // Outside window - start fresh
+    rtcBootCount = 1;
+  }
+  rtcBootTimestamp = now;
+
+  Serial.printf("[BOOT] Boot count: %d (reason: %d)\n", rtcBootCount, reason);
+
+  if (rtcBootCount >= BOOT_LOOP_THRESHOLD) {
+    Serial.println("[BOOT] *** BOOT LOOP DETECTED - forcing recovery ***");
+
+    // Force boot partition back to app0 (SUMI main firmware)
+    const esp_partition_t* app0 = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+    if (app0) {
+      esp_ota_set_boot_partition(app0);
+      Serial.println("[BOOT] Reset boot partition to app0 (SUMI)");
+    }
+
+    // Clear any pending transitions that might cause more reboots
+    // (will be done properly once settings are loaded, but zero the flag in NVS too)
+    rtcBootCount = 0;
+    rtcBootTimestamp = 0;
+    bootLoopRecovered = true;
+
+    Serial.println("[BOOT] Recovery complete - continuing normal boot");
+  }
+}
+
+/**
+ * Ensure SUMI is the active boot partition on every successful startup.
+ * This prevents stale OTA boot configs from causing issues if the emulator
+ * crashes and the watchdog somehow gets us back to SUMI.
+ */
+static void ensureSumiBootPartition() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* boot = esp_ota_get_boot_partition();
+
+  if (!running || !boot) return;
+
+  // If we're running from app0 but boot is set to app1, fix it
+  if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+      boot->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_0) {
+    Serial.println("[BOOT] Boot partition was set to app1 but we're on app0 - resetting");
+    esp_ota_set_boot_partition(running);
+  }
+}
+
+/**
+ * Call after successful boot (few seconds in) to reset the rapid-boot counter.
+ * This prevents normal startup sequences from triggering the guard.
+ */
+static void bootLoopGuardClear() {
+  rtcBootCount = 0;
+  rtcBootTimestamp = 0;
+}
 
 EInkDisplay einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
 InputManager inputManager;
@@ -339,6 +430,13 @@ bool earlyInit() {
     }
   }
 
+  // Boot loop detection - must be early, before anything that could crash
+  bootLoopGuard();
+
+  // Ensure we're always set to boot SUMI on next restart
+  // (prevents stale OTA config from re-entering a failed emulator)
+  ensureSumiBootPartition();
+
   inputManager.begin();
 
   // Initialize SPI and SD card before wakeup verification so settings are available
@@ -361,6 +459,15 @@ bool earlyInit() {
   sumi::core.settings.loadFromFile();
   rtcPowerButtonDurationMs = sumi::core.settings.getPowerButtonDuration();
 
+  // If boot loop was detected, also clear any pending transitions in settings
+  // to prevent cascading boot issues (e.g., READER mode pointing to a bad file)
+  if (bootLoopRecovered) {
+    sumi::core.settings.pendingTransition = 0;
+    sumi::core.settings.transitionReturnTo = 0;
+    sumi::core.settings.saveToFile();
+    Serial.println("[BOOT] Cleared pending transitions after boot loop recovery");
+  }
+
   const auto wakeup = getWakeupInfo();
   if (wakeup.isPowerButton) {
     verifyWakeupLongPress(wakeup.resetReason);
@@ -382,6 +489,13 @@ bool earlyInit() {
     Serial.printf("[%lu] [FS] LittleFS formatted and mounted\n", millis());
   } else {
     Serial.printf("[%lu] [FS] LittleFS mounted\n", millis());
+  }
+
+  // Initialize memory arena for image processing and decompression buffers.
+  // This must happen before any image/ZIP operations to prevent fragmentation.
+  if (!sumi::MemoryArena::init()) {
+    showErrorScreen("Memory init failed");
+    return false;
   }
 
   return true;
@@ -424,6 +538,7 @@ void initUIMode() {
 #if FEATURE_PLUGINS
   // Register plugin states
   pluginListState.setHostState(&pluginHostState);
+  fileListState.setHostState(&pluginHostState);
   stateMachine.registerState(&pluginListState);
   stateMachine.registerState(&pluginHostState);
 
@@ -489,16 +604,10 @@ void initUIMode() {
   mappedInputManager.setSettings(&sumi::core.settings);
   ui::setFrontButtonLayout(sumi::core.settings.frontButtonLayout);
 
-  // Determine initial state - check for return from reader mode
+  // Always start at Home when returning to UI mode
+  // (previously could return to FileList, but Home is more intuitive)
   sumi::StateId initialState = sumi::StateId::Home;
-  const auto& transition = sumi::getTransition();
-
-  if (transition.returnTo == sumi::ReturnTo::FILE_MANAGER) {
-    initialState = sumi::StateId::FileList;
-    Serial.printf("[%lu] [BOOT] Returning to FileList from Reader\n", millis());
-  } else {
-    Serial.printf("[%lu] [BOOT] Starting at Home\n", millis());
-  }
+  Serial.printf("[%lu] [BOOT] Starting at Home\n", millis());
 
   stateMachine.init(sumi::core, initialState);
 
@@ -598,6 +707,13 @@ void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
+  static bool bootGuardCleared = false;
+
+  // After 10 seconds of stable operation, clear the boot loop counter
+  if (!bootGuardCleared && millis() > 10000) {
+    bootLoopGuardClear();
+    bootGuardCleared = true;
+  }
 
   inputManager.update();
 
@@ -611,11 +727,19 @@ void loop() {
   sumi::core.input.poll();
 
   // Auto-sleep after inactivity
+  // Skip if BLE file transfer is active — sleeping during transfer crashes with
+  // a FreeRTOS assert (xQueueGenericSend) as the settings state exits while
+  // the BLE stack is holding mutexes in its write callbacks.
   const auto autoSleepTimeout = sumi::core.settings.getAutoSleepTimeoutMs();
   if (autoSleepTimeout > 0 && sumi::core.input.idleTimeMs() >= autoSleepTimeout) {
-    Serial.printf("[%lu] [SLP] Auto-sleep after %lu ms idle\n", millis(), autoSleepTimeout);
-    stateMachine.init(sumi::core, sumi::StateId::Sleep);
-    return;
+    if (ble_transfer::isTransferring() || ble_transfer::isConnected()) {
+      // Don't sleep — BLE is active. Reset the idle timer by doing nothing
+      // (the next input event will reset it naturally).
+    } else {
+      Serial.printf("[%lu] [SLP] Auto-sleep after %lu ms idle\n", millis(), autoSleepTimeout);
+      stateMachine.init(sumi::core, sumi::StateId::Sleep);
+      return;
+    }
   }
 
   // Power button sleep check: track held time that excludes long rendering gaps

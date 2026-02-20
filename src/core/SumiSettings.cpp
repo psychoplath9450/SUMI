@@ -20,7 +20,7 @@ constexpr uint8_t MIN_SETTINGS_VERSION = 3;
 // Version 10: Added BLE saved device addresses
 constexpr uint8_t SETTINGS_FILE_VERSION = 10;
 // Increment this when adding new persisted settings fields
-constexpr uint8_t SETTINGS_COUNT = 27;
+constexpr uint8_t SETTINGS_COUNT = 28;
 }  // namespace
 
 Result<void> Settings::save(drivers::Storage& storage) const {
@@ -65,6 +65,8 @@ Result<void> Settings::save(drivers::Storage& storage) const {
   serialization::writePod(outputFile, frontButtonLayout);
   outputFile.write(reinterpret_cast<const uint8_t*>(bleKeyboard), sizeof(bleKeyboard));
   outputFile.write(reinterpret_cast<const uint8_t*>(blePageTurner), sizeof(blePageTurner));
+  outputFile.write(reinterpret_cast<const uint8_t*>(homeArtTheme), sizeof(homeArtTheme));
+  serialization::writePod(outputFile, showTables);
   outputFile.close();
 
   Serial.printf("[%lu] [SET] Settings saved to file\n", millis());
@@ -171,6 +173,11 @@ Result<void> Settings::load(drivers::Storage& storage) {
     inputFile.read(reinterpret_cast<uint8_t*>(blePageTurner), sizeof(blePageTurner));
     blePageTurner[sizeof(blePageTurner) - 1] = '\0';
     if (++settingsRead >= fileSettingsCount) break;
+    inputFile.read(reinterpret_cast<uint8_t*>(homeArtTheme), sizeof(homeArtTheme));
+    homeArtTheme[sizeof(homeArtTheme) - 1] = '\0';
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPodValidated(inputFile, showTables, uint8_t(2));
+    if (++settingsRead >= fileSettingsCount) break;
   } while (false);
 
   // Migrate font size from version < 8 (enum values shifted +1 for FontXSmall)
@@ -220,8 +227,8 @@ bool Settings::hasExternalReaderFont(const Theme& theme) const {
 
 RenderConfig Settings::getRenderConfig(const Theme& theme, uint16_t viewportWidth, uint16_t viewportHeight) const {
   return RenderConfig(getReaderFontId(theme), getLineCompression(), getIndentLevel(), getSpacingLevel(),
-                      paragraphAlignment, static_cast<bool>(hyphenation), static_cast<bool>(showImages), viewportWidth,
-                      viewportHeight);
+                      paragraphAlignment, static_cast<bool>(hyphenation), static_cast<bool>(showImages),
+                      static_cast<bool>(showTables), viewportWidth, viewportHeight);
 }
 
 // Legacy methods that use SdMan directly (for early init before Core)
@@ -264,6 +271,8 @@ bool Settings::saveToFile() const {
   serialization::writePod(outputFile, frontButtonLayout);
   outputFile.write(reinterpret_cast<const uint8_t*>(bleKeyboard), sizeof(bleKeyboard));
   outputFile.write(reinterpret_cast<const uint8_t*>(blePageTurner), sizeof(blePageTurner));
+  outputFile.write(reinterpret_cast<const uint8_t*>(homeArtTheme), sizeof(homeArtTheme));
+  serialization::writePod(outputFile, showTables);
   outputFile.close();
 
   Serial.printf("[%lu] [SET] Settings saved to file\n", millis());
@@ -365,6 +374,11 @@ bool Settings::loadFromFile() {
     if (++settingsRead >= fileSettingsCount) break;
     inputFile.read(reinterpret_cast<uint8_t*>(blePageTurner), sizeof(blePageTurner));
     blePageTurner[sizeof(blePageTurner) - 1] = '\0';
+    if (++settingsRead >= fileSettingsCount) break;
+    inputFile.read(reinterpret_cast<uint8_t*>(homeArtTheme), sizeof(homeArtTheme));
+    homeArtTheme[sizeof(homeArtTheme) - 1] = '\0';
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPodValidated(inputFile, showTables, uint8_t(2));
     if (++settingsRead >= fileSettingsCount) break;
   } while (false);
 

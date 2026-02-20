@@ -59,6 +59,11 @@ State* StateMachine::getState(StateId id) {
 }
 
 void StateMachine::transition(StateId next, Core& core, bool immediate) {
+  if (inTransition_) {
+    Serial.printf("[SM] WARNING: Re-entrant transition to %d blocked\n", static_cast<int>(next));
+    return;
+  }
+
   State* nextState = getState(next);
 
   if (!nextState) {
@@ -69,6 +74,8 @@ void StateMachine::transition(StateId next, Core& core, bool immediate) {
   Serial.printf("[SM] Transition: %d -> %d%s\n", static_cast<int>(currentId_), static_cast<int>(next),
                 immediate ? " (immediate)" : "");
 
+  inTransition_ = true;
+
   if (current_) {
     current_->exit(core);
   }
@@ -76,6 +83,8 @@ void StateMachine::transition(StateId next, Core& core, bool immediate) {
   currentId_ = next;
   current_ = nextState;
   current_->enter(core);
+
+  inTransition_ = false;
 }
 
 }  // namespace sumi

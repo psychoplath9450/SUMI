@@ -33,7 +33,6 @@ bool ProgressManager::save(Core& core, const char* cacheDir, ContentType type, c
     data[1] = (progress.spineIndex >> 8) & 0xFF;
     data[2] = progress.sectionPage & 0xFF;
     data[3] = (progress.sectionPage >> 8) & 0xFF;
-    file.write(data, 4);
     Serial.printf("[PROGRESS] Saved EPUB: spine=%d page=%d\n", progress.spineIndex, progress.sectionPage);
   } else if (type == ContentType::Xtc) {
     // XTC: save flat page number (4 bytes)
@@ -41,7 +40,6 @@ bool ProgressManager::save(Core& core, const char* cacheDir, ContentType type, c
     data[1] = (progress.flatPage >> 8) & 0xFF;
     data[2] = (progress.flatPage >> 16) & 0xFF;
     data[3] = (progress.flatPage >> 24) & 0xFF;
-    file.write(data, 4);
     Serial.printf("[PROGRESS] Saved XTC: page %u\n", progress.flatPage);
   } else {
     // TXT/Markdown: save section page (4 bytes)
@@ -49,8 +47,13 @@ bool ProgressManager::save(Core& core, const char* cacheDir, ContentType type, c
     data[1] = (progress.sectionPage >> 8) & 0xFF;
     data[2] = 0;
     data[3] = 0;
-    file.write(data, 4);
     Serial.printf("[PROGRESS] Saved text: page %d\n", progress.sectionPage);
+  }
+
+  if (file.write(data, 4) != 4) {
+    Serial.printf("[PROGRESS] Write failed for %s\n", progressPath);
+    file.close();
+    return false;
   }
 
   file.close();

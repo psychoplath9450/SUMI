@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <GfxRenderer.h>
 #include <SDCardManager.h>
+#include "../core/MemoryArena.h"
 // SdFat and FS.h both define FILE_READ/FILE_WRITE - undef before LittleFS re-includes FS.h
 #undef FILE_READ
 #undef FILE_WRITE
@@ -16,6 +17,7 @@
 #include "../ui/Elements.h"
 #if FEATURE_BLUETOOTH
 #include "../ble/BleHid.h"
+#include "../ble/BleFileTransfer.h"
 #endif
 #include "MappedInputManager.h"
 #include "ThemeManager.h"
@@ -68,6 +70,20 @@ void SettingsState::exit(Core& core) {
   Serial.println("[SETTINGS] Exiting");
   // Save settings on exit
   core.settings.save(core.storage);
+  
+#if FEATURE_BLUETOOTH
+  // Clear BLE callback to prevent dangling this pointer
+  if (bleCallbackRegistered_) {
+    ble_transfer::setCallback(nullptr);
+    bleCallbackRegistered_ = false;
+  }
+#endif
+  
+  // Re-allocate memory arena if it was released for BLE
+  if (!sumi::MemoryArena::isInitialized()) {
+    Serial.println("[SETTINGS] Re-allocating memory arena");
+    sumi::MemoryArena::init();
+  }
 }
 
 StateTransition SettingsState::update(Core& core) {
@@ -80,6 +96,9 @@ StateTransition SettingsState::update(Core& core) {
             switch (currentScreen_) {
               case SettingsScreen::Menu:
                 menuView_.moveUp();
+                break;
+              case SettingsScreen::HomeArt:
+                homeArtView_.moveUp();
                 break;
               case SettingsScreen::Reader:
                 readerView_.moveUp();
@@ -111,6 +130,9 @@ StateTransition SettingsState::update(Core& core) {
             switch (currentScreen_) {
               case SettingsScreen::Menu:
                 menuView_.moveDown();
+                break;
+              case SettingsScreen::HomeArt:
+                homeArtView_.moveDown();
                 break;
               case SettingsScreen::Reader:
                 readerView_.moveDown();
@@ -144,6 +166,9 @@ StateTransition SettingsState::update(Core& core) {
                 core.settings.save(core.storage);
                 goHome_ = true;
                 break;
+              case SettingsScreen::HomeArt:
+                homeArtView_.moveUp();
+                break;
               case SettingsScreen::Reader:
                 if (readerView_.buttons.isActive(2)) handleLeftRight(-1);
                 break;
@@ -164,6 +189,9 @@ StateTransition SettingsState::update(Core& core) {
 
           case Button::Right:
             switch (currentScreen_) {
+              case SettingsScreen::HomeArt:
+                homeArtView_.moveDown();
+                break;
               case SettingsScreen::Reader:
                 if (readerView_.buttons.isActive(3)) handleLeftRight(+1);
                 break;
@@ -232,6 +260,14 @@ void SettingsState::render(Core& core) {
       case SettingsScreen::Menu:
         viewNeedsRender = menuView_.needsRender;
         break;
+      case SettingsScreen::HomeArt:
+        viewNeedsRender = homeArtView_.needsRender;
+        break;
+      case SettingsScreen::BleTransfer:
+        // Check if transfer status changed
+        updateBleTransfer();
+        viewNeedsRender = needsRender_;
+        break;
       case SettingsScreen::Reader:
         viewNeedsRender = readerView_.needsRender;
         break;
@@ -247,6 +283,11 @@ void SettingsState::render(Core& core) {
       case SettingsScreen::ConfirmDialog:
         viewNeedsRender = confirmView_.needsRender;
         break;
+#if FEATURE_BLUETOOTH
+      case SettingsScreen::Bluetooth:
+        viewNeedsRender = true;  // Always check for BLE updates
+        break;
+#endif
     }
     if (!viewNeedsRender) {
       return;
@@ -257,6 +298,13 @@ void SettingsState::render(Core& core) {
     case SettingsScreen::Menu:
       ui::render(renderer_, THEME, menuView_);
       menuView_.needsRender = false;
+      break;
+    case SettingsScreen::HomeArt:
+      ui::render(renderer_, THEME, homeArtView_);
+      homeArtView_.needsRender = false;
+      break;
+    case SettingsScreen::BleTransfer:
+      renderBleTransfer();
       break;
     case SettingsScreen::Reader:
       ui::render(renderer_, THEME, readerView_);
@@ -301,37 +349,46 @@ void SettingsState::openSelected() {
   idx--;  // Shift remaining items down
 #endif
 
-  // idx 0=Reader, 1=Device, then BT/Cleanup/SystemInfo
+  // idx 0=HomeArt, 1=Wireless Transfer, 2=Reader, 3=Device, then BT/Cleanup/SystemInfo
   switch (idx) {
-    case 0:  // Reader
+    case 0:  // Home Art
+      loadHomeArtSettings();
+      homeArtView_.needsRender = true;
+      currentScreen_ = SettingsScreen::HomeArt;
+      break;
+    case 1:  // Wireless Transfer
+      enterBleTransfer();
+      currentScreen_ = SettingsScreen::BleTransfer;
+      break;
+    case 2:  // Reader
       loadReaderSettings();
       readerView_.selected = 0;
       readerView_.needsRender = true;
       currentScreen_ = SettingsScreen::Reader;
       break;
-    case 1:  // Device
+    case 3:  // Device
       loadDeviceSettings();
       deviceView_.selected = 0;
       deviceView_.needsRender = true;
       currentScreen_ = SettingsScreen::Device;
       break;
 #if FEATURE_BLUETOOTH
-    case 2:  // Bluetooth
+    case 4:  // Bluetooth
       enterBluetooth();
       currentScreen_ = SettingsScreen::Bluetooth;
       break;
-    case 3:  // Cleanup
+    case 5:  // Cleanup
 #else
-    case 2:  // Cleanup
+    case 4:  // Cleanup
 #endif
       cleanupView_.selected = 0;
       cleanupView_.needsRender = true;
       currentScreen_ = SettingsScreen::Cleanup;
       break;
 #if FEATURE_BLUETOOTH
-    case 4:  // System Info
+    case 6:  // System Info
 #else
-    case 3:  // System Info
+    case 5:  // System Info
 #endif
       populateSystemInfo();
       infoView_.needsRender = true;
@@ -343,6 +400,11 @@ void SettingsState::openSelected() {
 
 void SettingsState::goBack(Core& core) {
   switch (currentScreen_) {
+    case SettingsScreen::HomeArt:
+      saveHomeArtSettings();
+      currentScreen_ = SettingsScreen::Menu;
+      menuView_.needsRender = true;
+      break;
     case SettingsScreen::Reader:
       saveReaderSettings();
       currentScreen_ = SettingsScreen::Menu;
@@ -360,12 +422,39 @@ void SettingsState::goBack(Core& core) {
       break;
     case SettingsScreen::Cleanup:
     case SettingsScreen::SystemInfo:
-#if FEATURE_BLUETOOTH
-    case SettingsScreen::Bluetooth:
-#endif
       currentScreen_ = SettingsScreen::Menu;
       menuView_.needsRender = true;
       break;
+    case SettingsScreen::BleTransfer:
+      // Block back during active transfer
+      if (ble_transfer::isTransferring()) {
+        // Don't navigate away during transfer
+        return;
+      }
+      // Clean up result state
+      bleShowResult_ = false;
+      bleQueueComplete_ = false;
+      ble_transfer::clearResult();
+      // Clear callback
+      if (bleCallbackRegistered_) {
+        ble_transfer::setCallback(nullptr);
+        bleCallbackRegistered_ = false;
+      }
+      // If files were received, do a full refresh to clear e-ink ghosting
+      if (bleTransferDirty_) {
+        bleTransferDirty_ = false;
+        renderer_.clearScreen(THEME.backgroundColor);
+        renderer_.displayBuffer(EInkDisplay::FULL_REFRESH);
+      }
+      currentScreen_ = SettingsScreen::Menu;
+      menuView_.needsRender = true;
+      break;
+#if FEATURE_BLUETOOTH
+    case SettingsScreen::Bluetooth:
+      currentScreen_ = SettingsScreen::Menu;
+      menuView_.needsRender = true;
+      break;
+#endif
     case SettingsScreen::ConfirmDialog:
       pendingAction_ = 0;
       currentScreen_ = SettingsScreen::Cleanup;
@@ -381,6 +470,52 @@ void SettingsState::handleConfirm(Core& core) {
   switch (currentScreen_) {
     case SettingsScreen::Menu:
       openSelected();
+      break;
+
+    case SettingsScreen::HomeArt:
+      // Apply the selected theme
+      saveHomeArtSettings();
+      needsRender_ = true;
+      break;
+
+    case SettingsScreen::BleTransfer:
+      // During active transfer, OK does nothing
+      if (ble_transfer::isTransferring()) {
+        break;
+      }
+      // Toggle BLE transfer service
+      if (bleTransferEnabled_) {
+        ble_transfer::stopAdvertising();
+        ble_transfer::deinit();
+        bleTransferEnabled_ = false;
+        bleShowResult_ = false;
+        bleQueueComplete_ = false;
+        if (bleCallbackRegistered_) {
+          ble_transfer::setCallback(nullptr);
+          bleCallbackRegistered_ = false;
+        }
+        Serial.println("[BLE] File transfer disabled");
+        // Re-allocate memory arena when BLE is disabled
+        if (!sumi::MemoryArena::isInitialized()) {
+          Serial.println("[BLE] Re-allocating memory arena");
+          sumi::MemoryArena::init();
+        }
+      } else {
+        // Release memory arena to free up heap for BLE stack
+        if (sumi::MemoryArena::isInitialized()) {
+          Serial.println("[BLE] Releasing memory arena for BLE stack");
+          sumi::MemoryArena::release();
+        }
+        ble_transfer::init();
+        ble_transfer::startAdvertising();
+        bleTransferEnabled_ = true;
+        bleShowResult_ = false;
+        bleQueueComplete_ = false;
+        Serial.println("[BLE] File transfer enabled");
+        // Re-register callback
+        enterBleTransfer();
+      }
+      needsRender_ = true;
       break;
 
     case SettingsScreen::Reader:
@@ -446,13 +581,23 @@ void SettingsState::handleConfirm(Core& core) {
     case SettingsScreen::ConfirmDialog:
       if (confirmView_.isYesSelected()) {
         if (pendingAction_ == 10) {
-          // Clear Book Cache
+          // Clear Book Cache - clear all book-related data
           ui::centeredMessage(renderer_, THEME, THEME.uiFontId, "Clearing cache...");
 
-          auto result = core.storage.rmdir(SUMI_CACHE_DIR);
+          // Clear cache directory (covers, thumbnails, section caches, progress)
+          core.storage.rmdir(SUMI_CACHE_DIR);
+          
+          // Clear recent books list
+          core.storage.remove("/.sumi/recent.bin");
+          
+          // Clear library index
+          core.storage.remove("/.sumi/library.bin");
+          
+          // Clear last book path from settings
+          core.settings.lastBookPath[0] = '\0';
+          core.settings.save(core.storage);
 
-          const char* msg = result.ok() ? "Cache cleared" : "No cache to clear";
-          ui::centeredMessage(renderer_, THEME, THEME.uiFontId, msg);
+          ui::centeredMessage(renderer_, THEME, THEME.uiFontId, "Cache cleared!");
           vTaskDelay(1500 / portTICK_PERIOD_MS);
 
           pendingAction_ = 0;
@@ -542,11 +687,14 @@ void SettingsState::loadReaderSettings() {
   // Index 7: Show Images (toggle)
   readerView_.values[7] = settings.showImages;
 
-  // Index 8: Status Bar (0=None, 1=Show)
-  readerView_.values[8] = settings.statusBar;
+  // Index 8: Show Tables (toggle)
+  readerView_.values[8] = settings.showTables;
 
-  // Index 9: Reading Orientation (0=Portrait, 1=Landscape CW, 2=Inverted, 3=Landscape CCW)
-  readerView_.values[9] = settings.orientation;
+  // Index 9: Status Bar (0=None, 1=Show)
+  readerView_.values[9] = settings.statusBar;
+
+  // Index 10: Reading Orientation (0=Portrait, 1=Landscape CW, 2=Inverted, 3=Landscape CCW)
+  readerView_.values[10] = settings.orientation;
 }
 
 void SettingsState::saveReaderSettings() {
@@ -585,11 +733,105 @@ void SettingsState::saveReaderSettings() {
   // Index 7: Show Images
   settings.showImages = readerView_.values[7];
 
-  // Index 8: Status Bar
-  settings.statusBar = readerView_.values[8];
+  // Index 8: Show Tables
+  settings.showTables = readerView_.values[8];
 
-  // Index 9: Reading Orientation
-  settings.orientation = readerView_.values[9];
+  // Index 9: Status Bar
+  settings.statusBar = readerView_.values[9];
+
+  // Index 10: Reading Orientation
+  settings.orientation = readerView_.values[10];
+}
+
+void SettingsState::loadHomeArtSettings() {
+  auto& settings = core_->settings;
+  
+  // Reset view state
+  homeArtView_.themeCount = 0;
+  homeArtView_.selectedIndex = 0;
+  homeArtView_.appliedIndex = 0;
+  homeArtView_.scrollOffset = 0;
+  homeArtView_.needsRender = true;
+  
+  // Always add "default" first (built-in PROGMEM theme)
+  strncpy(homeArtView_.themeNames[0], "default", sizeof(homeArtView_.themeNames[0]) - 1);
+  strncpy(homeArtView_.displayNames[0], "Default (Built-in)", sizeof(homeArtView_.displayNames[0]) - 1);
+  homeArtView_.themeCount = 1;
+  
+  // Check if default is currently applied
+  if (strcmp(settings.homeArtTheme, "default") == 0 || settings.homeArtTheme[0] == '\0') {
+    homeArtView_.selectedIndex = 0;
+    homeArtView_.appliedIndex = 0;
+  }
+  
+  // Scan SD card for additional themes at /config/themes/*.bmp
+  FsFile dir = SdMan.open("/config/themes");
+  if (dir && dir.isDirectory()) {
+    FsFile file;
+    char filename[64];
+    
+    while (file.openNext(&dir, O_RDONLY) && homeArtView_.themeCount < ui::HomeArtSettingsView::MAX_THEMES) {
+      if (!file.isDirectory()) {
+        file.getName(filename, sizeof(filename));
+        
+        // Check if it's a .bmp file
+        size_t len = strlen(filename);
+        if (len > 4 && strcasecmp(filename + len - 4, ".bmp") == 0) {
+          // Extract theme name (filename without extension)
+          char themeName[32];
+          size_t nameLen = std::min(len - 4, sizeof(themeName) - 1);
+          strncpy(themeName, filename, nameLen);
+          themeName[nameLen] = '\0';
+          
+          // Skip if it's "default" (already added)
+          if (strcasecmp(themeName, "default") != 0) {
+            int idx = homeArtView_.themeCount;
+            strncpy(homeArtView_.themeNames[idx], themeName, sizeof(homeArtView_.themeNames[0]) - 1);
+            homeArtView_.themeNames[idx][sizeof(homeArtView_.themeNames[0]) - 1] = '\0';
+            
+            // Display name = theme name (could be prettier but works)
+            strncpy(homeArtView_.displayNames[idx], themeName, sizeof(homeArtView_.displayNames[0]) - 1);
+            homeArtView_.displayNames[idx][sizeof(homeArtView_.displayNames[0]) - 1] = '\0';
+            
+            // Check if this is the currently applied theme
+            if (strcmp(settings.homeArtTheme, themeName) == 0) {
+              homeArtView_.selectedIndex = idx;
+              homeArtView_.appliedIndex = idx;
+            }
+            
+            homeArtView_.themeCount++;
+          }
+        }
+      }
+      file.close();
+    }
+    dir.close();
+  }
+  
+  // Ensure selected item is visible
+  if (homeArtView_.selectedIndex >= ui::HomeArtSettingsView::VISIBLE_ITEMS) {
+    homeArtView_.scrollOffset = homeArtView_.selectedIndex - ui::HomeArtSettingsView::VISIBLE_ITEMS + 1;
+  }
+  
+  Serial.printf("[SETTINGS] Found %d home art themes (1 built-in + %d on SD), applied: %s\n", 
+                homeArtView_.themeCount, homeArtView_.themeCount - 1, settings.homeArtTheme);
+}
+
+void SettingsState::saveHomeArtSettings() {
+  auto& settings = core_->settings;
+  
+  const char* selectedTheme = homeArtView_.getCurrentThemeName();
+  if (strcmp(settings.homeArtTheme, selectedTheme) != 0) {
+    strncpy(settings.homeArtTheme, selectedTheme, sizeof(settings.homeArtTheme) - 1);
+    settings.homeArtTheme[sizeof(settings.homeArtTheme) - 1] = '\0';
+    homeArtView_.appliedIndex = homeArtView_.selectedIndex;
+    homeArtView_.needsRender = true;
+    
+    // Save to persistent storage
+    settings.save(core_->storage);
+    
+    Serial.printf("[SETTINGS] Home art theme changed to: %s\n", settings.homeArtTheme);
+  }
 }
 
 void SettingsState::loadDeviceSettings() {
@@ -726,13 +968,437 @@ void SettingsState::clearCache(int type, Core& core) {
   }
 }
 
+// ============================================================================
+// BLE File Transfer Screen
+// ============================================================================
+
+void SettingsState::enterBleTransfer() {
+  // Check current state
+  bleTransferEnabled_ = ble_transfer::isReady();
+  lastBleUpdate_ = millis();
+  lastBleProgress_ = -1;  // Force initial render
+  bleShowResult_ = false;
+  bleQueueComplete_ = false;
+  bleTransferDirty_ = false;
+  needsRender_ = true;
+  
+  // Register callback for real-time transfer events
+  if (!bleCallbackRegistered_ && bleTransferEnabled_) {
+    ble_transfer::setCallback([this](ble_transfer::TransferEvent event, const char* data) {
+      switch (event) {
+        case ble_transfer::TransferEvent::TRANSFER_START:
+          bleShowResult_ = false;
+          ble_transfer::clearResult();
+          needsRender_ = true;
+          break;
+        case ble_transfer::TransferEvent::TRANSFER_PROGRESS:
+          // DON'T set needsRender_ here!
+          // Each render triggers a full e-ink refresh (~500ms of CPU + SPI blocking)
+          // which starves the BLE stack and causes connection drops on the ESP32-C3.
+          // Let updateBleTransfer() handle throttled rendering via polling instead.
+          break;
+        case ble_transfer::TransferEvent::TRANSFER_COMPLETE:
+          bleShowResult_ = true;
+          bleTransferDirty_ = true;  // Files changed on SD
+          needsRender_ = true;
+          break;
+        case ble_transfer::TransferEvent::TRANSFER_ERROR:
+          bleShowResult_ = true;
+          needsRender_ = true;
+          break;
+        case ble_transfer::TransferEvent::QUEUE_COMPLETE:
+          bleQueueComplete_ = true;
+          bleShowResult_ = true;
+          needsRender_ = true;
+          break;
+        case ble_transfer::TransferEvent::CONNECTED:
+        case ble_transfer::TransferEvent::DISCONNECTED:
+          needsRender_ = true;
+          break;
+        default:
+          break;
+      }
+    });
+    bleCallbackRegistered_ = true;
+  }
+  
+  Serial.printf("[BLE] Entering transfer screen, enabled: %d\n", bleTransferEnabled_);
+}
+
+void SettingsState::updateBleTransfer() {
+  unsigned long now = millis();
+  
+  bool isTransferring = ble_transfer::isTransferring();
+  // During transfer: only check every 3 seconds to minimize CPU contention with BLE stack.
+  // The ESP32-C3 is single-core — e-ink refreshes take ~500ms of blocking SPI/wait time
+  // that prevents the BLE stack from servicing the connection, causing timeouts.
+  uint32_t checkInterval = isTransferring ? 3000 : 500;
+  
+  if (now - lastBleUpdate_ < checkInterval) return;
+  lastBleUpdate_ = now;
+  
+  // During active transfer, poll progress as backup to callback-driven updates
+  if (isTransferring) {
+    int progress = ble_transfer::transferProgress();
+    if (progress != lastBleProgress_) {
+      int delta = progress - lastBleProgress_;
+      lastBleProgress_ = progress;
+      // Render every 10% change or at completion — keep display updates rare
+      // to avoid starving the BLE connection on single-core ESP32-C3
+      if (delta >= 10 || delta < 0 || progress >= 100) {
+        needsRender_ = true;
+      }
+    }
+  } else if (lastBleProgress_ >= 0) {
+    // Transfer just ended — reset progress tracker
+    lastBleProgress_ = -1;
+    needsRender_ = true;
+  }
+  
+  // Catch result if callback was missed (belt and suspenders)
+  if (ble_transfer::hasResult() && !bleShowResult_ && !isTransferring) {
+    bleShowResult_ = true;
+    needsRender_ = true;
+  }
+}
+
+void SettingsState::renderBleTransfer() {
+  renderer_.clearScreen(THEME.backgroundColor);
+  const Theme& t = THEME;
+  
+  ui::title(renderer_, t, t.screenMarginTop, "Wireless Transfer");
+  
+  const int W = renderer_.getScreenWidth();   // 480
+  const int H = renderer_.getScreenHeight();  // 800
+  const int cx = W / 2;
+  const int smH = renderer_.getLineHeight(t.smallFontId) + 6;
+  const int mdH = renderer_.getLineHeight(t.menuFontId) + 8;
+  const int lgH = renderer_.getLineHeight(t.readerFontIdMedium) + 8;
+  
+  // Icon helper: draw a square "icon" with a label inside
+  // filled=true draws inverted (white text on black box)
+  auto drawIcon = [&](int y, int size, const char* label, bool filled) {
+    int ix = cx - size / 2;
+    if (filled) {
+      renderer_.fillRect(ix, y, size, size, true);
+      renderer_.drawCenteredText(t.readerFontIdMedium, y + size / 2 - lgH / 2 + 4, label, false);
+    } else {
+      renderer_.drawRect(ix, y, size, size, true);
+      renderer_.drawRect(ix + 1, y + 1, size - 2, size - 2, true); // double border
+      renderer_.drawCenteredText(t.readerFontIdMedium, y + size / 2 - lgH / 2 + 4, label, true);
+    }
+  };
+  
+  // Divider helper
+  auto drawDivider = [&](int y) {
+    int dw = 80;
+    renderer_.drawLine(cx - dw / 2, y, cx + dw / 2, y, true);
+  };
+  
+  // ══════════════════════════════════════════════════════════════
+  // OFF STATE
+  // ══════════════════════════════════════════════════════════════
+  if (!bleTransferEnabled_) {
+    int y = 160;
+    drawIcon(y, 64, "BT", false);
+    y += 64 + 24;
+    
+    renderer_.drawCenteredText(t.readerFontIdMedium, y, "Wireless is Off", t.primaryTextBlack, EpdFontFamily::BOLD);
+    y += lgH + 28;
+    
+    drawDivider(y);
+    y += 28;
+    
+    renderer_.drawCenteredText(t.menuFontId, y, "Send files from your browser", t.secondaryTextBlack);
+    y += mdH;
+    renderer_.drawCenteredText(t.menuFontId, y, "directly to this device", t.secondaryTextBlack);
+    y += mdH;
+    renderer_.drawCenteredText(t.menuFontId, y, "over Bluetooth.", t.secondaryTextBlack);
+    y += mdH + 32;
+    
+    renderer_.drawCenteredText(t.menuFontId, y, "Press OK to enable", t.primaryTextBlack, EpdFontFamily::BOLD);
+    
+    ui::ButtonBar buttons{"Back", "Enable", "", ""};
+    ui::buttonBar(renderer_, t, buttons);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+    return;
+  }
+  
+  // ══════════════════════════════════════════════════════════════
+  // QUEUE COMPLETE SUMMARY
+  // ══════════════════════════════════════════════════════════════
+  if (bleQueueComplete_ && !ble_transfer::isTransferring()) {
+    uint8_t received = ble_transfer::queueReceived();
+    uint8_t total = ble_transfer::queueTotal();
+    
+    int y = 160;
+    
+    if (received == total) {
+      // All success
+      drawIcon(y, 68, "OK", false);
+      y += 68 + 24;
+      renderer_.drawCenteredText(t.readerFontIdMedium, y, "All Files Received", t.primaryTextBlack, EpdFontFamily::BOLD);
+    } else if (received > 0) {
+      // Partial success
+      drawIcon(y, 68, "OK", false);
+      y += 68 + 24;
+      renderer_.drawCenteredText(t.readerFontIdMedium, y, "Transfer Complete", t.primaryTextBlack, EpdFontFamily::BOLD);
+    } else {
+      // All failed
+      drawIcon(y, 68, "X", true);
+      y += 68 + 24;
+      renderer_.drawCenteredText(t.readerFontIdMedium, y, "Transfer Failed", t.primaryTextBlack, EpdFontFamily::BOLD);
+    }
+    y += lgH + 8;
+    
+    char summary[48];
+    snprintf(summary, sizeof(summary), "%d of %d", received, total);
+    renderer_.drawCenteredText(t.menuFontId, y, summary, t.primaryTextBlack, EpdFontFamily::BOLD);
+    y += mdH + 28;
+    
+    drawDivider(y);
+    y += 28;
+    
+    if (received == total) {
+      renderer_.drawCenteredText(t.menuFontId, y, "Your files are ready", t.secondaryTextBlack);
+      y += mdH;
+      renderer_.drawCenteredText(t.menuFontId, y, "in the library.", t.secondaryTextBlack);
+      y += mdH + 20;
+      renderer_.drawCenteredText(t.smallFontId, y, "Press Back to start reading", t.secondaryTextBlack);
+    } else if (received > 0) {
+      char failMsg[48];
+      snprintf(failMsg, sizeof(failMsg), "%d file%s failed", total - received, (total - received > 1) ? "s" : "");
+      renderer_.drawCenteredText(t.menuFontId, y, failMsg, t.secondaryTextBlack);
+      y += mdH + 8;
+      renderer_.drawCenteredText(t.menuFontId, y, "Saved files are in the library.", t.secondaryTextBlack);
+      y += mdH;
+      renderer_.drawCenteredText(t.menuFontId, y, "Try sending failed files again,", t.secondaryTextBlack);
+      y += mdH;
+      renderer_.drawCenteredText(t.menuFontId, y, "or copy them to the SD card.", t.secondaryTextBlack);
+    } else {
+      renderer_.drawCenteredText(t.menuFontId, y, "No files were saved.", t.secondaryTextBlack);
+      y += mdH + 8;
+      renderer_.drawCenteredText(t.menuFontId, y, "Large files transfer better", t.secondaryTextBlack);
+      y += mdH;
+      renderer_.drawCenteredText(t.menuFontId, y, "by copying to the SD card.", t.secondaryTextBlack);
+    }
+    
+    ui::ButtonBar buttons{"Back", "Disable", "", ""};
+    ui::buttonBar(renderer_, t, buttons);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+    return;
+  }
+  
+  // ══════════════════════════════════════════════════════════════
+  // SINGLE FILE RESULT
+  // ══════════════════════════════════════════════════════════════
+  if (bleShowResult_ && ble_transfer::hasResult() && !ble_transfer::isTransferring()) {
+    const auto& result = ble_transfer::lastResult();
+    int y = 160;
+    
+    if (result.success) {
+      drawIcon(y, 68, "OK", false);
+      y += 68 + 24;
+      renderer_.drawCenteredText(t.readerFontIdMedium, y, "Transfer Complete", t.primaryTextBlack, EpdFontFamily::BOLD);
+      y += lgH + 12;
+      
+      renderer_.drawCenteredText(t.menuFontId, y, result.filename, t.primaryTextBlack);
+      y += mdH;
+      
+      char sizeInfo[64];
+      if (result.fileSize < 1048576) {
+        snprintf(sizeInfo, sizeof(sizeInfo), "%.1f KB at %.1f KB/s", result.fileSize / 1024.0f, result.speedKBs);
+      } else {
+        snprintf(sizeInfo, sizeof(sizeInfo), "%.1f MB at %.1f KB/s", result.fileSize / 1048576.0f, result.speedKBs);
+      }
+      renderer_.drawCenteredText(t.smallFontId, y, sizeInfo, t.secondaryTextBlack);
+      y += smH;
+      
+      if (result.queueTotal > 0) {
+        y += 8;
+        char queueInfo[48];
+        snprintf(queueInfo, sizeof(queueInfo), "File %d of %d", result.queueIndex, result.queueTotal);
+        renderer_.drawCenteredText(t.smallFontId, y, queueInfo, t.secondaryTextBlack);
+        
+        if (result.queueIndex < result.queueTotal) {
+          y += smH + 16;
+          renderer_.drawCenteredText(t.menuFontId, y, "Waiting for next file...", t.secondaryTextBlack);
+        }
+      }
+    } else {
+      drawIcon(y, 68, "X", true);
+      y += 68 + 24;
+      renderer_.drawCenteredText(t.readerFontIdMedium, y, "Transfer Failed", t.primaryTextBlack, EpdFontFamily::BOLD);
+      y += lgH + 12;
+      
+      if (result.filename[0]) {
+        renderer_.drawCenteredText(t.smallFontId, y, result.filename, t.primaryTextBlack);
+        y += smH;
+      }
+      if (result.errorMsg[0]) {
+        renderer_.drawCenteredText(t.smallFontId, y, result.errorMsg, t.secondaryTextBlack);
+        y += smH;
+      }
+      
+      y += 20;
+      drawDivider(y);
+      y += 28;
+      
+      renderer_.drawCenteredText(t.menuFontId, y, "Large files transfer better", t.secondaryTextBlack);
+      y += mdH;
+      renderer_.drawCenteredText(t.menuFontId, y, "by copying directly to", t.secondaryTextBlack);
+      y += mdH;
+      renderer_.drawCenteredText(t.menuFontId, y, "the SD card.", t.secondaryTextBlack);
+    }
+    
+    ui::ButtonBar buttons{"Back", "Disable", "", ""};
+    ui::buttonBar(renderer_, t, buttons);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+    return;
+  }
+  
+  // ══════════════════════════════════════════════════════════════
+  // ACTIVE TRANSFER
+  // ══════════════════════════════════════════════════════════════
+  if (ble_transfer::isTransferring()) {
+    int y = 130;
+    
+    // Queue position header
+    uint8_t qi = ble_transfer::queueIndex();
+    uint8_t qt = ble_transfer::queueTotal();
+    if (qt > 0) {
+      char queueHeader[48];
+      snprintf(queueHeader, sizeof(queueHeader), "File %d of %d", qi, qt);
+      renderer_.drawCenteredText(t.menuFontId, y, queueHeader, t.primaryTextBlack, EpdFontFamily::BOLD);
+    } else {
+      renderer_.drawCenteredText(t.menuFontId, y, "Receiving file...", t.primaryTextBlack, EpdFontFamily::BOLD);
+    }
+    y += mdH + 4;
+    
+    // Filename
+    const char* filename = ble_transfer::currentFilename();
+    if (filename && filename[0]) {
+      renderer_.drawCenteredText(t.smallFontId, y, filename, t.primaryTextBlack);
+      y += smH;
+    }
+    y += 28;
+    
+    // Wide progress bar
+    int progress = ble_transfer::transferProgress();
+    const int barW = W - 60;  // Nearly full width
+    const int barH = 28;
+    const int barX = cx - barW / 2;
+    renderer_.drawRect(barX, y, barW, barH, t.primaryTextBlack);
+    renderer_.drawRect(barX + 1, y + 1, barW - 2, barH - 2, t.primaryTextBlack);
+    if (progress > 0) {
+      int fillW = (barW - 6) * progress / 100;
+      renderer_.fillRect(barX + 3, y + 3, fillW, barH - 6, t.primaryTextBlack);
+    }
+    y += barH + 20;
+    
+    // Giant percentage (hero element)
+    char pctText[8];
+    snprintf(pctText, sizeof(pctText), "%d%%", progress);
+    renderer_.drawCenteredText(t.readerFontIdLarge, y, pctText, t.primaryTextBlack, EpdFontFamily::BOLD);
+    y += renderer_.getLineHeight(t.readerFontIdLarge) + 16;
+    
+    // Bytes received
+    uint32_t received = ble_transfer::bytesReceived();
+    uint32_t expected = ble_transfer::expectedSize();
+    char progText[64];
+    if (expected < 1048576) {
+      snprintf(progText, sizeof(progText), "%.0f / %.0f KB", 
+               received / 1024.0f, expected / 1024.0f);
+    } else {
+      snprintf(progText, sizeof(progText), "%.1f / %.1f MB", 
+               received / 1048576.0f, expected / 1048576.0f);
+    }
+    renderer_.drawCenteredText(t.menuFontId, y, progText, t.primaryTextBlack);
+    y += mdH + 40;
+    
+    renderer_.drawCenteredText(t.smallFontId, y, "Do not leave this screen", t.secondaryTextBlack);
+    
+    ui::ButtonBar buttons{"", "", "", ""};
+    ui::buttonBar(renderer_, t, buttons);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+    return;
+  }
+  
+  // ══════════════════════════════════════════════════════════════
+  // CONNECTED, WAITING
+  // ══════════════════════════════════════════════════════════════
+  if (ble_transfer::isConnected()) {
+    int y = 200;
+    drawIcon(y, 64, "BT", true);
+    y += 64 + 24;
+    
+    renderer_.drawCenteredText(t.readerFontIdMedium, y, "Connected", t.primaryTextBlack, EpdFontFamily::BOLD);
+    y += lgH + 28;
+    
+    drawDivider(y);
+    y += 28;
+    
+    renderer_.drawCenteredText(t.menuFontId, y, "Waiting for files...", t.primaryTextBlack);
+    y += mdH + 12;
+    renderer_.drawCenteredText(t.smallFontId, y, "Start the transfer from", t.secondaryTextBlack);
+    y += smH;
+    renderer_.drawCenteredText(t.smallFontId, y, "your browser to begin.", t.secondaryTextBlack);
+    
+    ui::ButtonBar buttons{"Back", "Disable", "", ""};
+    ui::buttonBar(renderer_, t, buttons);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+    return;
+  }
+  
+  // ══════════════════════════════════════════════════════════════
+  // READY, ADVERTISING
+  // ══════════════════════════════════════════════════════════════
+  {
+    int y = 160;
+    drawIcon(y, 64, "BT", true);
+    y += 64 + 24;
+    
+    renderer_.drawCenteredText(t.readerFontIdMedium, y, "Ready", t.primaryTextBlack, EpdFontFamily::BOLD);
+    y += lgH + 4;
+    renderer_.drawCenteredText(t.menuFontId, y, "Visible as \"SUMI\"", t.secondaryTextBlack);
+    y += mdH + 24;
+    
+    drawDivider(y);
+    y += 28;
+    
+    renderer_.drawCenteredText(t.menuFontId, y, "Open sumi.page in Chrome,", t.secondaryTextBlack);
+    y += mdH;
+    renderer_.drawCenteredText(t.menuFontId, y, "convert your files, then tap", t.secondaryTextBlack);
+    y += mdH;
+    renderer_.drawCenteredText(t.menuFontId, y, "Send to SUMI.", t.primaryTextBlack, EpdFontFamily::BOLD);
+    y += mdH + 32;
+    
+    renderer_.drawCenteredText(t.smallFontId, y, "Press OK to disable", t.secondaryTextBlack);
+    
+    ui::ButtonBar buttons{"Back", "Disable", "", ""};
+    ui::buttonBar(renderer_, t, buttons);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+  }
+}
+
 #if FEATURE_BLUETOOTH
 void SettingsState::enterBluetooth() {
   btSelected_ = 0;
   btScanned_ = false;
   btConnecting_ = false;
 
+  // Release memory arena to free up heap for BLE stack (~40KB needed)
+  if (sumi::MemoryArena::isInitialized()) {
+    Serial.println("[BLE] Releasing memory arena for BLE stack");
+    sumi::MemoryArena::release();
+  }
+
   ble::init();
+
+  // Initialize file transfer service (runs alongside HID)
+  ble_transfer::init();
+  ble_transfer::startAdvertising();
+  Serial.println("[BLE] File transfer service ready - device can receive files from sumi.page");
 
   // Try reconnecting to saved devices first
   const char* savedKb = core_->settings.bleKeyboard;
@@ -778,6 +1444,12 @@ void SettingsState::renderBluetooth() {
 
   // Standard title
   ui::title(renderer_, t, t.screenMarginTop, "Bluetooth");
+
+  // File transfer status at bottom
+  if (ble_transfer::isReady()) {
+    const int footerY = renderer_.getScreenHeight() - 35;
+    renderer_.drawCenteredText(font, footerY, "File transfer: Ready (sumi.page)", true);
+  }
 
   if (!btScanned_) {
     renderer_.drawCenteredText(font, renderer_.getScreenHeight() / 2, "Press OK to scan", true);

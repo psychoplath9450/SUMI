@@ -92,6 +92,7 @@ void SleepState::renderDefaultSleepScreen(const Core& core) const {
   renderer_.drawImage(SumiLogo, (pageWidth + 128) / 2, (pageHeight - 128) / 2, 128, 128);
   renderer_.drawCenteredText(THEME.uiFontId, pageHeight / 2 + 70, "SUMI", THEME.primaryTextBlack, BOLD);
   renderer_.drawCenteredText(THEME.smallFontId, pageHeight / 2 + 110, "SLEEPING", THEME.primaryTextBlack);
+  renderer_.drawCenteredText(THEME.smallFontId, pageHeight - 30, SUMI_VERSION, THEME.primaryTextBlack);
 
   // Make sleep screen dark unless light is selected in settings
   if (core.settings.sleepScreen != Settings::SleepLight) {
@@ -146,9 +147,11 @@ void SleepState::renderCustomSleepScreen(const Core& core) const {
         Bitmap bitmap(file, true);
         if (bitmap.parseHeaders() == BmpReaderError::Ok) {
           renderBitmapSleepScreen(bitmap);
+          file.close();
           dir.close();
           return;
         }
+        file.close();
       }
     }
   }
@@ -162,8 +165,10 @@ void SleepState::renderCustomSleepScreen(const Core& core) const {
     if (bitmap.parseHeaders() == BmpReaderError::Ok) {
       Serial.printf("[%lu] [SLP] Loading: /sleep.bmp\n", millis());
       renderBitmapSleepScreen(bitmap);
+      file.close();
       return;
     }
+    file.close();
   }
 
   renderDefaultSleepScreen(core);
@@ -210,8 +215,10 @@ void SleepState::renderCoverSleepScreen(Core& core) const {
     Bitmap bitmap(file);
     if (bitmap.parseHeaders() == BmpReaderError::Ok) {
       renderBitmapSleepScreen(bitmap);
+      file.close();
       return;
     }
+    file.close();
   }
 
   renderDefaultSleepScreen(core);

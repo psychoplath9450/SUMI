@@ -16,27 +16,22 @@ Bitmap::~Bitmap() {
   delete fsDitherer;
 }
 
-uint16_t Bitmap::readLE16(FsFile& f) {
-  const int c0 = f.read();
-  const int c1 = f.read();
-  const auto b0 = static_cast<uint8_t>(c0 < 0 ? 0 : c0);
-  const auto b1 = static_cast<uint8_t>(c1 < 0 ? 0 : c1);
-  return static_cast<uint16_t>(b0) | (static_cast<uint16_t>(b1) << 8);
+uint16_t Bitmap::readLE16() {
+  const int c0 = file.read();
+  const int c1 = file.read();
+  if (c0 < 0 || c1 < 0) readOk_ = false;
+  return static_cast<uint16_t>(c0 < 0 ? 0 : c0) | (static_cast<uint16_t>(c1 < 0 ? 0 : c1) << 8);
 }
 
-uint32_t Bitmap::readLE32(FsFile& f) {
-  const int c0 = f.read();
-  const int c1 = f.read();
-  const int c2 = f.read();
-  const int c3 = f.read();
+uint32_t Bitmap::readLE32() {
+  const int c0 = file.read();
+  const int c1 = file.read();
+  const int c2 = file.read();
+  const int c3 = file.read();
+  if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) readOk_ = false;
 
-  const auto b0 = static_cast<uint8_t>(c0 < 0 ? 0 : c0);
-  const auto b1 = static_cast<uint8_t>(c1 < 0 ? 0 : c1);
-  const auto b2 = static_cast<uint8_t>(c2 < 0 ? 0 : c2);
-  const auto b3 = static_cast<uint8_t>(c3 < 0 ? 0 : c3);
-
-  return static_cast<uint32_t>(b0) | (static_cast<uint32_t>(b1) << 8) | (static_cast<uint32_t>(b2) << 16) |
-         (static_cast<uint32_t>(b3) << 24);
+  return static_cast<uint32_t>(c0 < 0 ? 0 : c0) | (static_cast<uint32_t>(c1 < 0 ? 0 : c1) << 8) |
+         (static_cast<uint32_t>(c2 < 0 ? 0 : c2) << 16) | (static_cast<uint32_t>(c3 < 0 ? 0 : c3) << 24);
 }
 
 const char* Bitmap::errorToString(BmpReaderError err) {
@@ -82,24 +77,29 @@ BmpReaderError Bitmap::parseHeaders() {
   if (!file.seek(0)) return BmpReaderError::SeekStartFailed;
 
   // --- BMP FILE HEADER ---
-  const uint16_t bfType = readLE16(file);
+  readOk_ = true;
+  const uint16_t bfType = readLE16();
   if (bfType != 0x4D42) return BmpReaderError::NotBMP;
 
   file.seekCur(8);
-  bfOffBits = readLE32(file);
+  bfOffBits = readLE32();
 
   // --- DIB HEADER ---
-  const uint32_t biSize = readLE32(file);
+  const uint32_t biSize = readLE32();
   if (biSize < 40) return BmpReaderError::DIBTooSmall;
 
-  width = static_cast<int32_t>(readLE32(file));
-  const auto rawHeight = static_cast<int32_t>(readLE32(file));
+  width = static_cast<int32_t>(readLE32());
+  const auto rawHeight = static_cast<int32_t>(readLE32());
   topDown = rawHeight < 0;
   height = topDown ? -rawHeight : rawHeight;
 
-  const uint16_t planes = readLE16(file);
-  bpp = readLE16(file);
-  const uint32_t comp = readLE32(file);
+  const uint16_t planes = readLE16();
+  bpp = readLE16();
+  const uint32_t comp = readLE32();
+
+  // Catch truncated/corrupt headers before using parsed values
+  if (!readOk_) return BmpReaderError::FileInvalid;
+
   const bool validBpp = bpp == 1 || bpp == 2 || bpp == 8 || bpp == 24 || bpp == 32;
 
   if (planes != 1) return BmpReaderError::BadPlanes;
@@ -108,7 +108,8 @@ BmpReaderError Bitmap::parseHeaders() {
   if (!(comp == 0 || (bpp == 32 && comp == 3))) return BmpReaderError::UnsupportedCompression;
 
   file.seekCur(12);  // biSizeImage, biXPelsPerMeter, biYPelsPerMeter
-  const uint32_t colorsUsed = readLE32(file);
+  const uint32_t colorsUsed = readLE32();
+  if (!readOk_) return BmpReaderError::FileInvalid;
   if (colorsUsed > 256u) return BmpReaderError::PaletteTooLarge;
   file.seekCur(4);  // biClrImportant
 
@@ -128,7 +129,7 @@ BmpReaderError Bitmap::parseHeaders() {
   if (colorsUsed > 0) {
     for (uint32_t i = 0; i < colorsUsed; i++) {
       uint8_t rgb[4];
-      file.read(rgb, 4);  // Read B, G, R, Reserved in one go
+      if (file.read(rgb, 4) != 4) return BmpReaderError::FileInvalid;
       paletteLum[i] = (77u * rgb[2] + 150u * rgb[1] + 29u * rgb[0]) >> 8;
     }
   }
@@ -148,8 +149,16 @@ BmpReaderError Bitmap::parseHeaders() {
   if (bpp > 2 && dithering) {
     if (USE_ATKINSON) {
       atkinsonDitherer = new AtkinsonDitherer(width);
+      if (!atkinsonDitherer->isValid()) {
+        delete atkinsonDitherer;
+        atkinsonDitherer = nullptr;
+      }
     } else {
       fsDitherer = new FloydSteinbergDitherer(width);
+      if (!fsDitherer->isValid()) {
+        delete fsDitherer;
+        fsDitherer = nullptr;
+      }
     }
   }
 

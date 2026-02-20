@@ -10,12 +10,15 @@ struct RenderConfig {
   uint8_t paragraphAlignment = 0;
   bool hyphenation = false;
   bool showImages = false;
+  bool showTables = true;
+  bool allowTallImages = false;  // Landscape scroll: don't cap image height to viewport
   uint16_t viewportWidth = 0;
   uint16_t viewportHeight = 0;
 
   RenderConfig() = default;
   RenderConfig(int fontId, float lineCompression, uint8_t indentLevel, uint8_t spacingLevel, uint8_t paragraphAlignment,
-               bool hyphenation, bool showImages, uint16_t viewportWidth, uint16_t viewportHeight)
+               bool hyphenation, bool showImages, bool showTables, uint16_t viewportWidth, uint16_t viewportHeight,
+               bool allowTallImages = false)
       : fontId(fontId),
         lineCompression(lineCompression),
         indentLevel(indentLevel),
@@ -23,6 +26,8 @@ struct RenderConfig {
         paragraphAlignment(paragraphAlignment),
         hyphenation(hyphenation),
         showImages(showImages),
+        showTables(showTables),
+        allowTallImages(allowTallImages),
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight) {}
 
@@ -30,6 +35,7 @@ struct RenderConfig {
     return fontId == o.fontId && std::abs(lineCompression - o.lineCompression) < 1e-6f &&
            indentLevel == o.indentLevel && spacingLevel == o.spacingLevel &&
            paragraphAlignment == o.paragraphAlignment && hyphenation == o.hyphenation && showImages == o.showImages &&
+           showTables == o.showTables && allowTallImages == o.allowTallImages &&
            viewportWidth == o.viewportWidth && viewportHeight == o.viewportHeight;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }

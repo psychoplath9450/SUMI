@@ -166,6 +166,8 @@ public:
     // UI (needsFullRedraw inherited from PluginInterface)
     bool hasSavedGame;
     int savedProgress;  // Percentage complete for continue button
+    bool wasNewRecord = false;  // Set on victory, before bestTimes is updated
+    uint32_t victoryTime = 0;   // Final time for victory screen
     
     // ==========================================================================
     // Constructor & Init
@@ -577,19 +579,20 @@ public:
         // Check win
         if (isComplete()) {
             timerRunning = false;
-            uint32_t finalTime = getElapsedTime();
-            
+            victoryTime = getElapsedTime();
+
             stats.gamesWon++;
             stats.currentStreak++;
             if (stats.currentStreak > stats.bestStreak) {
                 stats.bestStreak = stats.currentStreak;
             }
-            
-            // Check best time
-            if (stats.bestTimes[difficulty] == 0 || finalTime < stats.bestTimes[difficulty]) {
-                stats.bestTimes[difficulty] = finalTime;
+
+            // Check best time (record flag set BEFORE updating)
+            wasNewRecord = (stats.bestTimes[difficulty] == 0 || victoryTime < stats.bestTimes[difficulty]);
+            if (wasNewRecord) {
+                stats.bestTimes[difficulty] = victoryTime;
             }
-            
+
             saveStats();
             deleteSavedGame();
             currentScreen = SDK_SCREEN_VICTORY;
@@ -839,6 +842,10 @@ public:
                 pauseTimer();
                 menuCursor = 0;
                 currentScreen = SDK_SCREEN_PAUSED;
+                needsFullRedraw = true;
+                return true;
+            case PluginButton::Power:
+                pencilMode = !pencilMode;
                 needsFullRedraw = true;
                 return true;
             default:
@@ -1213,8 +1220,8 @@ public:
         if (editingCell) {
             centerText("UP/DN: Choose | OK: Place | BACK: Cancel", screenW / 2, footerY + 22);
         } else {
-            char footer[64];
-            snprintf(footer, sizeof(footer), "OK: Edit cell | BACK: Menu%s", pencilMode ? " | [PENCIL]" : "");
+            char footer[80];
+            snprintf(footer, sizeof(footer), "OK: Edit | BACK: Menu | PWR: %s", pencilMode ? "[PENCIL]" : "Number");
             centerText(footer, screenW / 2, footerY + 22);
         }
     }
@@ -1537,9 +1544,8 @@ public:
         // Stats boxes
         int boxW = (screenW - 60) / 3;
         
-        uint32_t finalTime = getElapsedTime();
         char timeStr[16];
-        snprintf(timeStr, sizeof(timeStr), "%d:%02d", finalTime / 60, finalTime % 60);
+        snprintf(timeStr, sizeof(timeStr), "%d:%02d", victoryTime / 60, victoryTime % 60);
         
         char hintsStr[8], errorsStr[8];
         snprintf(hintsStr, sizeof(hintsStr), "%d", hintsUsed);
@@ -1562,8 +1568,7 @@ public:
         y += 86;
         
         // New record?
-        bool isRecord = (stats.bestTimes[difficulty] == finalTime);
-        if (isRecord) {
+        if (wasNewRecord) {
             d_.fillRoundRect(20, y, screenW - 40, 40, 6, GxEPD_BLACK);
             d_.setTextColor(GxEPD_WHITE);
             d_.setFont(nullptr);

@@ -73,6 +73,7 @@ struct Settings {
   uint8_t hyphenation = 1;
   uint8_t textAntiAliasing = 0;
   uint8_t showImages = 1;
+  uint8_t showTables = 1;
   uint8_t startupBehavior = StartupLastDocument;
   uint8_t _reserved = 0;  // was coverDithering, kept for serialization compatibility
   uint8_t lineSpacing = SpacingNormal;
@@ -85,6 +86,10 @@ struct Settings {
   char fileListSelectedName[128] = "";  // FileListState: last selected filename
   uint16_t fileListSelectedIndex = 0;   // FileListState: last selected index
   uint8_t frontButtonLayout = FrontBCLR;
+
+  // Home screen art theme (stored in /config/themes/)
+  // "default" = built-in PROGMEM art, others load from SD
+  char homeArtTheme[32] = "default";
 
   // BLE saved devices for auto-reconnect
   char bleKeyboard[18] = "";     // "AA:BB:CC:DD:EE:FF"

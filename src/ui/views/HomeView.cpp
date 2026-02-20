@@ -111,7 +111,7 @@ void render(const GfxRenderer& r, const Theme& t, const HomeView& v) {
   }
 
   // === PROGRESS BAR (hand-drawn style, replaces old button area) ===
-  if (v.hasBook && v.bookProgress >= 0 && v.bookTotalPages > 0) {
+  if (v.hasBook && v.bookProgress >= 0) {
     const int barY = infoBottomY + 16;
     constexpr int barH = 14;
     constexpr int barPad = 20;  // Inset from card edges
@@ -138,13 +138,43 @@ void render(const GfxRenderer& r, const Theme& t, const HomeView& v) {
     // Progress text below bar
     const int textY = barY + barH + 6;
     char progressText[32];
-    if (v.isChapterBased) {
-      snprintf(progressText, sizeof(progressText), "Chapter %d of %d", v.bookCurrentPage, v.bookTotalPages);
+    if (v.bookTotalPages > 0) {
+      if (v.isChapterBased) {
+        snprintf(progressText, sizeof(progressText), "Chapter %d of %d", v.bookCurrentPage, v.bookTotalPages);
+      } else {
+        snprintf(progressText, sizeof(progressText), "Page %d of %d", v.bookCurrentPage, v.bookTotalPages);
+      }
     } else {
-      snprintf(progressText, sizeof(progressText), "Page %d of %d", v.bookCurrentPage, v.bookTotalPages);
+      // Just show percentage when we don't have page counts
+      snprintf(progressText, sizeof(progressText), "%d%% complete", v.bookProgress);
     }
     const int ptw = r.getTextWidth(t.uiFontId, progressText);
     r.drawText(t.uiFontId, cardX + (cardWidth - ptw) / 2, textY, progressText, t.secondaryTextBlack);
+  }
+
+  // === LIBRARY CAROUSEL (dots at bottom showing position) ===
+  if (v.recentBookCount > 0) {
+    const int carouselY = pageHeight - 35;
+    
+    // Draw carousel dots showing position
+    const int totalDots = v.recentBookCount + 1;  // +1 for current book
+    constexpr int dotSpacing = 16;
+    constexpr int dotRadius = 4;
+    const int dotsWidth = (totalDots - 1) * dotSpacing;
+    const int dotsStartX = (pageWidth - dotsWidth) / 2;
+    
+    for (int i = 0; i < totalDots; i++) {
+      const int dotX = dotsStartX + i * dotSpacing;
+      const bool isSelected = (i == v.selectedBookIndex);
+      
+      if (isSelected) {
+        // Filled dot for selected
+        r.fillRect(dotX - dotRadius, carouselY - dotRadius, dotRadius * 2, dotRadius * 2, t.primaryTextBlack);
+      } else {
+        // Hollow dot for unselected
+        r.drawRect(dotX - dotRadius, carouselY - dotRadius, dotRadius * 2, dotRadius * 2, t.primaryTextBlack);
+      }
+    }
   }
 
   // Note: displayBuffer() is NOT called here; HomeState will call it

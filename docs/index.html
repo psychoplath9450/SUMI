@@ -62,10 +62,6 @@ esp-web-install-button::part(button){
   padding:14px 32px;border:2px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer;transition:all .15s}
 esp-web-install-button::part(button):hover{background:transparent;color:var(--ink)}
 
-.erase-opt{margin-top:20px}
-.erase-opt label{font-family:var(--mono);font-size:12px;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
-.erase-opt input[type="checkbox"]{accent-color:var(--ink)}
-
 /* Partition diagram */
 .partition-block{font-family:var(--mono);font-size:12px;line-height:1.8;background:var(--ink);color:#e0d8c8;padding:24px;white-space:pre;overflow-x:auto;margin:20px 0}
 
@@ -78,6 +74,18 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
 /* Divider */
 .divider{width:100%;height:2px;background:var(--ink);margin:40px auto;max-width:860px;
   mask-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 960 2' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 1 Q240 0 480 1 T960 1' stroke='black' stroke-width='2' fill='none'/%3E%3C/svg%3E")}
+
+/* Recovery section */
+.recovery{border:2px solid var(--error);padding:32px;margin-bottom:40px;position:relative}
+.recovery::before{content:'RECOVERY';position:absolute;top:-12px;left:24px;background:var(--paper);padding:0 8px;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--error)}
+.recovery h3{font-size:22px;margin-bottom:8px}
+.recovery>p{color:var(--muted);font-size:14px;margin-bottom:20px}
+.recovery-steps{counter-reset:rstep;list-style:none;padding:0;margin:0 0 24px}
+.recovery-steps li{counter-increment:rstep;position:relative;padding:14px 16px 14px 56px;border:1px solid var(--border);margin-bottom:8px;font-size:14px;line-height:1.5}
+.recovery-steps li::before{content:counter(rstep);position:absolute;left:16px;top:14px;font-family:var(--mono);font-size:18px;font-weight:700;color:var(--accent)}
+.recovery-steps li strong{font-weight:700}
+.recovery-steps li em{font-style:italic;color:var(--muted);font-size:13px}
+.recovery-note{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:0.3px;line-height:1.6;border-top:1px solid var(--border);padding-top:16px;margin-top:8px}
 </style>
 </head>
 <body>
@@ -86,6 +94,7 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
   <a href="../" class="back">← GitHub</a>
   <h1>Firmware Flasher</h1>
   <p>Flash SUMI directly from your browser via USB</p>
+  <a href="#recovery" style="display:inline-block;margin-top:12px;font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--error);text-decoration:none;border:1px solid var(--error);padding:5px 12px">Device stuck? → Recovery Guide</a>
 </div>
 
 <div class="container">
@@ -101,16 +110,16 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
     <div class="number">App0 — 0x10000</div>
     <h3>SUMI</h3>
     <p>Complete reader firmware. EPUB, TXT, Markdown, XTC. Newspapers, flashcards, notes, chess, Game Boy emulator, BLE keyboards, and sumi-e UI.</p>
-    <span class="tag">v0.3.2</span>
-    <span class="tag">3MB</span>
+    <span class="tag">v0.3.3</span>
+    <span class="tag">2.5MB</span>
     <span class="tag">Reader</span>
   </div>
   <div class="fw-card" id="card-emu" onclick="selectFirmware('emu')">
-    <div class="number">App1 — 0x310000</div>
+    <div class="number">App1 — 0x650000</div>
     <h3>SumiBoy</h3>
     <p>Game Boy emulator with MBC3 banking, save states, Bayer dithering, and ROM patches. Dual-boots with SUMI.</p>
-    <span class="tag">v1.0.0</span>
-    <span class="tag">3MB</span>
+    <span class="tag">v1.1.0</span>
+    <span class="tag">1.7MB</span>
     <span class="tag">Emulator</span>
   </div>
 </div>
@@ -134,9 +143,42 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
     </esp-web-install-button>
   </div>
 
-  <div class="erase-opt">
-    <label><input type="checkbox" id="eraseBefore" checked> Erase flash before writing (recommended for first install)</label>
+  <p id="eraseNote" style="margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:0.5px">
+    ⚠ When the install dialog appears, check "Erase device" — this prevents boot issues from stale flash data.
+  </p>
+</div>
+
+<div class="recovery" id="recovery">
+  <h3>Device Recovery</h3>
+  <p>If your device is stuck, frozen, boot-looping, or the USB keeps disconnecting and reconnecting — follow these steps. This works even if the flash is completely erased.</p>
+
+  <ol class="recovery-steps">
+    <li><strong>Close everything</strong> on your computer that might be using the serial port — browser tabs with flash tools, terminal apps, Arduino IDE, etc. Close them all first.</li>
+    <li><strong>Unplug the device</strong> from USB completely.</li>
+    <li><strong>Find the BOOT button.</strong> It's the small button hidden underneath the up/down page-turn toggle on the side of the device. It's recessed under the rocker — you may need to use a fingernail or something thin to press it.</li>
+    <li><strong>Hold BOOT and plug in USB.</strong> Press and hold the BOOT button, and <em>while still holding it</em>, plug the USB cable into the device. Keep holding BOOT for about 3 seconds after plugging in, then let go.</li>
+    <li><strong>Check the connection.</strong> The USB disconnecting/reconnecting should stop. Your device should now appear as one steady serial port.</li>
+    <li><strong>Flash SUMI.</strong> Using Chrome or Edge, scroll up to the flash section on this page, select SUMI, and click the flash button.</li>
+    <li><strong>Check "Erase device"</strong> when the install dialog appears, then click Install. This takes about 30 seconds.</li>
+  </ol>
+
+  <esp-web-install-button manifest="./manifest-sumi.json">
+    <span slot="unsupported">
+      <p style="color:var(--error);font-size:13px">Web Serial not supported — use Chrome or Edge.</p>
+    </span>
+  </esp-web-install-button>
+
+  <div class="recovery-note">
+    <strong>Still not connecting?</strong> Try a different USB cable (some are charge-only and don't carry data). Try plugging directly into your computer, not through a USB hub. If the device is still cycling, try holding BOOT the entire time — don't let go until after you click flash.<br><br>
+    <strong>Frozen screen?</strong> E-ink screens hold their last image like real ink — even with no power. The frozen display does NOT mean the device is broken. Once firmware is flashed, the screen will refresh normally.<br><br>
+    <strong>Manual recovery:</strong> <code>python -m esptool --chip esp32c3 write_flash 0x0 sumi-full.bin</code>
   </div>
+</div>
+
+<div class="info" id="postFlashTip" style="display:none;border-color:var(--success);margin-top:24px;margin-bottom:40px">
+  <h4 style="color:var(--success)">✓ You're all set</h4>
+  <p>Pop your SD card in and drop some EPUBs on it — SUMI will find them wherever you put them.</p>
+  <p>If you've got a library of existing ebooks, it's worth running them through the <a href="https://sumi.page/convert/" style="color:var(--accent);font-weight:600">Universal Converter</a> first. Most EPUBs are built for color tablets — oversized images, web fonts, heavy CSS. The converter strips all that down and re-tunes everything for e-ink. Same books, just faster rendering and smaller files. Takes a few seconds per batch.</p>
 </div>
 
 <div class="divider"></div>
@@ -149,11 +191,13 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
   │ 0x9000   NVS                 (20KB)              │
   │ 0xE000   OTA Data            (8KB)               │
   ├──────────────────────────────────────────────────┤
-  │ 0x10000  app0: SUMI          (3MB)    ← Reader  │
+  │ 0x10000  app0: SUMI          (6.25MB)  ← Reader │
   ├──────────────────────────────────────────────────┤
-  │ 0x310000 app1: SumiBoy       (3MB)    ← Emulator│
+  │ 0x650000 app1: SumiBoy       (6.25MB)  ← Emu    │
   ├──────────────────────────────────────────────────┤
-  │ 0x610000 SPIFFS              (~10MB)  ← Data    │
+  │ 0xC90000 SPIFFS              (3.4MB)   ← Data   │
+  ├──────────────────────────────────────────────────┤
+  │ 0xFF0000 Core Dump           (64KB)              │
   └──────────────────────────────────────────────────┘</pre>
 </div>
 
@@ -164,9 +208,12 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
 
 <div class="info">
   <h4>Troubleshooting</h4>
-  <p><b>Device not detected?</b> Hold the BOOT button while plugging in USB. Release after 2 seconds. The device should appear as a serial port.</p>
-  <p><b>Flash failed?</b> Try erasing flash first (checkbox above), then flash again. If issues persist, use PlatformIO: <code>pio run -t upload</code></p>
-  <p><b>Manual flash:</b> <code>python -m esptool --chip esp32c3 write_flash 0x10000 firmware.bin</code></p>
+  <p><b>Device not detected?</b> Hold the BOOT button (under the up/down toggle) while plugging in USB. Release after 3 seconds. The device should appear as a serial port.</p>
+  <p><b>Flash failed?</b> Check "Erase device" in the install dialog, then flash again. If issues persist, see the Recovery section above.</p>
+  <p><b>Boot loop?</b> SUMI v0.3.3+ has automatic boot loop recovery — if the device reboots 4 times rapidly it forces itself back to SUMI. If you're stuck on older firmware, follow the Recovery steps above.</p>
+  <p><b>USB keeps disconnecting?</b> The device has no firmware running. Follow the Recovery steps above — holding BOOT while plugging in puts it in download mode with a stable connection.</p>
+  <p><b>Manual flash:</b> <code>python -m esptool --chip esp32c3 write_flash 0x0 sumi-full.bin</code></p>
+  <p><b>Manual SumiBoy:</b> <code>python -m esptool --chip esp32c3 write_flash 0x650000 sumiboy.bin</code></p>
 </div>
 
 </div>
@@ -182,17 +229,33 @@ function selectFirmware(fw) {
   const flasher = document.getElementById('espFlasher');
   const title = document.getElementById('flashTitle');
   const desc = document.getElementById('flashDesc');
+  const eraseNote = document.getElementById('eraseNote');
 
   if (fw === 'lite') {
     flasher.setAttribute('manifest', './manifest-sumi.json');
     title.textContent = 'Flash SUMI';
-    desc.textContent = 'Writes to app0 (0x10000). This is the main reader firmware.';
+    desc.textContent = 'Full install — writes bootloader, partition table, and firmware starting at 0x0.';
+    eraseNote.innerHTML = '⚠ When the install dialog appears, check "Erase device" — this prevents boot issues from stale flash data.';
+    eraseNote.style.color = 'var(--accent)';
   } else {
     flasher.setAttribute('manifest', './manifest-sumiboy.json');
     title.textContent = 'Flash SumiBoy';
-    desc.textContent = 'Writes to app1 (0x310000). Requires SUMI in app0 for dual boot.';
+    desc.textContent = 'Writes emulator to app1 partition (0x650000). Requires SUMI already installed in app0.';
+    eraseNote.innerHTML = '⚠ Do NOT erase device when flashing SumiBoy — it would wipe SUMI. Just flash directly.';
+    eraseNote.style.color = 'var(--error)';
   }
 }
+
+// Show post-flash tip when esp-web-tools finishes successfully
+document.querySelectorAll('esp-web-install-button').forEach(btn => {
+  btn.addEventListener('state-changed', (e) => {
+    if (e.detail.state === 'FINISHED') {
+      const tip = document.getElementById('postFlashTip');
+      tip.style.display = '';
+      tip.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+});
 </script>
 </body>
 </html>

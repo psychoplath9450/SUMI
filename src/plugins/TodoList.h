@@ -160,12 +160,13 @@ class TodoApp : public PluginInterface {
 
     FsFile f;
     if (!SdMan.openFileForRead("TODO", "/data/todo.txt", f)) {
-      // Create sample file
+      // Create sample file — the tasks themselves walk you through setup
       FsFile wf;
       if (SdMan.openFileForWrite("TODO", "/data/todo.txt", wf)) {
-        wf.println("- Sample task 1");
-        wf.println("- Sample task 2");
-        wf.println("X Completed task");
+        wf.println("- Open SD card on your computer");
+        wf.println("- Open /data/todo.txt in a text editor");
+        wf.println("- Replace these with your own tasks");
+        wf.println("X Press OK to check off like this");
         wf.close();
       }
       if (!SdMan.openFileForRead("TODO", "/data/todo.txt", f)) return;

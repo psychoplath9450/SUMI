@@ -72,8 +72,8 @@ bool ZipFile::loadAllFileStatSlims() {
     file.seekCur(8);
     file.read(&fileStat.localHeaderOffset, 4);
 
-    // Bounds check to prevent buffer overflow
-    if (nameLen >= 255) {
+    // Bounds check: buffer is 256 bytes, need room for null terminator
+    if (nameLen > 255) {
       file.seekCur(nameLen + m + k);  // Skip this entry entirely
       continue;
     }
@@ -137,8 +137,8 @@ bool ZipFile::loadFileStatSlim(const char* filename, FileStatSlim* fileStat) {
     file.seekCur(8);
     file.read(&fileStat->localHeaderOffset, 4);
 
-    // Bounds check to prevent buffer overflow
-    if (nameLen >= 255) {
+    // Bounds check: buffer is 256 bytes, need room for null terminator
+    if (nameLen > 255) {
       file.seekCur(nameLen + m + k);  // Skip this entry entirely
       continue;
     }
@@ -253,6 +253,21 @@ bool ZipFile::loadZipDetails() {
   // Offset 16: Offset of start of central directory with respect to the starting disk number (4 bytes)
   memcpy(&zipDetails.totalEntries, &buffer[foundOffset + 10], sizeof(zipDetails.totalEntries));
   memcpy(&zipDetails.centralDirOffset, &buffer[foundOffset + 16], sizeof(zipDetails.centralDirOffset));
+
+  // Sanity check: central directory offset must be within the file
+  // and totalEntries must be reasonable. A truncated/corrupt zip can have
+  // random bytes that match the EOCD signature, giving garbage values.
+  if (zipDetails.centralDirOffset >= fileSize || zipDetails.totalEntries > 65000) {
+    Serial.printf("[%lu] [ZIP] EOCD values invalid (offset=%lu, entries=%u, fileSize=%u) — corrupt zip?\n",
+                  millis(), (unsigned long)zipDetails.centralDirOffset, zipDetails.totalEntries, (unsigned)fileSize);
+    free(buffer);
+    zipDetails = {0, 0, false};
+    if (!wasOpen) {
+      close();
+    }
+    return false;
+  }
+
   zipDetails.isSet = true;
 
   free(buffer);
@@ -333,8 +348,8 @@ int ZipFile::fillUncompressedSizes(std::vector<SizeTarget>& targets, std::vector
     // Skip: comment len already read in k, disk# (2), internal attr (2), external attr (4), local header offset (4)
     file.seekCur(12);
 
-    // Bounds check to prevent buffer overflow
-    if (nameLen >= 255) {
+    // Bounds check: buffer is 256 bytes, need room for null terminator
+    if (nameLen > 255) {
       file.seekCur(nameLen + m + k);  // Skip this entry entirely
       continue;
     }
@@ -634,6 +649,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     const bool ownDict = (dictBuffer == nullptr);
     auto outputBuffer = dictBuffer ? dictBuffer : static_cast<uint8_t*>(malloc(TINFL_LZ_DICT_SIZE));
     if (!outputBuffer) {
+      Serial.printf("[%lu] [ZIP] Failed to allocate outputBuffer (32KB), largest free: %u\n", 
+                    millis(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
       free(fileReadBuffer);
       free(inflator);
       if (!wasOpen) {
@@ -709,8 +726,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
       }
 
       if (status == TINFL_STATUS_DONE) {
-        Serial.printf("[%lu] [ZIP] Decompressed %d bytes into %d bytes\n", millis(), deflatedDataSize,
-                      inflatedDataSize);
         if (!wasOpen) {
           close();
         }

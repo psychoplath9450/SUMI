@@ -25,23 +25,26 @@ class ParsedText {
   TextBlock::BLOCK_STYLE style;
   uint8_t indentLevel;
   bool hyphenationEnabled;
-  bool useGreedyBreaking = true;  // Default to greedy to avoid Knuth-Plass memory spike
+  bool useGreedyBreaking = false;  // Default to DP (minimum-raggedness) for better line breaking
   bool isRtl = false;
 
   std::vector<size_t> computeLineBreaks(int pageWidth, int spaceWidth, const std::vector<uint16_t>& wordWidths,
                                         const AbortCallback& shouldAbort = nullptr) const;
   std::vector<size_t> computeLineBreaksGreedy(int pageWidth, int spaceWidth, const std::vector<uint16_t>& wordWidths,
                                               const AbortCallback& shouldAbort = nullptr) const;
+  std::vector<size_t> computeHyphenatedLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
+                                                  int spaceWidth, std::vector<uint16_t>& wordWidths,
+                                                  const AbortCallback& shouldAbort = nullptr);
+  bool hyphenateWordAtIndex(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
+                            std::vector<uint16_t>& wordWidths, bool allowFallbackBreaks);
   void extractLine(size_t breakIndex, int pageWidth, int spaceWidth, const std::vector<uint16_t>& wordWidths,
                    const std::vector<size_t>& lineBreakIndices,
                    const std::function<void(std::shared_ptr<TextBlock>)>& processLine);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
-  bool preSplitOversizedWords(const GfxRenderer& renderer, int fontId, int pageWidth,
-                              const AbortCallback& shouldAbort = nullptr);
 
  public:
   explicit ParsedText(const TextBlock::BLOCK_STYLE style, const uint8_t indentLevel,
-                      const bool hyphenationEnabled = true, const bool useGreedy = true, const bool rtl = false)
+                      const bool hyphenationEnabled = true, const bool useGreedy = false, const bool rtl = false)
       : style(style),
         indentLevel(indentLevel),
         hyphenationEnabled(hyphenationEnabled),

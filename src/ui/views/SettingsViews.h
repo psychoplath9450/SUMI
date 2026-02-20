@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <Theme.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -17,17 +18,17 @@ namespace ui {
 
 struct SettingsMenuView {
 #if FEATURE_PLUGINS && FEATURE_BLUETOOTH
-  static constexpr const char* const ITEMS[] = {"Apps", "Reader", "Device", "Bluetooth", "Cleanup", "System Info"};
-  static constexpr int ITEM_COUNT = 6;
+  static constexpr const char* const ITEMS[] = {"Apps", "Home Art", "Wireless Transfer", "Reader", "Device", "Bluetooth", "Cleanup", "System Info"};
+  static constexpr int ITEM_COUNT = 8;
 #elif FEATURE_PLUGINS
-  static constexpr const char* const ITEMS[] = {"Apps", "Reader", "Device", "Cleanup", "System Info"};
-  static constexpr int ITEM_COUNT = 5;
+  static constexpr const char* const ITEMS[] = {"Apps", "Home Art", "Wireless Transfer", "Reader", "Device", "Cleanup", "System Info"};
+  static constexpr int ITEM_COUNT = 7;
 #elif FEATURE_BLUETOOTH
-  static constexpr const char* const ITEMS[] = {"Reader", "Device", "Bluetooth", "Cleanup", "System Info"};
-  static constexpr int ITEM_COUNT = 5;
+  static constexpr const char* const ITEMS[] = {"Home Art", "Wireless Transfer", "Reader", "Device", "Bluetooth", "Cleanup", "System Info"};
+  static constexpr int ITEM_COUNT = 7;
 #else
-  static constexpr const char* const ITEMS[] = {"Reader", "Device", "Cleanup", "System Info"};
-  static constexpr int ITEM_COUNT = 4;
+  static constexpr const char* const ITEMS[] = {"Home Art", "Wireless Transfer", "Reader", "Device", "Cleanup", "System Info"};
+  static constexpr int ITEM_COUNT = 6;
 #endif
 
   ButtonBar buttons{"Back", "Open", "", ""};
@@ -71,6 +72,67 @@ struct CleanupMenuView {
 };
 
 void render(const GfxRenderer& r, const Theme& t, const CleanupMenuView& v);
+
+// ============================================================================
+// HomeArtSettingsView - Home screen art theme selection (simple list)
+// ============================================================================
+
+struct HomeArtSettingsView {
+  static constexpr int MAX_THEMES = 16;
+  static constexpr int VISIBLE_ITEMS = 12;
+  
+  // Available themes
+  char themeNames[MAX_THEMES][32] = {};
+  char displayNames[MAX_THEMES][32] = {};
+  int themeCount = 0;
+  int selectedIndex = 0;
+  int appliedIndex = 0;
+  int scrollOffset = 0;
+  bool needsRender = true;
+  
+  void moveUp() {
+    if (selectedIndex > 0) {
+      selectedIndex--;
+      if (selectedIndex < scrollOffset) {
+        scrollOffset = selectedIndex;
+      }
+      needsRender = true;
+    }
+  }
+  
+  void moveDown() {
+    if (selectedIndex < themeCount - 1) {
+      selectedIndex++;
+      if (selectedIndex >= scrollOffset + VISIBLE_ITEMS) {
+        scrollOffset = selectedIndex - VISIBLE_ITEMS + 1;
+      }
+      needsRender = true;
+    }
+  }
+  
+  const char* getCurrentThemeName() const {
+    if (themeCount > 0 && selectedIndex < themeCount) {
+      return themeNames[selectedIndex];
+    }
+    return "default";
+  }
+  
+  const char* getCurrentDisplayName() const {
+    if (themeCount > 0 && selectedIndex < themeCount) {
+      return displayNames[selectedIndex];
+    }
+    return "Default";
+  }
+  
+  const char* getAppliedThemeName() const {
+    if (themeCount > 0 && appliedIndex < themeCount) {
+      return themeNames[appliedIndex];
+    }
+    return "default";
+  }
+};
+
+void render(const GfxRenderer& r, const Theme& t, HomeArtSettingsView& v);
 
 // ============================================================================
 // SystemInfoView - Device information display
@@ -132,7 +194,7 @@ struct ReaderSettingsView {
   static constexpr const char* const STATUS_BAR_VALUES[] = {"None", "Show"};
   static constexpr const char* const ORIENTATION_VALUES[] = {"Portrait", "Landscape CW", "Inverted", "Landscape CCW"};
 
-  static constexpr int SETTING_COUNT = 10;
+  static constexpr int SETTING_COUNT = 11;
   static constexpr int MAX_THEMES = 16;
   static const SettingDef DEFS[SETTING_COUNT];
 
@@ -199,6 +261,73 @@ struct ReaderSettingsView {
 };
 
 void render(const GfxRenderer& r, const Theme& t, const ReaderSettingsView& v);
+
+// ============================================================================
+// InReaderSettingsView - Lightweight settings overlay for use inside the reader
+// Subset of reader settings that can be changed without exiting the book.
+// Excludes Theme and Orientation (require re-cache/restart).
+// ============================================================================
+
+struct InReaderSettingsView {
+  enum class SettingType : uint8_t { Toggle, Enum };
+
+  struct SettingDef {
+    const char* label;
+    SettingType type;
+    const char* const* enumValues;
+    uint8_t enumCount;
+  };
+
+  static constexpr int SETTING_COUNT = 8;
+  static constexpr int VISIBLE_ITEMS = 10;
+  static const SettingDef DEFS[SETTING_COUNT];
+
+  ButtonBar buttons{"Back", "", "<", ">"};
+  uint8_t values[SETTING_COUNT] = {0};
+  int8_t selected = 0;
+  int8_t scrollOffset = 0;
+  bool needsRender = true;
+
+  void moveUp() {
+    selected = (selected == 0) ? SETTING_COUNT - 1 : selected - 1;
+    ensureVisible();
+    needsRender = true;
+  }
+
+  void moveDown() {
+    selected = (selected + 1) % SETTING_COUNT;
+    ensureVisible();
+    needsRender = true;
+  }
+
+  void cycleValue(int delta) {
+    const auto& def = DEFS[selected];
+    if (def.type == SettingType::Toggle) {
+      values[selected] = values[selected] ? 0 : 1;
+    } else {
+      values[selected] = static_cast<uint8_t>((values[selected] + def.enumCount + delta) % def.enumCount);
+    }
+    needsRender = true;
+  }
+
+  const char* getCurrentValueStr(int index) const {
+    const auto& def = DEFS[index];
+    if (def.type == SettingType::Toggle) {
+      return values[index] ? "ON" : "OFF";
+    }
+    if (def.enumCount == 0 || values[index] >= def.enumCount) {
+      return def.enumCount > 0 ? def.enumValues[0] : "???";
+    }
+    return def.enumValues[values[index]];
+  }
+
+  void ensureVisible() {
+    if (selected < scrollOffset) scrollOffset = selected;
+    if (selected >= scrollOffset + VISIBLE_ITEMS) scrollOffset = selected - VISIBLE_ITEMS + 1;
+  }
+};
+
+void render(const GfxRenderer& r, const Theme& t, const InReaderSettingsView& v);
 
 // ============================================================================
 // DeviceSettingsView - Device configuration

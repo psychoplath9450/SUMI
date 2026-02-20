@@ -42,6 +42,9 @@ class LibraryIndex {
   // Returns number of entries read (up to maxEntries).
   static int loadAll(Core& core, Entry* entries, int maxEntries);
 
+  // Find a single entry by hash (low memory usage)
+  static bool findByHash(Core& core, uint32_t hash, Entry& entry);
+
   // Compute hash for a filepath (same hash used everywhere)
   static uint32_t hashPath(const char* path);
 

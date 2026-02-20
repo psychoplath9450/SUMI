@@ -236,9 +236,10 @@ std::vector<std::string> FontManager::listAvailableFonts() {
 
   FsFile entry;
   while (entry.openNext(&dir, O_RDONLY)) {
+    char name[64];
+    entry.getName(name, sizeof(name));
+
     if (entry.isDirectory()) {
-      char name[64];
-      entry.getName(name, sizeof(name));
       // Skip hidden directories
       if (name[0] != '.') {
         // Check if it has at least regular.epdfont
@@ -248,6 +249,9 @@ std::vector<std::string> FontManager::listAvailableFonts() {
           fonts.push_back(name);
         }
       }
+    } else if (name[0] != '.' && isBinFont(name)) {
+      // Standalone .bin font files (e.g., CJK fallback fonts)
+      fonts.push_back(name);
     }
     entry.close();
   }

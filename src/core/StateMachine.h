@@ -24,6 +24,7 @@ class StateMachine {
 
   State* current_ = nullptr;
   StateId currentId_ = StateId::Startup;
+  bool inTransition_ = false;  // Re-entrance guard
 
   // State registry - pointers to pre-allocated state instances
   static constexpr size_t MAX_STATES = 12;

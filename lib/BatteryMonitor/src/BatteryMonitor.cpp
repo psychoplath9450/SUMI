@@ -37,7 +37,11 @@ uint16_t BatteryMonitor::percentageFromMillivolts(uint16_t millivolts) {
 }
 
 uint16_t BatteryMonitor::millivoltsFromRawAdc(uint16_t adc_raw) {
-  esp_adc_cal_characteristics_t adc_chars;
-  esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+  static esp_adc_cal_characteristics_t adc_chars;
+  static bool calibrated = false;
+  if (!calibrated) {
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+    calibrated = true;
+  }
   return esp_adc_cal_raw_to_voltage(adc_raw, &adc_chars);
 }

@@ -18,6 +18,11 @@
 #include "MappedInputManager.h"
 #include "ThemeManager.h"
 
+#if FEATURE_PLUGINS
+#include "PluginHostState.h"
+#include "PluginListState.h"
+#endif
+
 namespace sumi {
 
 FileListState::FileListState(GfxRenderer& renderer)
@@ -65,6 +70,9 @@ void FileListState::enter(Core& core) {
   firstRender_ = true;
   currentScreen_ = Screen::Browse;
   selectedPath_[0] = '\0';
+#if FEATURE_PLUGINS
+  launchPlugin_ = false;
+#endif
 
   loadFiles(core);
 
@@ -229,7 +237,34 @@ bool FileListState::isSupportedFile(const char* name) const {
   if (strcasecmp(ext, "txt") == 0) return true;
   if (strcasecmp(ext, "md") == 0) return true;
   if (strcasecmp(ext, "markdown") == 0) return true;
+
+  // Image formats (opened via Images app)
+  if (strcasecmp(ext, "bmp") == 0) return true;
+  if (strcasecmp(ext, "png") == 0) return true;
+  if (strcasecmp(ext, "jpg") == 0) return true;
+  if (strcasecmp(ext, "jpeg") == 0) return true;
+
+  // Flashcard deck formats (opened via Flashcards app, not the reader)
+  if (strcasecmp(ext, "tsv") == 0) return true;
+  if (strcasecmp(ext, "csv") == 0) return true;
   return false;
+}
+
+bool FileListState::isImageFile(const char* name) const {
+  const char* ext = strrchr(name, '.');
+  if (!ext) return false;
+  ext++;
+  return (strcasecmp(ext, "bmp") == 0 ||
+          strcasecmp(ext, "png") == 0 ||
+          strcasecmp(ext, "jpg") == 0 ||
+          strcasecmp(ext, "jpeg") == 0);
+}
+
+bool FileListState::isFlashcardFile(const char* name) const {
+  const char* ext = strrchr(name, '.');
+  if (!ext) return false;
+  ext++;
+  return (strcasecmp(ext, "tsv") == 0 || strcasecmp(ext, "csv") == 0);
 }
 
 bool FileListState::isConvertibleFile(const char* name) const {
@@ -257,11 +292,7 @@ bool FileListState::isConvertibleFile(const char* name) const {
   if (strcasecmp(ext, "cbr") == 0) return true;
   if (strcasecmp(ext, "cb7") == 0) return true;
 
-  // Image formats (for wallpapers/sleep screens)
-  if (strcasecmp(ext, "jpg") == 0) return true;
-  if (strcasecmp(ext, "jpeg") == 0) return true;
-  if (strcasecmp(ext, "png") == 0) return true;
-  if (strcasecmp(ext, "gif") == 0) return true;
+  // Image formats not natively supported (convert via sumi.page)
   if (strcasecmp(ext, "webp") == 0) return true;
   if (strcasecmp(ext, "tiff") == 0) return true;
   if (strcasecmp(ext, "tif") == 0) return true;
@@ -283,8 +314,7 @@ void FileListState::showConvertMessage(Core& core, const char* filename) {
   const char* formatHint = "EPUB";
   if (ext) {
     ext++;
-    if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0 ||
-        strcasecmp(ext, "png") == 0 || strcasecmp(ext, "gif") == 0 ||
+    if (strcasecmp(ext, "gif") == 0 ||
         strcasecmp(ext, "webp") == 0 || strcasecmp(ext, "tiff") == 0 ||
         strcasecmp(ext, "tif") == 0) {
       formatHint = "BMP";
@@ -431,6 +461,14 @@ StateTransition FileListState::update(Core& core) {
     return StateTransition::to(StateId::Reader);
   }
 
+#if FEATURE_PLUGINS
+  // If a plugin launch was requested (e.g., flashcard deck selected)
+  if (launchPlugin_) {
+    launchPlugin_ = false;
+    return StateTransition::to(StateId::PluginHost);
+  }
+#endif
+
   // Return to home if requested
   if (goHome_) {
     goHome_ = false;
@@ -561,6 +599,40 @@ void FileListState::openSelected(Core& core) {
     // Show friendly conversion message
     showConvertMessage(core, entry.name.c_str());
     currentScreen_ = Screen::ConvertInfo;
+  } else if (isImageFile(entry.name.c_str())) {
+#if FEATURE_PLUGINS
+    // Launch the Images app directly
+    if (pluginHost_) {
+      for (int i = 0; i < PluginListState::pluginCount; i++) {
+        if (strcmp(PluginListState::plugins[i].name, "Images") == 0) {
+          pluginHost_->setPluginFactory(PluginListState::plugins[i].factory);
+          launchPlugin_ = true;
+          Serial.println("[FILES] Launching Images app for image file");
+          return;
+        }
+      }
+    }
+#endif
+  } else if (isFlashcardFile(entry.name.c_str())) {
+#if FEATURE_PLUGINS
+    // Launch the Flashcards app directly
+    if (pluginHost_) {
+      for (int i = 0; i < PluginListState::pluginCount; i++) {
+        if (strcmp(PluginListState::plugins[i].name, "Flashcards") == 0) {
+          pluginHost_->setPluginFactory(PluginListState::plugins[i].factory);
+          launchPlugin_ = true;
+          Serial.println("[FILES] Launching Flashcards app for deck file");
+          return;
+        }
+      }
+    }
+    // Fallback if plugin system unavailable
+    showConvertMessage(core, entry.name.c_str());
+    currentScreen_ = Screen::ConvertInfo;
+#else
+    showConvertMessage(core, entry.name.c_str());
+    currentScreen_ = Screen::ConvertInfo;
+#endif
   } else {
     // Save position for return
     strncpy(core.settings.fileListDir, currentDir_, sizeof(core.settings.fileListDir) - 1);

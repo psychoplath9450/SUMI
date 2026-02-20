@@ -55,7 +55,7 @@ class GfxRenderer {
   // Pre-allocated row buffers for bitmap rendering (reduces heap fragmentation)
   // Sized for max screen dimension (800 pixels): outputRow = 800/4 = 200 bytes, rowBytes = 800*3 = 2400 bytes (24bpp)
   static constexpr size_t BITMAP_OUTPUT_ROW_SIZE = (EInkDisplay::DISPLAY_WIDTH + 3) / 4;
-  static constexpr size_t BITMAP_ROW_BYTES_SIZE = EInkDisplay::DISPLAY_WIDTH * 3;  // 24-bit max
+  static constexpr size_t BITMAP_ROW_BYTES_SIZE = EInkDisplay::DISPLAY_WIDTH * 4;  // 32-bit max
   uint8_t* bitmapOutputRow_ = nullptr;
   uint8_t* bitmapRowBytes_ = nullptr;
   void allocateBitmapRowBuffers();
@@ -106,7 +106,7 @@ class GfxRenderer {
   void begin();
   void insertFont(int fontId, EpdFontFamily font);
   void removeFont(int fontId);
-  void clearWidthCache() { wordWidthCache.clear(); }
+  void clearWidthCache() { std::unordered_map<uint64_t, int16_t>().swap(wordWidthCache); }
   void setExternalFont(ExternalFont* font) { _externalFont = font; }
   ExternalFont* getExternalFont() const { return _externalFont; }
 

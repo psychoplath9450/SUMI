@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "../core/Core.h"
+#include "../core/BootMode.h"
 #include "ThemeManager.h"
 
 namespace sumi {
@@ -42,8 +43,12 @@ StateTransition ErrorState::update(Core& core) {
   Event e;
   while (core.events.pop(e)) {
     if (e.type == EventType::ButtonPress) {
-      // Any button press goes back to file list
-      return StateTransition::to(StateId::FileList);
+      // Try to go to FileList; if we're in READER boot mode it won't be registered,
+      // so the state machine will silently fail. In that case, restart into full UI mode.
+      // We save a UI transition so the next boot goes to Home screen.
+      sumi::saveTransition(sumi::BootMode::UI, nullptr, sumi::ReturnTo::HOME);
+      vTaskDelay(50 / portTICK_PERIOD_MS);
+      ESP.restart();
     }
   }
 

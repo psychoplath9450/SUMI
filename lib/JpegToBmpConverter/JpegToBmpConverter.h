@@ -7,8 +7,7 @@ class Print;
 class ZipFile;
 
 class JpegToBmpConverter {
-  static unsigned char jpegReadCallback(unsigned char* pBuf, unsigned char buf_size,
-                                        unsigned char* pBytes_actually_read, void* pCallback_data);
+  // Internal implementation using JPEGDEC with scaling + Atkinson dithering
   static bool jpegFileToBmpStreamInternal(class FsFile& jpegFile, Print& bmpOut, int targetWidth, int targetHeight,
                                           bool oneBit, bool quickMode = false,
                                           const std::function<bool()>& shouldAbort = nullptr);

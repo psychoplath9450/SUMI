@@ -21,6 +21,7 @@ class ContentOpfParser final : public Print {
     IN_BOOK_TITLE,
     IN_BOOK_AUTHOR,
     IN_BOOK_SUBJECT,
+    IN_BOOK_LANGUAGE,
     IN_MANIFEST,
     IN_SPINE,
     IN_GUIDE,
@@ -44,7 +45,8 @@ class ContentOpfParser final : public Print {
  public:
   std::string title;
   std::string author;
-  std::string subject;  // dc:subject — used for sumi: content type hints
+  std::string subject;   // dc:subject — used for sumi: content type hints
+  std::string language;  // dc:language — BCP-47 tag (e.g. "en", "fr", "de") for hyphenation
   std::string tocNcxPath;
   std::string tocNavPath;  // EPUB 3 nav document path
   std::string coverItemHref;

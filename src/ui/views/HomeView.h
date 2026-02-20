@@ -40,8 +40,9 @@ struct HomeView {
   static constexpr int MAX_TITLE_LEN = 64;
   static constexpr int MAX_AUTHOR_LEN = 48;
   static constexpr int MAX_PATH_LEN = 128;
+  static constexpr int MAX_RECENT_BOOKS = 10;  // All recent books in carousel
 
-  // Current book info
+  // Current book info (the one shown large)
   char bookTitle[MAX_TITLE_LEN] = {0};
   char bookAuthor[MAX_AUTHOR_LEN] = {0};
   char bookPath[MAX_PATH_LEN] = {0};
@@ -68,6 +69,20 @@ struct HomeView {
   int8_t batteryPercent = 100;
   bool needsRender = true;
   bool useArtBackground = false;  // When true, skip clearScreen/buttonBar (baked into art)
+  
+  // Library carousel state
+  struct RecentBookEntry {
+    char title[MAX_TITLE_LEN];
+    char author[MAX_AUTHOR_LEN];
+    char path[MAX_PATH_LEN];
+    uint16_t progress;
+    bool hasThumbnail;
+  };
+  
+  RecentBookEntry recentBooks[MAX_RECENT_BOOKS];
+  int recentBookCount = 0;
+  int selectedBookIndex = 0;  // 0 = current book, 1+ = recent books
+  bool inLibraryMode = false;  // When true, show carousel at bottom
 
   void setBook(const char* title, const char* author, const char* path) {
     strncpy(bookTitle, title, MAX_TITLE_LEN - 1);
@@ -109,9 +124,54 @@ struct HomeView {
       needsRender = true;
     }
   }
+  
+  void addRecentBook(const char* title, const char* author, const char* path, 
+                     uint16_t progress, bool hasThumbnail) {
+    if (recentBookCount >= MAX_RECENT_BOOKS) return;
+    auto& entry = recentBooks[recentBookCount];
+    strncpy(entry.title, title, MAX_TITLE_LEN - 1);
+    entry.title[MAX_TITLE_LEN - 1] = '\0';
+    strncpy(entry.author, author, MAX_AUTHOR_LEN - 1);
+    entry.author[MAX_AUTHOR_LEN - 1] = '\0';
+    strncpy(entry.path, path, MAX_PATH_LEN - 1);
+    entry.path[MAX_PATH_LEN - 1] = '\0';
+    entry.progress = progress;
+    entry.hasThumbnail = hasThumbnail;
+    recentBookCount++;
+  }
+  
+  void clearRecentBooks() {
+    recentBookCount = 0;
+    selectedBookIndex = 0;
+    inLibraryMode = false;
+  }
+  
+  void selectNextBook() {
+    if (recentBookCount > 0) {
+      selectedBookIndex = (selectedBookIndex + 1) % (recentBookCount + 1);
+      needsRender = true;
+    }
+  }
+  
+  void selectPrevBook() {
+    if (recentBookCount > 0) {
+      selectedBookIndex = (selectedBookIndex + recentBookCount) % (recentBookCount + 1);
+      needsRender = true;
+    }
+  }
+  
+  const char* getSelectedPath() const {
+    if (selectedBookIndex == 0) {
+      return bookPath;
+    } else if (selectedBookIndex - 1 < recentBookCount) {
+      return recentBooks[selectedBookIndex - 1].path;
+    }
+    return bookPath;
+  }
 
   void clear() {
     clearBook();
+    clearRecentBooks();
     batteryPercent = 100;
   }
 };

@@ -79,6 +79,8 @@ class ChapterHtmlSlimParser {
   };
   bool inTable_ = false;
   bool inTableCell_ = false;
+  bool inTableCaption_ = false;
+  std::string tableCaption_;
   int nestedTableDepth_ = 0;  // Track nested tables to skip them
   std::vector<std::vector<TableCell>> tableRows_;
   void renderTable();
@@ -94,7 +96,7 @@ class ChapterHtmlSlimParser {
   static constexpr uint32_t MAX_PARSE_TIME_MS = 20000;     // 20 second timeout
   static constexpr uint16_t YIELD_CHECK_INTERVAL = 100;    // Check every 100 iterations
   static constexpr uint16_t CSS_HEAP_CHECK_INTERVAL = 64;  // Check heap for CSS every 64 elements
-  static constexpr size_t MIN_FREE_HEAP = 8192;            // 8KB minimum free heap
+  static constexpr size_t MIN_FREE_HEAP = 4096;            // 4KB minimum free heap
 
   // Pre-parse data URI stripper to prevent expat OOM on large embedded images
   DataUriStripper dataUriStripper_;

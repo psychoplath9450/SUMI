@@ -139,10 +139,17 @@ void XMLCALL TocNcxParser::characterData(void* userData, const XML_Char* s, cons
     if (self->currentLabel.size() + static_cast<size_t>(len) <= MAX_LABEL_LENGTH) {
       self->currentLabel.append(s, len);
     } else if (self->currentLabel.size() < MAX_LABEL_LENGTH) {
-      // Truncate at limit
-      const size_t remaining = MAX_LABEL_LENGTH - self->currentLabel.size();
-      self->currentLabel.append(s, remaining);
-      Serial.printf("[TOC] Label truncated at %zu bytes\n", MAX_LABEL_LENGTH);
+      // Truncate at limit, respecting UTF-8 character boundaries
+      size_t remaining = MAX_LABEL_LENGTH - self->currentLabel.size();
+      if (remaining > static_cast<size_t>(len)) remaining = static_cast<size_t>(len);
+      // Walk back if we'd split a multi-byte UTF-8 sequence
+      while (remaining > 0 && (s[remaining] & 0xC0) == 0x80) {
+        remaining--;
+      }
+      if (remaining > 0) {
+        self->currentLabel.append(s, remaining);
+      }
+      Serial.printf("[TOC] Label truncated at %zu bytes\n", self->currentLabel.size());
     }
   }
 }

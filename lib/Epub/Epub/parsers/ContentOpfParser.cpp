@@ -151,6 +151,11 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     return;
   }
 
+  if (self->state == IN_METADATA && strcmp(name, "dc:language") == 0) {
+    self->state = IN_BOOK_LANGUAGE;
+    return;
+  }
+
   if (self->state == IN_PACKAGE && (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0)) {
     self->state = IN_MANIFEST;
     if (!SdMan.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
@@ -250,8 +255,17 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       }
     }
 
+    // EPUB 3: Check for cover-image property (overrides EPUB 2 meta if present)
+    if (!properties.empty() && FsHelpers::isImageFile(href)) {
+      if (properties == "cover-image" || properties.find("cover-image ") == 0 ||
+          properties.find(" cover-image") != std::string::npos) {
+        self->coverItemHref = href;
+        Serial.printf("[%lu] [COF] Found EPUB 3 cover-image: %s\n", millis(), href.c_str());
+      }
+    }
+
     // Collect CSS files
-    if (mediaType.find("css") != std::string::npos) {
+    if (mediaType == "text/css") {
       self->cssFiles_.push_back(href);
       Serial.printf("[%lu] [COF] Found CSS file: %s\n", millis(), href.c_str());
     }
@@ -341,6 +355,14 @@ void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, 
     }
     return;
   }
+
+  if (self->state == IN_BOOK_LANGUAGE) {
+    // Capture first dc:language tag (BCP-47, e.g. "en", "en-US", "fr")
+    if (self->language.empty() && len > 0) {
+      self->language.append(s, len);
+    }
+    return;
+  }
 }
 
 void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) {
@@ -374,6 +396,11 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
   }
 
   if (self->state == IN_BOOK_SUBJECT && strcmp(name, "dc:subject") == 0) {
+    self->state = IN_METADATA;
+    return;
+  }
+
+  if (self->state == IN_BOOK_LANGUAGE && strcmp(name, "dc:language") == 0) {
     self->state = IN_METADATA;
     return;
   }

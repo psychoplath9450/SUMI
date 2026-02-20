@@ -46,6 +46,7 @@ class PageImage final : public PageElement {
   PageImage(std::shared_ptr<ImageBlock> block, const int16_t xPos, const int16_t yPos)
       : PageElement(xPos, yPos), block(std::move(block)) {}
   PageElementTag getTag() const override { return TAG_PageImage; }
+  uint16_t getImageHeight() const { return block->getHeight(); }
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool black = true) override;
   bool serialize(FsFile& file) override;
   static std::unique_ptr<PageImage> deserialize(FsFile& file);
@@ -58,4 +59,19 @@ class Page {
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool black = true) const;
   bool serialize(FsFile& file) const;
   static std::unique_ptr<Page> deserialize(FsFile& file);
+
+  // Compute total content height from elements (for scroll mode)
+  int contentHeight(int lineHeight) const {
+    int maxBottom = 0;
+    for (const auto& el : elements) {
+      int bottom = el->yPos;
+      if (el->getTag() == TAG_PageImage) {
+        bottom += static_cast<const PageImage*>(el.get())->getImageHeight();
+      } else {
+        bottom += lineHeight;
+      }
+      if (bottom > maxBottom) maxBottom = bottom;
+    }
+    return maxBottom;
+  }
 };

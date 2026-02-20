@@ -7,7 +7,7 @@
 #include "ContentParser.h"
 
 namespace {
-constexpr uint8_t CACHE_FILE_VERSION = 18;  // v18: add underline/strikethrough text decorations
+constexpr uint8_t CACHE_FILE_VERSION = 19;  // v19: add allowTallImages for landscape scroll
 
 // Header layout:
 // - version (1 byte)
@@ -18,12 +18,13 @@ constexpr uint8_t CACHE_FILE_VERSION = 18;  // v18: add underline/strikethrough 
 // - paragraphAlignment (1 byte)
 // - hyphenation (1 byte)
 // - showImages (1 byte)
+// - allowTallImages (1 byte)
 // - viewportWidth (2 bytes)
 // - viewportHeight (2 bytes)
 // - pageCount (2 bytes)
 // - isPartial (1 byte)
 // - lutOffset (4 bytes)
-constexpr uint32_t HEADER_SIZE = 1 + 4 + 4 + 1 + 1 + 1 + 1 + 1 + 2 + 2 + 2 + 1 + 4;
+constexpr uint32_t HEADER_SIZE = 1 + 4 + 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 2 + 2 + 1 + 4;
 }  // namespace
 
 PageCache::PageCache(std::string cachePath) : cachePath_(std::move(cachePath)) {}
@@ -38,6 +39,7 @@ bool PageCache::writeHeader(bool isPartial) {
   serialization::writePod(file_, config_.paragraphAlignment);
   serialization::writePod(file_, config_.hyphenation);
   serialization::writePod(file_, config_.showImages);
+  serialization::writePod(file_, config_.allowTallImages);
   serialization::writePod(file_, config_.viewportWidth);
   serialization::writePod(file_, config_.viewportHeight);
   serialization::writePod(file_, pageCount_);
@@ -129,6 +131,7 @@ bool PageCache::load(const RenderConfig& config) {
   serialization::readPod(file_, fileConfig.paragraphAlignment);
   serialization::readPod(file_, fileConfig.hyphenation);
   serialization::readPod(file_, fileConfig.showImages);
+  serialization::readPod(file_, fileConfig.allowTallImages);
   serialization::readPod(file_, fileConfig.viewportWidth);
   serialization::readPod(file_, fileConfig.viewportHeight);
 

@@ -21,7 +21,9 @@ constexpr int NUM_HEADER_TAGS = sizeof(HEADER_TAGS) / sizeof(HEADER_TAGS[0]);
 // Minimum file size (in bytes) to show progress bar - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_PROGRESS = 50 * 1024;  // 50KB
 
-const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "question", "answer", "quotation"};
+const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "question", "answer", "quotation",
+                            "figure", "figcaption", "section", "article", "aside", "header", "footer", "details",
+                            "summary", "main"};
 constexpr int NUM_BLOCK_TAGS = sizeof(BLOCK_TAGS) / sizeof(BLOCK_TAGS[0]);
 
 const char* BOLD_TAGS[] = {"b", "strong"};
@@ -99,7 +101,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const TextBlock::BLOCK_STYLE style
     makePages();
     pendingEmergencySplit_ = false;
   }
-  currentTextBlock.reset(new ParsedText(style, config.indentLevel, config.hyphenation, true, pendingRtl_));
+  currentTextBlock.reset(new ParsedText(style, config.indentLevel, config.hyphenation, false, pendingRtl_));
 }
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
@@ -124,6 +126,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   if (matches(name, IMAGE_TAGS, NUM_IMAGE_TAGS)) {
+    // Skip all images when memory is critically low (avoid OOM crash during conversion)
+    size_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < 40000) {
+      Serial.printf("[%lu] [EHP] Skipping image - low memory (%zu bytes)\n", millis(), freeHeap);
+      self->depth += 1;
+      return;
+    }
+
     std::string srcAttr;
     std::string altText;
     if (atts != nullptr) {
@@ -244,8 +254,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       if (!self->tableRows_.empty()) {
         self->tableRows_.back().push_back(cell);
       }
+    } else if (strcmp(name, "caption") == 0) {
+      self->inTableCaption_ = true;
     }
-    // thead, tbody, tfoot, caption — just track depth
+    // thead, tbody, tfoot — just track depth
     self->depth += 1;
     return;
   }
@@ -449,7 +461,21 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     return;
   }
 
-  // Inside table but not in a cell — skip (thead text, caption text, etc.)
+  // Inside table caption — collect text
+  if (self->inTable_ && self->inTableCaption_ && self->nestedTableDepth_ == 0) {
+    for (int i = 0; i < len; i++) {
+      if (isWhitespace(s[i])) {
+        if (!self->tableCaption_.empty() && self->tableCaption_.back() != ' ') {
+          self->tableCaption_ += ' ';
+        }
+      } else {
+        self->tableCaption_ += s[i];
+      }
+    }
+    return;
+  }
+
+  // Inside table but not in a cell or caption — skip (thead text, etc.)
   if (self->inTable_) {
     return;
   }
@@ -508,6 +534,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       }
     } else if (strcmp(name, "td") == 0 || strcmp(name, "th") == 0) {
       self->inTableCell_ = false;
+    } else if (strcmp(name, "caption") == 0) {
+      self->inTableCaption_ = false;
     }
     self->depth -= 1;
     return;  // Skip normal endElement processing for table internals
@@ -652,6 +680,8 @@ bool ChapterHtmlSlimParser::initParser() {
   cssStrikethroughUntilDepth = INT_MAX;
   inTable_ = false;
   inTableCell_ = false;
+  inTableCaption_ = false;
+  tableCaption_.clear();
   nestedTableDepth_ = 0;
   tableRows_.clear();
   dataUriStripper_.reset();
@@ -715,9 +745,10 @@ bool ChapterHtmlSlimParser::parseLoop() {
     size_t len = file_.read(static_cast<uint8_t*>(buf), kReadChunkSize);
 
     if (len == 0) {
-      Serial.printf("[%lu] [EHP] File read error\n", millis());
-      cleanupParser();
-      return false;
+      // len==0 is normal EOF — finalize the XML parser
+      XML_ParseBuffer(xmlParser_, 0, 1);
+      done = 1;
+      break;
     }
 
     // Strip data URIs BEFORE expat parses the buffer to prevent OOM on large embedded images.
@@ -761,7 +792,7 @@ bool ChapterHtmlSlimParser::parseLoop() {
     if (pendingEmergencySplit_ && currentTextBlock && !currentTextBlock->isEmpty()) {
       pendingEmergencySplit_ = false;
       const size_t freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-      if (freeHeap < MIN_FREE_HEAP * 2) {
+      if (freeHeap < MIN_FREE_HEAP + (MIN_FREE_HEAP / 4)) {
         Serial.printf("[%lu] [EHP] Low memory (%zu), aborting parse\n", millis(), freeHeap);
         aborted_ = true;
         break;
@@ -874,8 +905,9 @@ void ChapterHtmlSlimParser::makePages() {
   flushPartWordBuffer();
 
   // Check memory before expensive layout operation
+  // Layout needs ~4-6KB for text processing; allow operation if we have 1.25× MIN_FREE_HEAP
   const size_t freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  if (freeHeap < MIN_FREE_HEAP * 2) {
+  if (freeHeap < MIN_FREE_HEAP + (MIN_FREE_HEAP / 4)) {
     Serial.printf("[%lu] [EHP] Insufficient memory for layout (%zu bytes)\n", millis(), freeHeap);
     currentTextBlock.reset();
     aborted_ = true;
@@ -925,6 +957,14 @@ std::string ChapterHtmlSlimParser::cacheImage(const std::string& src) {
     return "";
   }
 
+  // Skip image conversion if heap is critically low (prevents abort from malloc failure)
+  size_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < 20000) {
+    Serial.printf("[%lu] [EHP] Skipping image - low heap (%zu bytes)\n", millis(), freeHeap);
+    consecutiveImageFailures_++;
+    return "";
+  }
+
   // Resolve relative path from chapter base
   std::string resolvedPath = FsHelpers::normalisePath(chapterBasePath + src);
 
@@ -956,7 +996,31 @@ std::string ChapterHtmlSlimParser::cacheImage(const std::string& src) {
     return "";
   }
 
-  // Extract image to temp file (include hash in name for uniqueness)
+  // BMP source: already device-native — extract directly to cache, zero conversion
+  if (FsHelpers::isBmpFile(src)) {
+    FsFile bmpFile;
+    if (!SdMan.openFileForWrite("EHP", cachedBmpPath, bmpFile)) {
+      Serial.printf("[%lu] [EHP] Failed to create cache file for BMP\n", millis());
+      return "";
+    }
+    if (!readItemFn(resolvedPath, bmpFile, 1024)) {
+      Serial.printf("[%lu] [EHP] Failed to extract BMP: %s\n", millis(), resolvedPath.c_str());
+      bmpFile.close();
+      SdMan.remove(cachedBmpPath.c_str());
+      FsFile marker;
+      if (SdMan.openFileForWrite("EHP", failedMarker, marker)) {
+        marker.close();
+      }
+      consecutiveImageFailures_++;
+      return "";
+    }
+    bmpFile.close();
+    consecutiveImageFailures_ = 0;
+    Serial.printf("[%lu] [EHP] Cached BMP direct: %s\n", millis(), cachedBmpPath.c_str());
+    return cachedBmpPath;
+  }
+
+  // JPEG/PNG source: extract to temp, convert to BMP with dithering
   const std::string tempExt = FsHelpers::isPngFile(src) ? ".png" : ".jpg";
   std::string tempPath = imageCachePath + "/.tmp_" + std::to_string(srcHash) + tempExt;
   FsFile tempFile;
@@ -978,7 +1042,7 @@ std::string ChapterHtmlSlimParser::cacheImage(const std::string& src) {
   }
   tempFile.close();
 
-  const int maxImageHeight = config.viewportHeight;
+  const int maxImageHeight = config.allowTallImages ? 2000 : config.viewportHeight;
   ImageConvertConfig convertConfig;
   convertConfig.maxWidth = static_cast<int>(config.viewportWidth);
   convertConfig.maxHeight = maxImageHeight;
@@ -1016,7 +1080,40 @@ void ChapterHtmlSlimParser::addImageToPage(std::shared_ptr<ImageBlock> image) {
     currentPageNextY = 0;
   }
 
-  // Tall images get a dedicated page: flush current page if it has content
+  // In allowTallImages mode (landscape scroll), don't split — one image per page
+  if (config.allowTallImages) {
+    // Flush current page if it has any content
+    if (currentPageNextY > 0) {
+      if (!completePageFn(std::move(currentPage))) {
+        stopRequested_ = true;
+        if (xmlParser_) XML_StopParser(xmlParser_, XML_TRUE);
+        return;
+      }
+      parseStartTime_ = millis();
+      currentPage.reset(new Page());
+      currentPageNextY = 0;
+    }
+
+    // Center image horizontally
+    int xPos = (static_cast<int>(config.viewportWidth) - static_cast<int>(image->getWidth())) / 2;
+    if (xPos < 0) xPos = 0;
+
+    currentPage->elements.push_back(std::make_shared<PageImage>(image, xPos, 0));
+    currentPageNextY = imageHeight + lineHeight;
+
+    // Always complete the page — each image gets its own scrollable page
+    if (!completePageFn(std::move(currentPage))) {
+      stopRequested_ = true;
+      if (xmlParser_) XML_StopParser(xmlParser_, XML_TRUE);
+      return;
+    }
+    parseStartTime_ = millis();
+    currentPage.reset(new Page());
+    currentPageNextY = 0;
+    return;
+  }
+
+  // Normal mode: tall images get a dedicated page, flush current page if it has content
   if (isTallImage && currentPageNextY > 0) {
     if (!completePageFn(std::move(currentPage))) {
       stopRequested_ = true;
@@ -1115,6 +1212,12 @@ std::string ChapterHtmlSlimParser::truncateToFit(const std::string& text, int ma
 void ChapterHtmlSlimParser::renderTable() {
   if (tableRows_.empty() || stopRequested_) return;
 
+  // Skip table rendering if disabled in settings
+  if (!config.showTables) {
+    tableRows_.clear();
+    return;
+  }
+
   // Remove empty rows
   tableRows_.erase(
       std::remove_if(tableRows_.begin(), tableRows_.end(),
@@ -1212,6 +1315,18 @@ void ChapterHtmlSlimParser::renderTable() {
     auto block = std::make_shared<TextBlock>(std::move(words), TextBlock::LEFT_ALIGN);
     addLineToPage(block);
   };
+
+  // Render caption above table if present
+  if (!tableCaption_.empty()) {
+    std::string cap = trimWhitespace(tableCaption_);
+    if (!cap.empty()) {
+      auto capBlock = std::unique_ptr<ParsedText>(new ParsedText(TextBlock::CENTER_ALIGN, config.indentLevel, false, true, false));
+      capBlock->addWord(cap.c_str(), EpdFontFamily::ITALIC);
+      currentTextBlock = std::move(capBlock);
+      makePages();
+    }
+    tableCaption_.clear();
+  }
 
   // Render top border
   makeBorderRow();

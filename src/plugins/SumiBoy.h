@@ -33,17 +33,15 @@ class SumiBoyApp : public PluginInterface {
     h_ = screenH;
     selected_ = 0;  // 0 = Launch, 1 = Back
 
-    // Detect emulator in app1
+    // Detect emulator in app1 with thorough validation
     emulatorPartition_ = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
     if (emulatorPartition_) {
-      uint8_t magic = 0;
-      esp_partition_read(emulatorPartition_, 0, &magic, 1);
-      hasEmulator_ = (magic == 0xE9);  // Valid ESP32 app image
+      hasEmulator_ = validateEmulatorFirmware();
     }
 
     Serial.printf("[SumiBoy] Emulator partition: %s\n",
-                  hasEmulator_ ? "found" : "not installed");
+                  hasEmulator_ ? "found & valid" : "not installed or invalid");
   }
 
   void draw() override {
@@ -94,6 +92,60 @@ class SumiBoyApp : public PluginInterface {
   int selected_ = 0;
   bool hasEmulator_ = false;
   const esp_partition_t* emulatorPartition_ = nullptr;
+
+  /**
+   * Validate the emulator firmware in app1 partition.
+   * Checks the full ESP32 image header, not just a single magic byte.
+   * A corrupt or erased partition will fail this check.
+   */
+  bool validateEmulatorFirmware() {
+    if (!emulatorPartition_) return false;
+
+    // Read the ESP32 image header (24 bytes)
+    // Format: https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/api-reference/system/app_image_format.html
+    uint8_t header[24];
+    if (esp_partition_read(emulatorPartition_, 0, header, sizeof(header)) != ESP_OK) {
+      Serial.println("[SumiBoy] Failed to read partition header");
+      return false;
+    }
+
+    // Byte 0: Magic byte must be 0xE9
+    if (header[0] != 0xE9) {
+      Serial.printf("[SumiBoy] Bad magic: 0x%02X (expected 0xE9)\n", header[0]);
+      return false;
+    }
+
+    // Byte 1: Segment count - must be 1-32 (0 or 0xFF = erased/corrupt)
+    uint8_t segments = header[1];
+    if (segments == 0 || segments > 32) {
+      Serial.printf("[SumiBoy] Bad segment count: %d\n", segments);
+      return false;
+    }
+
+    // Bytes 3-6: Entry point address - must be in valid IRAM/DRAM range for ESP32-C3
+    uint32_t entryPoint = header[3] | (header[4] << 8) | (header[5] << 16) | (header[6] << 24);
+    // ESP32-C3 valid ranges: IRAM 0x40380000-0x403DFFFF, DRAM 0x3FC80000-0x3FCE0000
+    bool validEntry = (entryPoint >= 0x40380000 && entryPoint <= 0x403DFFFF) ||
+                      (entryPoint >= 0x3FC80000 && entryPoint <= 0x3FCE0000) ||
+                      (entryPoint >= 0x42000000 && entryPoint <= 0x42800000);  // Flash mapped
+    if (!validEntry) {
+      Serial.printf("[SumiBoy] Bad entry point: 0x%08X\n", entryPoint);
+      return false;
+    }
+
+    // Check that it's not all 0xFF (erased flash)
+    bool allFF = true;
+    for (int i = 0; i < 24; i++) {
+      if (header[i] != 0xFF) { allFF = false; break; }
+    }
+    if (allFF) {
+      Serial.println("[SumiBoy] Partition appears erased (all 0xFF)");
+      return false;
+    }
+
+    Serial.printf("[SumiBoy] Firmware valid: %d segments, entry=0x%08X\n", segments, entryPoint);
+    return true;
+  }
 
   void drawNoEmulator() {
     int cy = h_ / 2 - 40;
@@ -169,6 +221,20 @@ class SumiBoyApp : public PluginInterface {
   }
 
   void bootToEmulator() {
+    // Re-validate firmware right before booting (could have been corrupted since init)
+    if (!validateEmulatorFirmware()) {
+      d_.fillScreen(0);
+      d_.setCursor(w_ / 2 - 120, h_ / 2 - 10);
+      d_.print("Firmware validation failed!");
+      d_.setCursor(w_ / 2 - 100, h_ / 2 + 20);
+      d_.print("Emulator may be corrupt.");
+      d_.display();
+      delay(3000);
+      hasEmulator_ = false;
+      needsFullRedraw = true;
+      return;
+    }
+
     // Show transition message
     d_.fillScreen(0);
     d_.setCursor(w_ / 2 - 110, h_ / 2);
@@ -176,6 +242,9 @@ class SumiBoyApp : public PluginInterface {
     d_.display();
 
     // Set boot partition to app1 (emulator)
+    // NOTE: The boot loop guard in main.cpp will automatically recover
+    // if the emulator crashes repeatedly - after BOOT_LOOP_THRESHOLD rapid
+    // reboots, the boot partition is forced back to app0 (SUMI).
     esp_err_t err = esp_ota_set_boot_partition(emulatorPartition_);
     if (err != ESP_OK) {
       Serial.printf("[SumiBoy] Failed to set boot partition: %d\n", err);
@@ -189,6 +258,7 @@ class SumiBoyApp : public PluginInterface {
     }
 
     Serial.println("[SumiBoy] Rebooting to emulator...");
+    Serial.flush();
     delay(100);
     ESP.restart();
   }

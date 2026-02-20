@@ -2123,53 +2123,63 @@ public:
         }
     }
     
+    // Convert YYYYMMDD integer to days since epoch (for correct date arithmetic)
+    int32_t dateToDays(uint32_t d) const {
+        int y = d / 10000;
+        int m = (d / 100) % 100;
+        int day = d % 100;
+        // Rata Die algorithm
+        if (m <= 2) { y--; m += 12; }
+        return 365 * y + y / 4 - y / 100 + y / 400 + (153 * (m - 3) + 2) / 5 + day - 306;
+    }
+
     void updateStreak() {
         uint32_t today = getCurrentDate();
-        uint32_t yesterday = today - 1;  // Simplified, doesn't handle month boundaries
-        
-        if (stats.lastStudyDate == 0 || stats.lastStudyDate < yesterday) {
+        int32_t todayDays = dateToDays(today);
+        int32_t lastDays = dateToDays(stats.lastStudyDate);
+        int32_t gap = todayDays - lastDays;
+
+        if (stats.lastStudyDate == 0 || gap > 1) {
             stats.currentStreak = 1;
-        } else if (stats.lastStudyDate == yesterday) {
+        } else if (gap == 1) {
             stats.currentStreak++;
         }
-        // If same day, streak stays the same
-        
+        // If same day (gap == 0), streak stays the same
+
         if (stats.currentStreak > stats.bestStreak) {
             stats.bestStreak = stats.currentStreak;
         }
-        
+
         stats.lastStudyDate = today;
     }
-    
+
     uint32_t getCurrentDate() {
         struct tm timeinfo;
         if (!getLocalTime(&timeinfo, 100)) {
             return 20260101;  // Fallback
         }
-        return (timeinfo.tm_year + 1900) * 10000 + 
-               (timeinfo.tm_mon + 1) * 100 + 
+        return (timeinfo.tm_year + 1900) * 10000 +
+               (timeinfo.tm_mon + 1) * 100 +
                timeinfo.tm_mday;
     }
-    
+
     const char* formatDate(uint32_t date) {
         static char buf[16];
         uint32_t today = getCurrentDate();
-        
-        if (date == today) {
+        int32_t diff = dateToDays(today) - dateToDays(date);
+
+        if (diff == 0) {
             return "Today";
-        } else if (date == today - 1) {
+        } else if (diff == 1) {
             return "Yesterday";
+        } else if (diff > 1 && diff < 7) {
+            snprintf(buf, 16, "%d days ago", diff);
+        } else if (diff >= 7 && diff < 30) {
+            snprintf(buf, 16, "%d weeks ago", diff / 7);
         } else {
-            int diff = today - date;
-            if (diff < 7) {
-                snprintf(buf, 16, "%d days ago", diff);
-            } else if (diff < 30) {
-                snprintf(buf, 16, "%d weeks ago", diff / 7);
-            } else {
-                snprintf(buf, 16, "%d/%d", (date / 100) % 100, date % 100);
-            }
-            return buf;
+            snprintf(buf, 16, "%d/%d", (date / 100) % 100, date % 100);
         }
+        return buf;
     }
   PluginRenderer& d_;
 };

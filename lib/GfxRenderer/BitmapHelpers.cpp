@@ -239,16 +239,19 @@ static inline uint8_t palette1bitToGray(uint8_t index) { return (index & 0x01) ?
 // Used when source is already contrast-enhanced (like cover.bmp)
 class RawAtkinson1BitDitherer {
  public:
-  explicit RawAtkinson1BitDitherer(int width) : width(width) {
-    errorRow0 = new int16_t[width + 4]();
-    errorRow1 = new int16_t[width + 4]();
-    errorRow2 = new int16_t[width + 4]();
+  static constexpr int PADDING = 16;  // Extra padding for safety
+  
+  explicit RawAtkinson1BitDitherer(int width) : width(width), allocSize(width + PADDING) {
+    // Use calloc for zero-initialization
+    errorRow0 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
+    errorRow1 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
+    errorRow2 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
   }
 
   ~RawAtkinson1BitDitherer() {
-    delete[] errorRow0;
-    delete[] errorRow1;
-    delete[] errorRow2;
+    free(errorRow0);
+    free(errorRow1);
+    free(errorRow2);
   }
 
   RawAtkinson1BitDitherer(const RawAtkinson1BitDitherer&) = delete;
@@ -286,11 +289,12 @@ class RawAtkinson1BitDitherer {
     errorRow0 = errorRow1;
     errorRow1 = errorRow2;
     errorRow2 = temp;
-    memset(errorRow2, 0, (width + 4) * sizeof(int16_t));
+    memset(errorRow2, 0, allocSize * sizeof(int16_t));
   }
 
  private:
   int width;
+  int allocSize;
   int16_t* errorRow0;
   int16_t* errorRow1;
   int16_t* errorRow2;
@@ -374,8 +378,9 @@ bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxW
   const int outRowBytes = (outWidth + 31) / 32 * 4;        // 1-bit output, 4-byte aligned
 
   // Allocate buffers for source rows needed per output row
-  auto* srcRows = static_cast<uint8_t*>(malloc(srcRowBytes * maxSrcRowsPerOut));
-  auto* outRow = static_cast<uint8_t*>(malloc(outRowBytes));
+  // Add safety padding to prevent buffer overflows
+  auto* srcRows = static_cast<uint8_t*>(malloc(srcRowBytes * maxSrcRowsPerOut + 32));
+  auto* outRow = static_cast<uint8_t*>(malloc(outRowBytes + 16));
   if (!srcRows || !outRow) {
     Serial.printf("[%lu] [BMP] Failed to allocate buffers\n", millis());
     free(srcRows);

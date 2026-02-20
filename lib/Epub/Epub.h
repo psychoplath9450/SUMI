@@ -51,6 +51,7 @@ class Epub {
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getSubject() const;
+  const std::string& getLanguage() const;
   std::string getCoverBmpPath() const;
   std::string getCoverPreviewBmpPath() const;
   bool generateCoverBmp(bool use1BitDithering = false) const;

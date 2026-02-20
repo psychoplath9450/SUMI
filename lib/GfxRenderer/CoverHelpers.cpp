@@ -44,6 +44,31 @@ bool renderCoverFromBmp(GfxRenderer& renderer, const std::string& bmpPath, int m
     return false;
   }
 
+  // Check if BMP is too large for renderer (max 800 pixels wide)
+  // The renderer's row buffer is pre-allocated for DISPLAY_WIDTH pixels
+  const int maxWidth = 800;
+  if (bitmap.getWidth() > maxWidth) {
+    coverFile.close();
+    Serial.printf("[%lu] [CVR] Cover BMP too large (%dx%d), trying thumbnail\n", 
+                  millis(), bitmap.getWidth(), bitmap.getHeight());
+    
+    // Try to use thumbnail instead
+    // Convert cover.bmp path to thumb.bmp path
+    std::string thumbPath = bmpPath;
+    size_t pos = thumbPath.rfind("cover.bmp");
+    if (pos != std::string::npos) {
+      thumbPath.replace(pos, 9, "thumb.bmp");
+      if (SdMan.exists(thumbPath.c_str())) {
+        // Recursive call with thumbnail
+        return renderCoverFromBmp(renderer, thumbPath, marginTop, marginRight,
+                                  marginBottom, marginLeft, pagesUntilFullRefresh,
+                                  pagesPerRefreshValue, turnOffScreen);
+      }
+    }
+    Serial.printf("[%lu] [CVR] No thumbnail available, skipping cover\n", millis());
+    return false;
+  }
+
   // Calculate viewport (accounting for margins)
   const int viewportWidth = renderer.getScreenWidth() - marginLeft - marginRight;
   const int viewportHeight = renderer.getScreenHeight() - marginTop - marginBottom;
@@ -55,7 +80,13 @@ bool renderCoverFromBmp(GfxRenderer& renderer, const std::string& bmpPath, int m
   renderer.drawBitmap(bitmap, rect.x, rect.y, rect.width, rect.height);
 
   // Display with refresh logic
-  if (pagesUntilFullRefresh <= 1) {
+  // pagesUntilFullRefresh == 0: FULL_REFRESH (first cover, ensures clean display)
+  // pagesUntilFullRefresh == 1: HALF_REFRESH (quality refresh)
+  // pagesUntilFullRefresh > 1: FAST_REFRESH (speed)
+  if (pagesUntilFullRefresh <= 0) {
+    renderer.displayBuffer(EInkDisplay::FULL_REFRESH, turnOffScreen);
+    pagesUntilFullRefresh = pagesPerRefreshValue;
+  } else if (pagesUntilFullRefresh == 1) {
     renderer.displayBuffer(EInkDisplay::HALF_REFRESH, turnOffScreen);
     pagesUntilFullRefresh = pagesPerRefreshValue;
   } else {

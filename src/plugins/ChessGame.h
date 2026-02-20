@@ -2177,11 +2177,19 @@ public:
             if (isWhite) { wCastleK = wCastleQ = false; }
             else { bCastleK = bCastleQ = false; }
         }
+        // Revoke castling rights when a rook moves from its home square
         if (type == 2) {
             if (move.fr == 7 && move.fc == 7) wCastleK = false;
             if (move.fr == 7 && move.fc == 0) wCastleQ = false;
             if (move.fr == 0 && move.fc == 7) bCastleK = false;
             if (move.fr == 0 && move.fc == 0) bCastleQ = false;
+        }
+        // Revoke castling rights when a rook is captured on its home square
+        if (move.captured != 0) {
+            if (move.tr == 7 && move.tc == 7) wCastleK = false;
+            if (move.tr == 7 && move.tc == 0) wCastleQ = false;
+            if (move.tr == 0 && move.tc == 7) bCastleK = false;
+            if (move.tr == 0 && move.tc == 0) bCastleQ = false;
         }
         
         epCol = -1;
@@ -2610,9 +2618,11 @@ public:
     bool pathClear(int fr, int fc, int tr, int tc) {
         int dr = (tr > fr) ? 1 : (tr < fr) ? -1 : 0;
         int dc = (tc > fc) ? 1 : (tc < fc) ? -1 : 0;
-        
+        if (dr == 0 && dc == 0) return true;
+
         int r = fr + dr, c = fc + dc;
         while (r != tr || c != tc) {
+            if (r < 0 || r > 7 || c < 0 || c > 7) return false;
             if (board[r][c] != EMPTY) return false;
             r += dr;
             c += dc;

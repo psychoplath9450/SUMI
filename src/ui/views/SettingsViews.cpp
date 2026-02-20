@@ -1,4 +1,5 @@
 #include "SettingsViews.h"
+#include <SDCardManager.h>
 
 namespace ui {
 
@@ -23,6 +24,7 @@ const ReaderSettingsView::SettingDef ReaderSettingsView::DEFS[SETTING_COUNT] = {
     {"Paragraph Alignment", SettingType::Enum, ALIGNMENT_VALUES, 4},
     {"Hyphenation", SettingType::Toggle, nullptr, 0},
     {"Show Images", SettingType::Toggle, nullptr, 0},
+    {"Show Tables", SettingType::Toggle, nullptr, 0},
     {"Status Bar", SettingType::Enum, STATUS_BAR_VALUES, 2},
     {"Reading Orientation", SettingType::Enum, ORIENTATION_VALUES, 4},
 };
@@ -36,6 +38,19 @@ constexpr const char* const DeviceSettingsView::PAGES_REFRESH_VALUES[];
 constexpr const char* const DeviceSettingsView::TOGGLE_VALUES[];
 constexpr const char* const DeviceSettingsView::FRONT_BUTTON_VALUES[];
 constexpr const char* const DeviceSettingsView::SIDE_BUTTON_VALUES[];
+
+// InReaderSettingsView static definitions
+// Reuses the same value string arrays as ReaderSettingsView
+const InReaderSettingsView::SettingDef InReaderSettingsView::DEFS[SETTING_COUNT] = {
+    {"Font Size", SettingType::Enum, ReaderSettingsView::FONT_SIZE_VALUES, 4},
+    {"Text Layout", SettingType::Enum, ReaderSettingsView::TEXT_LAYOUT_VALUES, 3},
+    {"Line Spacing", SettingType::Enum, ReaderSettingsView::LINE_SPACING_VALUES, 4},
+    {"Alignment", SettingType::Enum, ReaderSettingsView::ALIGNMENT_VALUES, 4},
+    {"Hyphenation", SettingType::Toggle, nullptr, 0},
+    {"Anti-Aliasing", SettingType::Toggle, nullptr, 0},
+    {"Show Images", SettingType::Toggle, nullptr, 0},
+    {"Status Bar", SettingType::Enum, ReaderSettingsView::STATUS_BAR_VALUES, 2},
+};
 
 const DeviceSettingsView::SettingDef DeviceSettingsView::DEFS[SETTING_COUNT] = {
     {"Auto Sleep Timeout", SLEEP_TIMEOUT_VALUES, 5}, {"Sleep Screen", SLEEP_SCREEN_VALUES, 4},
@@ -75,6 +90,37 @@ void render(const GfxRenderer& r, const Theme& t, const CleanupMenuView& v) {
 
   r.displayBuffer();
 }
+
+void render(const GfxRenderer& r, const Theme& t, HomeArtSettingsView& v) {
+  r.clearScreen(t.backgroundColor);
+
+  title(r, t, t.screenMarginTop, "Home Art");
+  
+  const int startY = 60;
+  
+  // Draw list items using standard menuItem style
+  for (int i = 0; i < HomeArtSettingsView::VISIBLE_ITEMS && i + v.scrollOffset < v.themeCount; i++) {
+    int themeIdx = v.scrollOffset + i;
+    int itemY = startY + i * (t.menuItemHeight + t.itemSpacing);
+    
+    bool isSelected = (themeIdx == v.selectedIndex);
+    bool isApplied = (themeIdx == v.appliedIndex);
+    
+    // Build display string with checkmark for applied theme
+    char displayStr[48];
+    if (isApplied) {
+      snprintf(displayStr, sizeof(displayStr), "%s  *", v.displayNames[themeIdx]);
+    } else {
+      strncpy(displayStr, v.displayNames[themeIdx], sizeof(displayStr) - 1);
+      displayStr[sizeof(displayStr) - 1] = '\0';
+    }
+    
+    menuItem(r, t, itemY, displayStr, isSelected);
+  }
+
+  r.displayBuffer();
+}
+
 
 void render(const GfxRenderer& r, const Theme& t, const SystemInfoView& v) {
   r.clearScreen(t.backgroundColor);
@@ -126,6 +172,53 @@ void render(const GfxRenderer& r, const Theme& t, const DeviceSettingsView& v) {
   }
 
 
+  r.displayBuffer();
+}
+
+void render(const GfxRenderer& r, const Theme& t, const InReaderSettingsView& v) {
+  r.clearScreen(t.backgroundColor);
+
+  title(r, t, t.screenMarginTop, "Reader Settings");
+
+  const int startY = 60;
+  const int itemH = t.menuItemHeight + t.itemSpacing;
+  const int screenH = r.getScreenHeight();
+  // Dynamically calculate visible items based on screen height
+  // Reserve space for title (60px) and button bar (~40px)
+  const int availableH = screenH - startY - 45;
+  const int visibleItems = std::min(static_cast<int>(InReaderSettingsView::VISIBLE_ITEMS),
+                                    std::max(1, availableH / itemH));
+  const int end = std::min(v.scrollOffset + visibleItems,
+                           static_cast<int>(InReaderSettingsView::SETTING_COUNT));
+  for (int i = v.scrollOffset; i < end; i++) {
+    const int y = startY + (i - v.scrollOffset) * itemH;
+    const auto& def = InReaderSettingsView::DEFS[i];
+
+    if (def.type == InReaderSettingsView::SettingType::Toggle) {
+      toggle(r, t, y, def.label, v.values[i] != 0, i == v.selected);
+    } else {
+      enumValue(r, t, y, def.label, v.getCurrentValueStr(i), i == v.selected);
+    }
+  }
+
+  // Scroll indicators when list overflows
+  const int pageW = r.getScreenWidth();
+  const int arrowX = pageW - 20;
+  if (v.scrollOffset > 0) {
+    // Up arrow at top-right: small triangle pointing up
+    r.drawLine(arrowX, startY - 4, arrowX - 6, startY + 6, t.primaryTextBlack);
+    r.drawLine(arrowX, startY - 4, arrowX + 6, startY + 6, t.primaryTextBlack);
+    r.drawLine(arrowX - 6, startY + 6, arrowX + 6, startY + 6, t.primaryTextBlack);
+  }
+  if (end < InReaderSettingsView::SETTING_COUNT) {
+    // Down arrow at bottom-right: small triangle pointing down
+    const int bottomY = startY + visibleItems * itemH + 4;
+    r.drawLine(arrowX, bottomY + 10, arrowX - 6, bottomY, t.primaryTextBlack);
+    r.drawLine(arrowX, bottomY + 10, arrowX + 6, bottomY, t.primaryTextBlack);
+    r.drawLine(arrowX - 6, bottomY, arrowX + 6, bottomY, t.primaryTextBlack);
+  }
+
+  buttonBar(r, t, v.buttons);
   r.displayBuffer();
 }
 

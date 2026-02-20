@@ -27,6 +27,7 @@
 #include "../content/ProgressManager.h"
 #include "../content/LibraryIndex.h"
 #include "../content/ReaderNavigation.h"
+#include "../content/RecentBooks.h"
 #include "../core/BootMode.h"
 #include "../core/Core.h"
 #include "../ui/Elements.h"
@@ -34,7 +35,7 @@
 
 namespace sumi {
 
-static constexpr int kCacheTaskStackSize = 12288;
+static constexpr int kCacheTaskStackSize = 24576;  // 24KB - JPEGDEC needs more stack than picojpeg
 static constexpr int kCacheTaskStopTimeoutMs = 10000;  // 10s - generous for slow SD operations
 
 namespace {
@@ -203,8 +204,9 @@ ReaderState::ReaderState(GfxRenderer& renderer)
       contentLoaded_(false),
       currentSpineIndex_(0),
       currentSectionPage_(0),
-      pagesUntilFullRefresh_(1),
-      tocView_{} {
+      pagesUntilFullRefresh_(1),  // 1 = first render uses HALF_REFRESH (FULL causes 5 flashes)
+      tocView_{},
+      settingsView_{} {
   contentPath_[0] = '\0';
 }
 
@@ -227,6 +229,9 @@ void ReaderState::enter(Core& core) {
   contentLoaded_ = false;
   loadFailed_ = false;
   needsRender_ = true;
+  tocMode_ = false;
+  settingsMode_ = false;
+  pagesUntilFullRefresh_ = 1;  // Use HALF_REFRESH on first render (FULL causes 5 flashes)
   stopBackgroundCaching();  // Ensure any previous task is stopped
   parser_.reset();          // Safe - task is stopped
   parserSpineIndex_ = -1;
@@ -288,12 +293,31 @@ void ReaderState::enter(Core& core) {
   strncpy(core.settings.lastBookPath, contentPath_, sizeof(core.settings.lastBookPath) - 1);
   core.settings.lastBookPath[sizeof(core.settings.lastBookPath) - 1] = '\0';
   core.settings.save(core.storage);
+  
+  // Record in recent books list
+  const auto& meta = core.content.metadata();
+  RecentBooks::recordOpen(core, contentPath_, meta.title, meta.author, 0);
 
   // Setup cache directories for all content types
   // Reset state for new book
   textStartIndex_ = 0;
   hasCover_ = false;
   thumbnailDone_ = false;
+  scrollY_ = 0;
+  pageContentHeight_ = 0;
+
+  // Detect landscape scroll content (comics, scanned docs)
+  // These content types benefit from landscape (800px wide) with vertical scrolling
+  const ContentHint hint = core.content.metadata().hint;
+  landscapeScroll_ = (hint == ContentHint::Comic ||
+                      hint == ContentHint::ComicRtl ||
+                      hint == ContentHint::ComicWebtoon ||
+                      hint == ContentHint::BookScanned);
+  if (landscapeScroll_) {
+    renderer_.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+    Serial.printf("[READER] Landscape scroll mode for hint %d\n", static_cast<int>(hint));
+  }
+
   switch (core.content.metadata().type) {
     case ContentType::Epub: {
       auto* provider = core.content.asEpub();
@@ -355,6 +379,14 @@ void ReaderState::exit(Core& core) {
   stopBackgroundCaching();
 
   if (contentLoaded_) {
+    // Generate thumbnail on exit (not during background task) to avoid buffer conflicts
+    // Only generate if not already done and cover exists
+    if (!thumbnailDone_) {
+      Serial.println("[READER] Generating thumbnail on exit...");
+      core.content.generateThumbnail();
+      thumbnailDone_ = true;
+    }
+
     // Save progress at last rendered position (not current requested position)
     ProgressManager::Progress progress;
     // If on cover, save as (0, 0) - cover is implicit start
@@ -377,6 +409,10 @@ void ReaderState::exit(Core& core) {
     }
     LibraryIndex::updateEntry(core, contentPath_, libCurrent, libTotal,
                               static_cast<uint8_t>(core.content.metadata().hint));
+    
+    // Update progress in recent books
+    uint16_t progressPercent = libTotal > 0 ? (libCurrent * 100 / libTotal) : 0;
+    RecentBooks::updateProgress(core, contentPath_, progressPercent);
 
     // Safe to reset - task is stopped, we own pageCache_/parser_
     parser_.reset();
@@ -392,6 +428,9 @@ void ReaderState::exit(Core& core) {
 
   contentLoaded_ = false;
   contentPath_[0] = '\0';
+  landscapeScroll_ = false;
+  scrollY_ = 0;
+  pageContentHeight_ = 0;
 
   // Reset orientation to Portrait for UI
   renderer_.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -409,7 +448,11 @@ StateTransition ReaderState::update(Core& core) {
 
   Event e;
   while (core.events.pop(e)) {
-    // Route input to TOC handler when in TOC mode
+    // Route input to overlay handlers
+    if (settingsMode_) {
+      handleSettingsInput(core, e);
+      continue;
+    }
     if (tocMode_) {
       handleTocInput(core, e);
       continue;
@@ -417,6 +460,58 @@ StateTransition ReaderState::update(Core& core) {
 
     switch (e.type) {
       case EventType::ButtonPress:
+        if (landscapeScroll_) {
+          // Landscape scroll: Up/Down scroll within page, Left/Right navigate pages
+          const int scrollStep = renderer_.getScreenHeight() * 3 / 4;  // 75% of viewport
+          switch (e.button) {
+            case Button::Down:
+            case Button::Right: {
+              const int maxScroll = pageContentHeight_ - renderer_.getScreenHeight();
+              if (maxScroll > 0 && scrollY_ < maxScroll) {
+                scrollY_ = std::min(scrollY_ + scrollStep, maxScroll);
+                needsRender_ = true;
+              } else {
+                scrollY_ = 0;
+                pageContentHeight_ = 0;
+                navigateNext(core);
+              }
+              break;
+            }
+            case Button::Up:
+            case Button::Left:
+              if (scrollY_ > 0) {
+                scrollY_ = std::max(0, scrollY_ - scrollStep);
+                needsRender_ = true;
+              } else {
+                scrollY_ = 0;
+                pageContentHeight_ = 0;
+                navigatePrev(core);
+              }
+              break;
+            case Button::Center:
+              // Defer to ButtonRelease — allows long-press to open settings first
+              break;
+            case Button::Back:
+              exitToUI(core);
+              return StateTransition::stay(StateId::Reader);
+            case Button::Power:
+              if (core.settings.shortPwrBtn == Settings::PowerPageTurn) {
+                const int maxScroll = pageContentHeight_ - renderer_.getScreenHeight();
+                if (maxScroll > 0 && scrollY_ < maxScroll) {
+                  scrollY_ = std::min(scrollY_ + scrollStep, maxScroll);
+                  needsRender_ = true;
+                } else {
+                  scrollY_ = 0;
+                  pageContentHeight_ = 0;
+                  navigateNext(core);
+                }
+              } else if (core.settings.shortPwrBtn == Settings::PowerRefresh) {
+                renderer_.displayBuffer(EInkDisplay::FULL_REFRESH);
+              }
+              break;
+          }
+        } else {
+        // Normal portrait mode
         switch (e.button) {
           case Button::Right:
           case Button::Down:
@@ -429,9 +524,7 @@ StateTransition ReaderState::update(Core& core) {
             break;
 
           case Button::Center:
-            if (core.content.tocCount() > 0) {
-              enterTocMode(core);
-            }
+            // Defer to ButtonRelease — allows long-press to open settings first
             break;
           case Button::Back:
             exitToUI(core);
@@ -442,10 +535,31 @@ StateTransition ReaderState::update(Core& core) {
               navigateNext(core);
             } else if (core.settings.shortPwrBtn == Settings::PowerRefresh) {
               // Manual screen refresh — clear ghosting
-              renderer_.displayBuffer(EInkDisplay::HALF_REFRESH);
-              core.display.markDirty();
+              renderer_.displayBuffer(EInkDisplay::FULL_REFRESH);
             }
             break;
+        }
+        }
+        break;
+
+      case EventType::ButtonLongPress:
+        if (e.button == Button::Center) {
+          centerLongPressFired_ = true;
+          enterSettingsMode(core);
+        }
+        break;
+
+      case EventType::ButtonRelease:
+        if (e.button == Button::Center) {
+          if (centerLongPressFired_) {
+            // Long press already handled — suppress short-press action
+            centerLongPressFired_ = false;
+          } else if (!settingsMode_ && !tocMode_) {
+            // Short press Center: open TOC
+            if (core.content.tocCount() > 0) {
+              enterTocMode(core);
+            }
+          }
         }
         break;
 
@@ -485,7 +599,9 @@ void ReaderState::render(Core& core) {
     return;
   }
 
-  if (tocMode_) {
+  if (settingsMode_) {
+    renderSettingsOverlay(core);
+  } else if (tocMode_) {
     renderTocOverlay(core);
   } else {
     renderCurrentPage(core);
@@ -598,6 +714,8 @@ void ReaderState::applyNavResult(const ReaderNavigation::NavResult& result, Core
   currentSectionPage_ = result.position.sectionPage;
   currentPage_ = result.position.flatPage;
   needsRender_ = result.needsRender;
+  scrollY_ = 0;  // Reset scroll for new page
+  pageContentHeight_ = 0;
   if (result.needsCacheReset) {
     parser_.reset();  // Safe - task already stopped by caller
     parserSpineIndex_ = -1;
@@ -759,31 +877,69 @@ void ReaderState::renderCachedPage(Core& core) {
 
   const int fontId = core.settings.getReaderFontId(theme);
 
-  renderPageContents(core, *page, vp.marginTop, vp.marginRight, vp.marginBottom, vp.marginLeft);
-  renderStatusBar(core, vp.marginRight, vp.marginBottom, vp.marginLeft);
+  // In landscape scroll mode, compute content height and apply scroll offset
+  if (landscapeScroll_) {
+    const int lineHeight = renderer_.getLineHeight(fontId);
+    pageContentHeight_ = page->contentHeight(lineHeight);
 
-  displayWithRefresh(core);
+    // Render with scroll offset (drawPixel clips out-of-bounds pixels)
+    renderPageContents(core, *page, vp.marginTop - scrollY_, vp.marginRight, vp.marginBottom, vp.marginLeft);
 
-  // Grayscale text rendering (anti-aliasing) - skip for custom fonts (saves ~48KB)
-  if (core.settings.textAntiAliasing && !FONT_MANAGER.isUsingCustomReaderFont() &&
-      renderer_.fontSupportsGrayscale(fontId) && renderer_.storeBwBuffer()) {
-    renderer_.clearScreen(0x00);
-    renderer_.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    page->render(renderer_, fontId, vp.marginLeft, vp.marginTop, theme.primaryTextBlack);
-    renderer_.copyGrayscaleLsbBuffers();
+    // Draw scroll indicator if content extends beyond viewport
+    const int screenH = renderer_.getScreenHeight();
+    const int screenW = renderer_.getScreenWidth();
+    if (pageContentHeight_ > screenH) {
+      const int barX = screenW - 3;
+      const int trackH = screenH - 4;
+      const int thumbH = std::max(8, trackH * screenH / pageContentHeight_);
+      const int maxScroll = pageContentHeight_ - screenH;
+      const int thumbY = 2 + (maxScroll > 0 ? (scrollY_ * (trackH - thumbH) / maxScroll) : 0);
+      for (int y = thumbY; y < thumbY + thumbH && y < screenH - 2; y++) {
+        renderer_.drawPixel(barX, y);
+        renderer_.drawPixel(barX - 1, y);
+      }
+    }
 
-    renderer_.clearScreen(0x00);
-    renderer_.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    page->render(renderer_, fontId, vp.marginLeft, vp.marginTop, theme.primaryTextBlack);
-    renderer_.copyGrayscaleMsbBuffers();
+    // Show page number at bottom-right
+    const int statusY = screenH - 12;
+    char pageStr[16];
+    if (pageCache_) {
+      snprintf(pageStr, sizeof(pageStr), "%d/%zu", currentSectionPage_ + 1, pageCache_->pageCount());
+    } else {
+      snprintf(pageStr, sizeof(pageStr), "%d", currentSectionPage_ + 1);
+    }
+    const int tw = renderer_.getTextWidth(theme.smallFontId, pageStr);
+    renderer_.drawText(theme.smallFontId, screenW - tw - 8, statusY, pageStr, true);
 
-    const bool turnOffScreen = core.settings.sunlightFadingFix != 0;
-    renderer_.displayGrayBuffer(turnOffScreen);
-    renderer_.setRenderMode(GfxRenderer::BW);
-    renderer_.restoreBwBuffer();
+    displayWithRefresh(core);
+  } else {
+    renderPageContents(core, *page, vp.marginTop, vp.marginRight, vp.marginBottom, vp.marginLeft);
+    renderStatusBar(core, vp.marginRight, vp.marginBottom, vp.marginLeft);
+
+    displayWithRefresh(core);
+
+    // Grayscale text rendering (anti-aliasing) - skip for custom fonts (saves ~48KB)
+    if (core.settings.textAntiAliasing && !FONT_MANAGER.isUsingCustomReaderFont() &&
+        renderer_.fontSupportsGrayscale(fontId) && renderer_.storeBwBuffer()) {
+      renderer_.clearScreen(0x00);
+      renderer_.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+      page->render(renderer_, fontId, vp.marginLeft, vp.marginTop, theme.primaryTextBlack);
+      renderer_.copyGrayscaleLsbBuffers();
+
+      renderer_.clearScreen(0x00);
+      renderer_.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+      page->render(renderer_, fontId, vp.marginLeft, vp.marginTop, theme.primaryTextBlack);
+      renderer_.copyGrayscaleMsbBuffers();
+
+      const bool turnOffScreen = core.settings.sunlightFadingFix != 0;
+      renderer_.displayGrayBuffer(turnOffScreen);
+      renderer_.setRenderMode(GfxRenderer::BW);
+      renderer_.restoreBwBuffer();
+    }
   }
 
-  Serial.printf("[READER] Rendered page %d/%d\n", currentSectionPage_ + 1, pageCount);
+  Serial.printf("[READER] Rendered page %d/%d%s\n", currentSectionPage_ + 1, pageCount,
+                landscapeScroll_ ? " (scroll)" : "");
 }
 
 bool ReaderState::ensurePageCached(Core& core, uint16_t pageNum) {
@@ -828,7 +984,8 @@ void ReaderState::loadCacheFromDisk(Core& core) {
   ContentType type = core.content.metadata().type;
 
   const auto vp = getReaderViewport();
-  const auto config = core.settings.getRenderConfig(theme, vp.width, vp.height);
+  auto config = core.settings.getRenderConfig(theme, vp.width, vp.height);
+  config.allowTallImages = landscapeScroll_;
 
   std::string cachePath;
   if (type == ContentType::Epub) {
@@ -859,7 +1016,8 @@ void ReaderState::createOrExtendCache(Core& core) {
   ContentType type = core.content.metadata().type;
 
   const auto vp = getReaderViewport();
-  const auto config = core.settings.getRenderConfig(theme, vp.width, vp.height);
+  auto config = core.settings.getRenderConfig(theme, vp.width, vp.height);
+  config.allowTallImages = landscapeScroll_;
 
   std::string cachePath;
   if (type == ContentType::Epub) {
@@ -971,7 +1129,11 @@ void ReaderState::displayWithRefresh(Core& core) {
   if (ppr == 0) {
     // "Never" — always fast refresh, no automatic half refresh
     renderer_.displayBuffer(EInkDisplay::FAST_REFRESH, turnOffScreen);
-  } else if (pagesUntilFullRefresh_ <= 1) {
+  } else if (pagesUntilFullRefresh_ <= 0) {
+    // First render - use FULL_REFRESH for clean display
+    renderer_.displayBuffer(EInkDisplay::FULL_REFRESH, turnOffScreen);
+    pagesUntilFullRefresh_ = ppr;
+  } else if (pagesUntilFullRefresh_ == 1) {
     renderer_.displayBuffer(EInkDisplay::HALF_REFRESH, turnOffScreen);
     pagesUntilFullRefresh_ = ppr;
   } else {
@@ -1034,10 +1196,11 @@ void ReaderState::startBackgroundCaching(Core& core) {
   const int spineIndex = currentSpineIndex_;
   const bool coverExists = hasCover_;
   const int textStart = textStartIndex_;
+  const bool isLandscapeScroll = landscapeScroll_;
 
   cacheTask_.start(
       "PageCache", kCacheTaskStackSize,
-      [this, sectionPage, spineIndex, coverExists, textStart]() {
+      [this, sectionPage, spineIndex, coverExists, textStart, isLandscapeScroll]() {
         const Theme& theme = THEME_MANAGER.current();
         Serial.println("[READER] Background cache task started");
 
@@ -1058,7 +1221,8 @@ void ReaderState::startBackgroundCaching(Core& core) {
         // Build cache if it doesn't exist
         if (!pageCache_ && !cacheTask_.shouldStop()) {
           const auto vp = getReaderViewport();
-          const auto config = coreRef.settings.getRenderConfig(theme, vp.width, vp.height);
+          auto config = coreRef.settings.getRenderConfig(theme, vp.width, vp.height);
+          config.allowTallImages = isLandscapeScroll;
           std::string cachePath;
 
           if (type == ContentType::Epub) {
@@ -1098,12 +1262,8 @@ void ReaderState::startBackgroundCaching(Core& core) {
           }
         }
 
-        // Generate thumbnail from cover for HomeState (lower priority than page cache)
-        // Only attempt once per book open — skip if already tried (success or failure)
-        if (!thumbnailDone_ && !cacheTask_.shouldStop()) {
-          coreRef.content.generateThumbnail();
-          thumbnailDone_ = true;
-        }
+        // Thumbnail generation moved to ReaderState::exit() to avoid buffer conflicts
+        // with concurrent cover/page rendering
 
         if (!cacheTask_.shouldStop()) {
           Serial.println("[READER] Background cache task completed");
@@ -1160,6 +1320,7 @@ void ReaderState::enterTocMode(Core& core) {
 
 void ReaderState::exitTocMode() {
   tocMode_ = false;
+  centerLongPressFired_ = false;  // Reset so next short-press works normally
   needsRender_ = true;
   Serial.println("[READER] Exited TOC mode");
 }
@@ -1206,8 +1367,7 @@ void ReaderState::handleTocInput(Core& core, const Event& e) {
         tocView_.moveDown();
         needsRender_ = true;
       } else if (core.settings.shortPwrBtn == Settings::PowerRefresh) {
-        renderer_.displayBuffer(EInkDisplay::HALF_REFRESH);
-        core.display.markDirty();
+        renderer_.displayBuffer(EInkDisplay::FULL_REFRESH);
       }
       break;
   }
@@ -1402,6 +1562,119 @@ void ReaderState::renderTocOverlay(Core& core) {
   core.display.markDirty();
 }
 
+// ============================================================================
+// In-Reader Settings Overlay (long-press Select)
+// ============================================================================
+
+void ReaderState::enterSettingsMode(Core& core) {
+  stopBackgroundCaching();
+  loadInReaderSettings(core);
+  settingsView_.selected = 0;
+  settingsView_.scrollOffset = 0;
+  settingsMode_ = true;
+  needsRender_ = true;
+  Serial.println("[READER] Entered settings mode");
+}
+
+void ReaderState::exitSettingsMode(Core& core) {
+  settingsMode_ = false;
+  centerLongPressFired_ = false;  // Reset so next short-press works normally
+  needsRender_ = true;
+  startBackgroundCaching(core);
+  Serial.println("[READER] Exited settings mode");
+}
+
+void ReaderState::handleSettingsInput(Core& core, const Event& e) {
+  if (e.type != EventType::ButtonPress) {
+    return;
+  }
+
+  switch (e.button) {
+    case Button::Up:
+      settingsView_.moveUp();
+      needsRender_ = true;
+      break;
+
+    case Button::Down:
+      settingsView_.moveDown();
+      needsRender_ = true;
+      break;
+
+    case Button::Left:
+      settingsView_.cycleValue(-1);
+      applyInReaderSettings(core);
+      needsRender_ = true;
+      break;
+
+    case Button::Right:
+    case Button::Center:
+      settingsView_.cycleValue(1);
+      applyInReaderSettings(core);
+      needsRender_ = true;
+      break;
+
+    case Button::Back:
+      exitSettingsMode(core);
+      break;
+
+    case Button::Power:
+      if (core.settings.shortPwrBtn == Settings::PowerRefresh) {
+        renderer_.displayBuffer(EInkDisplay::FULL_REFRESH);
+      }
+      break;
+  }
+}
+
+void ReaderState::renderSettingsOverlay(Core& core) {
+  ui::render(renderer_, THEME_MANAGER.current(), settingsView_);
+  core.display.markDirty();
+}
+
+void ReaderState::loadInReaderSettings(Core& core) {
+  const auto& s = core.settings;
+  // Matches InReaderSettingsView::DEFS order
+  settingsView_.values[0] = s.fontSize;
+  settingsView_.values[1] = s.textLayout;
+  settingsView_.values[2] = s.lineSpacing;
+  settingsView_.values[3] = s.paragraphAlignment;
+  settingsView_.values[4] = s.hyphenation;
+  settingsView_.values[5] = s.textAntiAliasing;
+  settingsView_.values[6] = s.showImages;
+  settingsView_.values[7] = s.statusBar;
+}
+
+void ReaderState::applyInReaderSettings(Core& core) {
+  auto& s = core.settings;
+
+  // Detect if layout-affecting settings changed (requires cache rebuild)
+  bool cacheInvalid = (s.fontSize != settingsView_.values[0] ||
+                        s.textLayout != settingsView_.values[1] ||
+                        s.lineSpacing != settingsView_.values[2] ||
+                        s.paragraphAlignment != settingsView_.values[3] ||
+                        s.hyphenation != settingsView_.values[4] ||
+                        s.showImages != settingsView_.values[6]);
+
+  // Apply all values
+  s.fontSize = settingsView_.values[0];
+  s.textLayout = settingsView_.values[1];
+  s.lineSpacing = settingsView_.values[2];
+  s.paragraphAlignment = settingsView_.values[3];
+  s.hyphenation = settingsView_.values[4];
+  s.textAntiAliasing = settingsView_.values[5];
+  s.showImages = settingsView_.values[6];
+  s.statusBar = settingsView_.values[7];
+
+  // Invalidate page cache if layout changed
+  if (cacheInvalid) {
+    parser_.reset();
+    parserSpineIndex_ = -1;
+    pageCache_.reset();
+  }
+
+  // Persist to disk
+  s.save(core.storage);
+}
+
 void ReaderState::exitToUI(Core& core) {
   Serial.println("[READER] Exiting to UI mode via restart");
 
@@ -1410,6 +1683,13 @@ void ReaderState::exitToUI(Core& core) {
 
   // Save progress at last rendered position
   if (contentLoaded_) {
+    // Generate thumbnail on exit (not during background task) to avoid buffer conflicts
+    if (!thumbnailDone_) {
+      Serial.println("[READER] Generating thumbnail on exit...");
+      core.content.generateThumbnail();
+      thumbnailDone_ = true;
+    }
+
     ProgressManager::Progress progress;
     progress.spineIndex = (lastRenderedSectionPage_ == -1) ? 0 : lastRenderedSpineIndex_;
     progress.sectionPage = (lastRenderedSectionPage_ == -1) ? 0 : lastRenderedSectionPage_;

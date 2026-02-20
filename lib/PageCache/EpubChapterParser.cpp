@@ -1,6 +1,7 @@
 #include "EpubChapterParser.h"
 
 #include <Epub/Page.h>
+#include <Epub/hyphenation/Hyphenator.h>
 #include <Epub/parsers/ChapterHtmlSlimParser.h>
 #include <GfxRenderer.h>
 #include <Html5Normalizer.h>
@@ -151,6 +152,9 @@ bool EpubChapterParser::parsePages(const std::function<void(std::unique_ptr<Page
     }
     return true;
   };
+
+  // Set the book's language for Liang hyphenation patterns (e.g. "en", "fr", "de")
+  Hyphenator::setPreferredLanguage(epub_->getLanguage());
 
   liveParser_.reset(new ChapterHtmlSlimParser(parseHtmlPath_, renderer_, config_, wrappedCallback, nullptr,
                                               chapterBasePath_, imageCachePath_, readItemFn, epub_->getCssParser(),

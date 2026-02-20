@@ -9,6 +9,7 @@
 #include "../core/Types.h"
 #include "../rendering/XtcPageRenderer.h"
 #include "../ui/views/HomeView.h"
+#include "../ui/views/SettingsViews.h"
 #include "State.h"
 
 class ContentParser;
@@ -65,6 +66,11 @@ class ReaderState : public State {
 
   // Whether book has a valid cover image
   bool hasCover_ = false;
+
+  // Landscape scroll mode (for comics/scanned docs)
+  bool landscapeScroll_ = false;  // Active landscape scroll mode
+  int scrollY_ = 0;               // Current vertical scroll offset within page
+  int pageContentHeight_ = 0;     // Total height of current page content
 
   // First text content spine index (from EPUB guide, 0 if not specified)
   int textStartIndex_ = 0;
@@ -147,6 +153,18 @@ class ReaderState : public State {
   void populateTocView(Core& core);
   int findCurrentTocEntry(Core& core);
   void jumpToTocEntry(Core& core, int tocIndex);
+
+  // In-reader settings overlay (long-press Select)
+  bool settingsMode_ = false;
+  bool centerLongPressFired_ = false;  // Suppress short-press TOC on release after long-press settings
+  ui::InReaderSettingsView settingsView_;
+
+  void enterSettingsMode(Core& core);
+  void exitSettingsMode(Core& core);
+  void handleSettingsInput(Core& core, const Event& e);
+  void renderSettingsOverlay(Core& core);
+  void loadInReaderSettings(Core& core);
+  void applyInReaderSettings(Core& core);
 
   // Boot mode transition - exit to UI via restart
   void exitToUI(Core& core);

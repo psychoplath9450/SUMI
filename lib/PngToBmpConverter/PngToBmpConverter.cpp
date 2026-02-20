@@ -1,5 +1,6 @@
 #include "PngToBmpConverter.h"
 
+#include <Arduino.h>
 #include <HardwareSerial.h>
 #include <SdFat.h>
 #include <pngle.h>
@@ -33,7 +34,7 @@ inline void write32Signed(Print& out, const int32_t value) {
 
 void writeBmpHeader2bit(Print& bmpOut, const int width, const int height) {
   const int bytesPerRow = (width * 2 + 31) / 32 * 4;
-  const int imageSize = bytesPerRow * height;
+  const uint32_t imageSize = static_cast<uint32_t>(bytesPerRow) * height;
   const uint32_t fileSize = 70 + imageSize;
 
   bmpOut.write('B');
@@ -198,8 +199,9 @@ void pngInitCallback(pngle_t* pngle, uint32_t w, uint32_t h) {
 
   Serial.printf("[%lu] [PNG] Image dimensions: %dx%d\n", millis(), w, h);
 
-  if (w > MAX_IMAGE_WIDTH || h > MAX_IMAGE_HEIGHT) {
-    Serial.printf("[%lu] [PNG] Image too large\n", millis());
+  if (w == 0 || h == 0 || w > MAX_IMAGE_WIDTH || h > MAX_IMAGE_HEIGHT) {
+    Serial.printf("[%lu] [PNG] Invalid image dimensions: %ux%u\n", millis(), w, h);
+    ctx->initFailed = true;
     return;
   }
 
@@ -291,6 +293,16 @@ bool pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOut, int targetMaxWid
                                 const std::function<bool()>& shouldAbort = nullptr) {
   Serial.printf("[%lu] [PNG] Converting PNG to BMP (target: %dx%d)%s\n", millis(), targetMaxWidth, targetMaxHeight,
                 quickMode ? " [QUICK]" : "");
+
+  // Check available memory before attempting PNG decode
+  // pngle needs ~40-50KB for internal buffers depending on image
+  const size_t freeHeap = ESP.getFreeHeap();
+  constexpr size_t MIN_FREE_FOR_PNG = 50000;  // 50KB minimum
+  if (freeHeap < MIN_FREE_FOR_PNG) {
+    Serial.printf("[%lu] [PNG] Insufficient memory for PNG decode (%zu free, need %zu)\n", 
+                  millis(), freeHeap, MIN_FREE_FOR_PNG);
+    return false;
+  }
 
   pngle_t* pngle = pngle_new();
   if (!pngle) {

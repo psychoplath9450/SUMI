@@ -11,7 +11,8 @@ class BookMetadataCache {
   struct BookMetadata {
     std::string title;
     std::string author;
-    std::string subject;  // dc:subject — sumi: content type hint
+    std::string subject;   // dc:subject — sumi: content type hint
+    std::string language;  // dc:language — BCP-47 tag for hyphenation (e.g. "en", "fr")
     std::string coverItemHref;
     std::string textReferenceHref;
   };

@@ -6,11 +6,13 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <vector>
 
-// Knuth-Plass algorithm constants
-constexpr float INFINITY_PENALTY = 10000.0f;
-constexpr float LINE_PENALTY = 50.0f;
+#include "../../src/core/MemoryArena.h"
+#include "hyphenation/Hyphenator.h"
+
+constexpr int MAX_COST = std::numeric_limits<int>::max();
 
 // Soft hyphen (U+00AD) as UTF-8 bytes
 constexpr unsigned char SOFT_HYPHEN_BYTE1 = 0xC2;
@@ -51,19 +53,7 @@ bool isAttachingPunctuationWord(const std::string& word) {
 
 namespace {
 
-// Find all soft hyphen byte positions in a UTF-8 string
-std::vector<size_t> findSoftHyphenPositions(const std::string& word) {
-  std::vector<size_t> positions;
-  for (size_t i = 0; i + 1 < word.size(); ++i) {
-    if (static_cast<unsigned char>(word[i]) == SOFT_HYPHEN_BYTE1 &&
-        static_cast<unsigned char>(word[i + 1]) == SOFT_HYPHEN_BYTE2) {
-      positions.push_back(i);
-    }
-  }
-  return positions;
-}
-
-// Remove all soft hyphens from a string
+// Remove all soft hyphens (U+00AD) from a string
 std::string stripSoftHyphens(const std::string& word) {
   std::string result;
   result.reserve(word.size());
@@ -77,17 +67,6 @@ std::string stripSoftHyphens(const std::string& word) {
     }
   }
   return result;
-}
-
-// Get word prefix before soft hyphen position (stripped) + visible hyphen
-std::string getWordPrefix(const std::string& word, size_t softHyphenPos) {
-  std::string prefix = word.substr(0, softHyphenPos);
-  return stripSoftHyphens(prefix) + "-";
-}
-
-// Get word suffix after soft hyphen position (keep soft hyphens for further splitting)
-std::string getWordSuffix(const std::string& word, size_t softHyphenPos) {
-  return word.substr(softHyphenPos + 2);  // Skip past soft hyphen bytes, DON'T strip
 }
 
 // Check if codepoint is CJK ideograph (Unicode Line Break Class ID)
@@ -112,22 +91,19 @@ bool isCjkCodepoint(uint32_t cp) {
   return false;
 }
 
-// Knuth-Plass: Calculate badness (looseness) of a line
-// Returns cubic ratio penalty - loose lines are penalized more heavily
-float calculateBadness(int lineWidth, int targetWidth) {
-  if (targetWidth <= 0) return INFINITY_PENALTY;
-  if (lineWidth > targetWidth) return INFINITY_PENALTY;
-  if (lineWidth == targetWidth) return 0.0f;
-  float ratio = static_cast<float>(targetWidth - lineWidth) / static_cast<float>(targetWidth);
-  return ratio * ratio * ratio * 100.0f;
-}
+// Measure a word's width, stripping soft hyphens and optionally appending a visible hyphen.
+uint16_t measureWordWidth(const GfxRenderer& renderer, const int fontId, const std::string& word,
+                          const EpdFontFamily::Style style, const bool appendHyphen = false) {
+  const bool hasShy = word.find("\xC2\xAD") != std::string::npos;
+  if (!hasShy && !appendHyphen) {
+    return renderer.getTextWidth(fontId, word.c_str(), style);
+  }
 
-// Knuth-Plass: Calculate demerits for a line based on its badness
-// Last line gets 0 demerits (allowed to be loose)
-float calculateDemerits(float badness, bool isLastLine) {
-  if (badness >= INFINITY_PENALTY) return INFINITY_PENALTY;
-  if (isLastLine) return 0.0f;
-  return (1.0f + badness) * (1.0f + badness);
+  std::string sanitized = hasShy ? stripSoftHyphens(word) : word;
+  if (appendHyphen) {
+    sanitized.push_back('-');
+  }
+  return renderer.getTextWidth(fontId, sanitized.c_str(), style);
 }
 
 }  // namespace
@@ -228,17 +204,17 @@ bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   const int pageWidth = viewportWidth;
   const int spaceWidth = renderer.getSpaceWidth(fontId);
 
-  // Pre-split oversized words at soft hyphen positions
-  if (hyphenationEnabled) {
-    if (!preSplitOversizedWords(renderer, fontId, pageWidth, shouldAbort)) {
-      return false;  // Aborted
-    }
-  }
+  auto wordWidths = calculateWordWidths(renderer, fontId);
 
-  const auto wordWidths = calculateWordWidths(renderer, fontId);
-  const auto lineBreakIndices = useGreedyBreaking
-                                    ? computeLineBreaksGreedy(pageWidth, spaceWidth, wordWidths, shouldAbort)
-                                    : computeLineBreaks(pageWidth, spaceWidth, wordWidths, shouldAbort);
+  std::vector<size_t> lineBreakIndices;
+  if (hyphenationEnabled) {
+    // Greedy layout with opportunistic Liang hyphenation at overflow points
+    lineBreakIndices = computeHyphenatedLineBreaks(renderer, fontId, pageWidth, spaceWidth, wordWidths, shouldAbort);
+  } else if (useGreedyBreaking) {
+    lineBreakIndices = computeLineBreaksGreedy(pageWidth, spaceWidth, wordWidths, shouldAbort);
+  } else {
+    lineBreakIndices = computeLineBreaks(pageWidth, spaceWidth, wordWidths, shouldAbort);
+  }
 
   // Check if we were aborted during line break computation
   if (shouldAbort && shouldAbort()) {
@@ -283,8 +259,6 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
 
   while (wordsIt != words.end()) {
     // Strip soft hyphens before measuring (they should be invisible)
-    // After preSplitOversizedWords, words shouldn't contain soft hyphens,
-    // but we strip here for safety and for when hyphenation is disabled
     std::string displayWord = stripSoftHyphens(*wordsIt);
     wordWidths.push_back(renderer.getTextWidth(fontId, displayWord.c_str(), *wordStylesIt));
     // Update the word in the list with the stripped version for rendering
@@ -306,66 +280,110 @@ std::vector<size_t> ParsedText::computeLineBreaks(const int pageWidth, const int
     return {};
   }
 
-  // Forward DP: minDemerits[i] = minimum demerits to reach position i (before word i)
-  std::vector<float> minDemerits(n + 1, INFINITY_PENALTY);
-  std::vector<int> prevBreak(n + 1, -1);
-  minDemerits[0] = 0.0f;
+  // Build an indexed snapshot of which words are attaching punctuation for O(1) lookup.
+  // Attaching punctuation words don't get space before them, mirroring crosspoint's "continues" concept.
+  std::vector<bool> isAttaching(n, false);
+  {
+    auto it = words.begin();
+    for (size_t i = 0; i < n; ++i, ++it) {
+      isAttaching[i] = isAttachingPunctuationWord(*it);
+    }
+  }
 
-  for (size_t i = 0; i < n; i++) {
-    // Check for abort periodically (every 100 words in outer loop)
-    if (shouldAbort && (i % 100 == 0) && shouldAbort()) {
-      return {};  // Return empty to signal abort
+  // Minimum-raggedness backward DP (crosspoint algorithm).
+  // dp[i] = minimum cost for lines starting at word i through to the end.
+  // ans[i] = index of the last word on the optimal line starting at word i.
+  //
+  // Allocate dp[] and ans[] from the memory arena bump allocator when available.
+  // This avoids heap fragmentation from large temporary arrays (n*4 bytes each).
+  // Falls back to std::vector if arena is not initialized.
+  sumi::ArenaScratch arena;
+  int* dp = nullptr;
+  size_t* ans = nullptr;
+  std::vector<int> dpVec;
+  std::vector<size_t> ansVec;
+
+  if (arena.isValid()) {
+    dp = arena.alloc<int>(n);
+    ans = arena.alloc<size_t>(n);
+  }
+  if (!dp || !ans) {
+    // Arena exhausted or not available — fall back to heap
+    dp = nullptr;
+    ans = nullptr;
+    dpVec.resize(n);
+    ansVec.resize(n);
+    dp = dpVec.data();
+    ans = ansVec.data();
+  }
+
+  // Base case: last word alone on a line has zero cost (last line is free)
+  dp[n - 1] = 0;
+  ans[n - 1] = n - 1;
+
+  for (int i = static_cast<int>(n) - 2; i >= 0; --i) {
+    // Check for abort periodically (every 100 words)
+    if (shouldAbort && (static_cast<size_t>(-i) % 100 == 0) && shouldAbort()) {
+      return {};
     }
 
-    if (minDemerits[i] >= INFINITY_PENALTY) continue;
+    int currlen = 0;
+    dp[i] = MAX_COST;
 
-    int lineWidth = -spaceWidth;  // First word won't have preceding space
-    for (size_t j = i; j < n; j++) {
-      lineWidth += wordWidths[j] + spaceWidth;
+    for (size_t j = static_cast<size_t>(i); j < n; ++j) {
+      // Add space before word j unless it's the first word on the line or attaching punctuation
+      const int gap = (j > static_cast<size_t>(i) && !isAttaching[j]) ? spaceWidth : 0;
+      currlen += wordWidths[j] + gap;
 
-      if (lineWidth > pageWidth) {
-        if (j == i) {
-          // Oversized word: force onto its own line with high penalty
-          float demerits = 100.0f + LINE_PENALTY;
-          if (minDemerits[i] + demerits < minDemerits[j + 1]) {
-            minDemerits[j + 1] = minDemerits[i] + demerits;
-            prevBreak[j + 1] = static_cast<int>(i);
-          }
-        }
+      if (currlen > pageWidth) {
         break;
       }
 
-      bool isLastLine = (j == n - 1);
-      float badness = calculateBadness(lineWidth, pageWidth);
-      float demerits = calculateDemerits(badness, isLastLine) + LINE_PENALTY;
+      int cost;
+      if (j == n - 1) {
+        cost = 0;  // Last line is free
+      } else {
+        const int remainingSpace = pageWidth - currlen;
+        // Use long long for the square to prevent overflow on ESP32
+        const long long cost_ll = static_cast<long long>(remainingSpace) * remainingSpace + dp[j + 1];
+        cost = (cost_ll > MAX_COST) ? MAX_COST : static_cast<int>(cost_ll);
+      }
 
-      if (minDemerits[i] + demerits < minDemerits[j + 1]) {
-        minDemerits[j + 1] = minDemerits[i] + demerits;
-        prevBreak[j + 1] = static_cast<int>(i);
+      if (cost < dp[i]) {
+        dp[i] = cost;
+        ans[i] = j;  // j is the index of the last word on this line
+      }
+    }
+
+    // Handle oversized word: if no valid configuration found, force single-word line
+    if (dp[i] == MAX_COST) {
+      ans[i] = static_cast<size_t>(i);
+      if (i + 1 < static_cast<int>(n)) {
+        dp[i] = dp[i + 1];
+      } else {
+        dp[i] = 0;
       }
     }
   }
 
-  // Backtrack to reconstruct line break indices
+  // Forward scan to reconstruct line break indices
   std::vector<size_t> lineBreakIndices;
-  int pos = static_cast<int>(n);
-  while (pos > 0 && prevBreak[pos] >= 0) {
-    lineBreakIndices.push_back(static_cast<size_t>(pos));
-    pos = prevBreak[pos];
-  }
-  std::reverse(lineBreakIndices.begin(), lineBreakIndices.end());
+  size_t currentWordIndex = 0;
 
-  // Fallback: if backtracking failed or chain is incomplete, use single-word-per-line
-  // After the loop, pos should be 0 if we successfully traced back to the start.
-  // If pos > 0, the chain is incomplete (no valid path from position 0 to n).
-  if (lineBreakIndices.empty() || pos != 0) {
-    lineBreakIndices.clear();
-    for (size_t i = 1; i <= n; i++) {
-      lineBreakIndices.push_back(i);
+  while (currentWordIndex < n) {
+    size_t nextBreakIndex = ans[currentWordIndex] + 1;
+
+    // Safety check: prevent infinite loop if nextBreakIndex doesn't advance
+    if (nextBreakIndex <= currentWordIndex) {
+      nextBreakIndex = currentWordIndex + 1;
     }
+
+    lineBreakIndices.push_back(nextBreakIndex);
+    currentWordIndex = nextBreakIndex;
   }
 
   return lineBreakIndices;
+  // ArenaScratch destructor resets bump watermark here — dp/ans memory is reclaimed
 }
 
 std::vector<size_t> ParsedText::computeLineBreaksGreedy(const int pageWidth, const int spaceWidth,
@@ -500,121 +518,155 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   processLine(std::make_shared<TextBlock>(std::move(lineData), effectiveStyle));
 }
 
-bool ParsedText::preSplitOversizedWords(const GfxRenderer& renderer, const int fontId, const int pageWidth,
-                                        const AbortCallback& shouldAbort) {
-  std::list<std::string> newWords;
-  std::list<EpdFontFamily::Style> newStyles;
-  std::list<uint8_t> newDecorations;
+// Splits words[wordIndex] into prefix + remainder when a legal breakpoint fits the available width.
+// Uses Liang hyphenation (via Hyphenator) for linguistically correct break points.
+// Returns true if the word was successfully split, false if no split fits.
+bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availableWidth, const GfxRenderer& renderer,
+                                      const int fontId, std::vector<uint16_t>& wordWidths,
+                                      const bool allowFallbackBreaks) {
+  if (availableWidth <= 0 || wordIndex >= words.size()) {
+    return false;
+  }
 
+  // Get iterators to target word and style
   auto wordIt = words.begin();
   auto styleIt = wordStyles.begin();
   auto decoIt = wordDecorations.begin();
-  size_t wordCount = 0;
+  std::advance(wordIt, wordIndex);
+  std::advance(styleIt, wordIndex);
+  std::advance(decoIt, wordIndex);
 
-  while (wordIt != words.end()) {
-    // Check for abort periodically (every 50 words)
-    if (shouldAbort && (++wordCount % 50 == 0) && shouldAbort()) {
-      return false;  // Aborted
-    }
+  const std::string& word = *wordIt;
+  const auto wordStyle = *styleIt;
+  const auto wordDeco = *decoIt;
 
-    const std::string& word = *wordIt;
-    const EpdFontFamily::Style wordStyle = *styleIt;
-    const uint8_t wordDeco = *decoIt;
-
-    // Measure word without soft hyphens
-    const std::string stripped = stripSoftHyphens(word);
-    const int wordWidth = renderer.getTextWidth(fontId, stripped.c_str(), wordStyle);
-
-    if (wordWidth <= pageWidth) {
-      // Word fits, keep as-is (will be stripped later in calculateWordWidths)
-      newWords.push_back(word);
-      newStyles.push_back(wordStyle);
-      newDecorations.push_back(wordDeco);
-    } else {
-      // Word is too wide - try to split at soft hyphen positions
-      auto shyPositions = findSoftHyphenPositions(word);
-
-      if (shyPositions.empty()) {
-        // No soft hyphens - use GfxRenderer's hard hyphenation helper
-        auto chunks = renderer.breakWordWithHyphenation(fontId, word.c_str(), pageWidth, wordStyle);
-        for (const auto& chunk : chunks) {
-          newWords.push_back(chunk);
-          newStyles.push_back(wordStyle);
-          newDecorations.push_back(wordDeco);
-        }
-      } else {
-        // Split word at soft hyphen positions
-        std::string remaining = word;
-        size_t splitIterations = 0;
-        constexpr size_t MAX_SPLIT_ITERATIONS = 100;  // Safety limit
-
-        while (splitIterations++ < MAX_SPLIT_ITERATIONS) {
-          if (splitIterations == MAX_SPLIT_ITERATIONS) {
-            Serial.printf("[PT] Warning: hit max split iterations for oversized word\n");
-          }
-          const std::string strippedRemaining = stripSoftHyphens(remaining);
-          const int remainingWidth = renderer.getTextWidth(fontId, strippedRemaining.c_str(), wordStyle);
-
-          if (remainingWidth <= pageWidth) {
-            // Remaining part fits, add it and done
-            newWords.push_back(remaining);
-            newStyles.push_back(wordStyle);
-            newDecorations.push_back(wordDeco);
-            break;
-          }
-
-          // Find soft hyphen positions in remaining string
-          auto localPositions = findSoftHyphenPositions(remaining);
-          if (localPositions.empty()) {
-            // No more soft hyphens, output as-is
-            newWords.push_back(remaining);
-            newStyles.push_back(wordStyle);
-            newDecorations.push_back(wordDeco);
-            break;
-          }
-
-          // Find the rightmost soft hyphen where prefix + hyphen fits
-          int bestPos = -1;
-          for (int i = static_cast<int>(localPositions.size()) - 1; i >= 0; --i) {
-            std::string prefix = getWordPrefix(remaining, localPositions[i]);
-            int prefixWidth = renderer.getTextWidth(fontId, prefix.c_str(), wordStyle);
-            if (prefixWidth <= pageWidth) {
-              bestPos = i;
-              break;
-            }
-          }
-
-          if (bestPos < 0) {
-            // Even the smallest prefix is too wide - output as-is
-            newWords.push_back(remaining);
-            newStyles.push_back(wordStyle);
-            newDecorations.push_back(wordDeco);
-            break;
-          }
-
-          // Split at this position
-          std::string prefix = getWordPrefix(remaining, localPositions[bestPos]);
-          std::string suffix = getWordSuffix(remaining, localPositions[bestPos]);
-
-          newWords.push_back(prefix);  // Already includes visible hyphen "-"
-          newStyles.push_back(wordStyle);
-          newDecorations.push_back(wordDeco);
-
-          if (suffix.empty()) {
-            break;
-          }
-          remaining = suffix;
-        }
-      }
-    }
-
-    ++wordIt;
-    ++styleIt;
-    ++decoIt;
+  // Collect candidate breakpoints from the Liang hyphenator
+  auto breakInfos = Hyphenator::breakOffsets(word, allowFallbackBreaks);
+  if (breakInfos.empty()) {
+    return false;
   }
 
-  words = std::move(newWords);
-  wordStyles = std::move(newStyles);
-  wordDecorations = std::move(newDecorations);
+  size_t chosenOffset = 0;
+  int chosenWidth = -1;
+  bool chosenNeedsHyphen = true;
+
+  // Find the widest prefix that still fits the available width
+  for (const auto& info : breakInfos) {
+    const size_t offset = info.byteOffset;
+    if (offset == 0 || offset >= word.size()) {
+      continue;
+    }
+
+    const bool needsHyphen = info.requiresInsertedHyphen;
+    const int prefixWidth = measureWordWidth(renderer, fontId, word.substr(0, offset), wordStyle, needsHyphen);
+    if (prefixWidth > availableWidth || prefixWidth <= chosenWidth) {
+      continue;
+    }
+
+    chosenWidth = prefixWidth;
+    chosenOffset = offset;
+    chosenNeedsHyphen = needsHyphen;
+  }
+
+  if (chosenWidth < 0) {
+    return false;
+  }
+
+  // Split the word: prefix gets a hyphen if needed, remainder is inserted after
+  std::string remainder = word.substr(chosenOffset);
+  wordIt->resize(chosenOffset);
+  if (chosenNeedsHyphen) {
+    wordIt->push_back('-');
+  }
+
+  // Insert the remainder word with matching style and decorations
+  auto insertWordIt = std::next(wordIt);
+  auto insertStyleIt = std::next(styleIt);
+  auto insertDecoIt = std::next(decoIt);
+  words.insert(insertWordIt, remainder);
+  wordStyles.insert(insertStyleIt, wordStyle);
+  wordDecorations.insert(insertDecoIt, wordDeco);
+
+  // Update cached widths
+  wordWidths[wordIndex] = static_cast<uint16_t>(chosenWidth);
+  const uint16_t remainderWidth = measureWordWidth(renderer, fontId, remainder, wordStyle);
+  wordWidths.insert(wordWidths.begin() + wordIndex + 1, remainderWidth);
   return true;
+}
+
+// Greedy line breaking with opportunistic Liang hyphenation at overflow points.
+// When a word overflows the current line, we try to hyphenate it and fit the prefix.
+std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& renderer, const int fontId,
+                                                            const int pageWidth, const int spaceWidth,
+                                                            std::vector<uint16_t>& wordWidths,
+                                                            const AbortCallback& shouldAbort) {
+  // Build isAttaching snapshot for O(1) lookup (may grow as words are split)
+  std::vector<bool> isAttaching;
+  isAttaching.reserve(wordWidths.size());
+  for (auto it = words.begin(); it != words.end(); ++it) {
+    isAttaching.push_back(isAttachingPunctuationWord(*it));
+  }
+
+  // Pre-split oversized words that can't fit even on an empty line
+  for (size_t i = 0; i < wordWidths.size(); ++i) {
+    while (wordWidths[i] > static_cast<uint16_t>(pageWidth)) {
+      if (!hyphenateWordAtIndex(i, pageWidth, renderer, fontId, wordWidths, /*allowFallbackBreaks=*/true)) {
+        break;
+      }
+      // Update isAttaching for the newly inserted remainder
+      isAttaching.insert(isAttaching.begin() + i + 1, false);
+    }
+  }
+
+  std::vector<size_t> lineBreakIndices;
+  size_t currentIndex = 0;
+
+  while (currentIndex < wordWidths.size()) {
+    // Check for abort periodically
+    if (shouldAbort && (currentIndex % 200 == 0) && shouldAbort()) {
+      return {};
+    }
+
+    const size_t lineStart = currentIndex;
+    int lineWidth = 0;
+
+    // Consume as many words as possible for the current line
+    while (currentIndex < wordWidths.size()) {
+      const bool isFirstWord = currentIndex == lineStart;
+      const int spacing = (isFirstWord || isAttaching[currentIndex]) ? 0 : spaceWidth;
+      const int candidateWidth = spacing + wordWidths[currentIndex];
+
+      // Word fits on current line
+      if (lineWidth + candidateWidth <= pageWidth) {
+        lineWidth += candidateWidth;
+        ++currentIndex;
+        continue;
+      }
+
+      // Word would overflow - try to hyphenate and fit a prefix
+      const int availWidth = pageWidth - lineWidth - spacing;
+      const bool fallback = isFirstWord;  // Only allow fallback for first word on line
+
+      if (availWidth > 0 &&
+          hyphenateWordAtIndex(currentIndex, availWidth, renderer, fontId, wordWidths, fallback)) {
+        // Update isAttaching for the newly inserted remainder
+        isAttaching.insert(isAttaching.begin() + currentIndex + 1, false);
+        // Prefix fits, append it to this line and move to next line
+        lineWidth += spacing + wordWidths[currentIndex];
+        ++currentIndex;
+        break;
+      }
+
+      // Could not split: force at least one word per line to avoid infinite loop
+      if (currentIndex == lineStart) {
+        lineWidth += candidateWidth;
+        ++currentIndex;
+      }
+      break;
+    }
+
+    lineBreakIndices.push_back(currentIndex);
+  }
+
+  return lineBreakIndices;
 }

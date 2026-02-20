@@ -44,11 +44,12 @@ class Bitmap {
   int getRowBytes() const { return rowBytes; }
 
  private:
-  static uint16_t readLE16(FsFile& f);
-  static uint32_t readLE32(FsFile& f);
+  uint16_t readLE16();
+  uint32_t readLE32();
 
   FsFile& file;
   bool dithering = false;
+  bool readOk_ = true;  // Set false on any failed byte read
   int width = 0;
   int height = 0;
   bool topDown = false;
