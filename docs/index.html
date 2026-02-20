@@ -32,19 +32,6 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
 .step h4{font-size:17px;margin-bottom:4px;font-weight:700}
 .step p{font-size:13px;color:var(--muted)}
 
-/* Firmware cards */
-.firmware-cards{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:40px}
-@media(max-width:700px){.firmware-cards{grid-template-columns:1fr}}
-
-.fw-card{border:2px solid var(--border);padding:28px;position:relative;transition:all .15s;cursor:pointer}
-.fw-card:hover{border-color:var(--ink);transform:translateY(-2px);box-shadow:4px 4px 0 var(--ink)}
-.fw-card.selected{border-color:var(--ink);background:var(--ink);color:var(--paper)}
-.fw-card.selected .tag{border-color:rgba(255,255,255,.4);color:var(--paper)}
-.fw-card.selected .number{color:rgba(255,255,255,.4)}
-.fw-card.selected p{color:rgba(255,255,255,.7)}
-.fw-card .number{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:2px;margin-bottom:12px;text-transform:uppercase}
-.fw-card h3{font-size:24px;font-weight:700;margin-bottom:8px}
-.fw-card p{font-size:14px;line-height:1.5;color:var(--muted);margin-bottom:14px}
 .tag{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:1px;text-transform:uppercase;border:1px solid var(--border);padding:3px 8px;margin-right:4px}
 
 /* Flash section */
@@ -52,9 +39,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
 .flash-section::before{content:'FLASH';position:absolute;top:-12px;left:24px;background:var(--paper);padding:0 8px;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--muted)}
 .flash-section h3{font-size:24px;margin-bottom:12px}
 .flash-section p{color:var(--muted);font-size:14px;margin-bottom:24px}
-
-.btn{font-family:var(--mono);font-size:13px;letter-spacing:1px;text-transform:uppercase;padding:14px 32px;border:2px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer;transition:all .15s;display:inline-block}
-.btn:hover{background:var(--ink);color:var(--paper)}
+.flash-section .tags{margin-bottom:20px}
 
 esp-web-install-button{display:inline-block}
 esp-web-install-button::part(button){
@@ -100,50 +85,34 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
 <div class="container">
 
 <div class="steps">
-  <div class="step"><span class="step-num">1</span><h4>Select</h4><p>Choose SUMI, SumiBoy, or both for dual boot</p></div>
-  <div class="step"><span class="step-num">2</span><h4>Connect</h4><p>Plug in via USB, hold BOOT during power-on</p></div>
-  <div class="step"><span class="step-num">3</span><h4>Flash</h4><p>Click flash. Takes about 30 seconds.</p></div>
-</div>
-
-<div class="firmware-cards">
-  <div class="fw-card selected" id="card-lite" onclick="selectFirmware('lite')">
-    <div class="number">App0 — 0x10000</div>
-    <h3>SUMI</h3>
-    <p>Complete reader firmware. EPUB, TXT, CBZ, PDF, newspapers, flashcards, notes, games, BLE HID, and sumi-e UI.</p>
-    <span class="tag">v0.4.1</span>
-    <span class="tag">2.5MB</span>
-    <span class="tag">Reader</span>
-  </div>
-  <div class="fw-card" id="card-emu" onclick="selectFirmware('emu')">
-    <div class="number">App1 — 0x650000</div>
-    <h3>SumiBoy</h3>
-    <p>Game Boy emulator with MBC3 banking, save states, Bayer dithering, and ROM patches. Dual-boots with SUMI.</p>
-    <span class="tag">v1.1.0</span>
-    <span class="tag">1.7MB</span>
-    <span class="tag">Emulator</span>
-  </div>
+  <div class="step"><span class="step-num">1</span><h4>Connect</h4><p>Plug in via USB, hold BOOT during power-on</p></div>
+  <div class="step"><span class="step-num">2</span><h4>Flash</h4><p>Click the button below. Takes about 30 seconds.</p></div>
+  <div class="step"><span class="step-num">3</span><h4>Done</h4><p>Unplug, insert SD card, and you're reading</p></div>
 </div>
 
 <div class="flash-section">
-  <h3 id="flashTitle">Flash SUMI</h3>
-  <p id="flashDesc">Requires Chrome or Edge with Web Serial API. Connect your Xteink X4 via USB.</p>
-
-  <div id="flashButtons">
-    <esp-web-install-button id="espFlasher" manifest="./manifest-sumi.json">
-      <span slot="unsupported">
-        <p style="color:var(--error);font-size:14px;margin-bottom:12px">
-          Web Serial not supported in this browser.<br>Please use Chrome or Edge.
-        </p>
-      </span>
-      <span slot="not-allowed">
-        <p style="color:var(--error);font-size:14px">
-          Serial access blocked. Check browser permissions.
-        </p>
-      </span>
-    </esp-web-install-button>
+  <h3>Flash SUMI</h3>
+  <p>Installs SUMI reader + SumiBoy emulator. Requires Chrome or Edge.</p>
+  <div class="tags">
+    <span class="tag">v0.4.1</span>
+    <span class="tag">SUMI + SumiBoy</span>
+    <span class="tag">ESP32-C3</span>
   </div>
 
-  <p id="eraseNote" style="margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:0.5px">
+  <esp-web-install-button manifest="./manifest-sumi.json">
+    <span slot="unsupported">
+      <p style="color:var(--error);font-size:14px;margin-bottom:12px">
+        Web Serial not supported in this browser.<br>Please use Chrome or Edge.
+      </p>
+    </span>
+    <span slot="not-allowed">
+      <p style="color:var(--error);font-size:14px">
+        Serial access blocked. Check browser permissions.
+      </p>
+    </span>
+  </esp-web-install-button>
+
+  <p style="margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:0.5px">
     ⚠ When the install dialog appears, check "Erase device" — this prevents boot issues from stale flash data.
   </p>
 </div>
@@ -158,7 +127,7 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
     <li><strong>Find the BOOT button.</strong> It's the small button hidden underneath the up/down page-turn toggle on the side of the device. It's recessed under the rocker — you may need to use a fingernail or something thin to press it.</li>
     <li><strong>Hold BOOT and plug in USB.</strong> Press and hold the BOOT button, and <em>while still holding it</em>, plug the USB cable into the device. Keep holding BOOT for about 3 seconds after plugging in, then let go.</li>
     <li><strong>Check the connection.</strong> The USB disconnecting/reconnecting should stop. Your device should now appear as one steady serial port.</li>
-    <li><strong>Flash SUMI.</strong> Using Chrome or Edge, scroll up to the flash section on this page, select SUMI, and click the flash button.</li>
+    <li><strong>Flash SUMI.</strong> Using Chrome or Edge, scroll up to the flash section on this page and click the flash button.</li>
     <li><strong>Check "Erase device"</strong> when the install dialog appears, then click Install. This takes about 30 seconds.</li>
   </ol>
 
@@ -184,6 +153,11 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
 <div class="divider"></div>
 
 <div class="info">
+  <h4>What Gets Flashed</h4>
+  <p>One binary, two firmwares. SUMI goes into app0 (the reader, apps, everything). SumiBoy goes into app1 (Game Boy emulator). They dual-boot — select SumiBoy from the SUMI home screen and the device reboots into emulator mode. Hold POWER for 5 seconds in the emulator to return.</p>
+</div>
+
+<div class="info">
   <h4>Flash Layout (16MB)</h4>
   <pre class="partition-block">  ┌──────────────────────────────────────────────────┐
   │ 0x0000   Bootloader          (16KB)              │
@@ -202,51 +176,17 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
 </div>
 
 <div class="info">
-  <h4>Dual Boot</h4>
-  <p>When both firmwares are installed, SUMI boots by default. Select "SumiBoy" from the home screen to switch. The emulator saves state and reboots to app1. Press BACK on the emulator's landing screen to return to SUMI.</p>
-</div>
-
-<div class="info">
   <h4>Troubleshooting</h4>
   <p><b>Device not detected?</b> Hold the BOOT button (under the up/down toggle) while plugging in USB. Release after 3 seconds. The device should appear as a serial port.</p>
   <p><b>Flash failed?</b> Check "Erase device" in the install dialog, then flash again. If issues persist, see the Recovery section above.</p>
   <p><b>Boot loop?</b> SUMI v0.3.3+ has automatic boot loop recovery — if the device reboots 4 times rapidly it forces itself back to SUMI. If you're stuck on older firmware, follow the Recovery steps above.</p>
   <p><b>USB keeps disconnecting?</b> The device has no firmware running. Follow the Recovery steps above — holding BOOT while plugging in puts it in download mode with a stable connection.</p>
   <p><b>Manual flash:</b> <code>python -m esptool --chip esp32c3 write_flash 0x0 sumi-full.bin</code></p>
-  <p><b>Manual SumiBoy:</b> <code>python -m esptool --chip esp32c3 write_flash 0x650000 sumiboy.bin</code></p>
 </div>
 
 </div>
 
 <script>
-let selectedFirmware = 'lite';
-
-function selectFirmware(fw) {
-  selectedFirmware = fw;
-  document.getElementById('card-lite').classList.toggle('selected', fw === 'lite');
-  document.getElementById('card-emu').classList.toggle('selected', fw === 'emu');
-
-  const flasher = document.getElementById('espFlasher');
-  const title = document.getElementById('flashTitle');
-  const desc = document.getElementById('flashDesc');
-  const eraseNote = document.getElementById('eraseNote');
-
-  if (fw === 'lite') {
-    flasher.setAttribute('manifest', './manifest-sumi.json');
-    title.textContent = 'Flash SUMI';
-    desc.textContent = 'Full install — writes bootloader, partition table, and firmware starting at 0x0.';
-    eraseNote.innerHTML = '⚠ When the install dialog appears, check "Erase device" — this prevents boot issues from stale flash data.';
-    eraseNote.style.color = 'var(--accent)';
-  } else {
-    flasher.setAttribute('manifest', './manifest-sumiboy.json');
-    title.textContent = 'Flash SumiBoy';
-    desc.textContent = 'Writes emulator to app1 partition (0x650000). Requires SUMI already installed in app0.';
-    eraseNote.innerHTML = '⚠ Do NOT erase device when flashing SumiBoy — it would wipe SUMI. Just flash directly.';
-    eraseNote.style.color = 'var(--error)';
-  }
-}
-
-// Show post-flash tip when esp-web-tools finishes successfully
 document.querySelectorAll('esp-web-install-button').forEach(btn => {
   btn.addEventListener('state-changed', (e) => {
     if (e.detail.state === 'FINISHED') {

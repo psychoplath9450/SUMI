@@ -218,6 +218,14 @@ class SumiBoyApp : public PluginInterface {
       d_.setCursor(w_ / 2 - 25, cy + 32);
       d_.print("Back");
     }
+    cy += btnH + 40;
+
+    // Return hint
+    d_.setCursor(w_ / 2 - 150, cy);
+    d_.print("Hold POWER for 5 seconds");
+    cy += 22;
+    d_.setCursor(w_ / 2 - 140, cy);
+    d_.print("in the emulator to return");
   }
 
   void bootToEmulator() {
