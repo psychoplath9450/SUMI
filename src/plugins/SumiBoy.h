@@ -122,8 +122,8 @@ class SumiBoyApp : public PluginInterface {
       return false;
     }
 
-    // Bytes 3-6: Entry point address - must be in valid IRAM/DRAM range for ESP32-C3
-    uint32_t entryPoint = header[3] | (header[4] << 8) | (header[5] << 16) | (header[6] << 24);
+    // Bytes 4-7: Entry point address - must be in valid IRAM/DRAM range for ESP32-C3
+    uint32_t entryPoint = header[4] | (header[5] << 8) | (header[6] << 16) | (header[7] << 24);
     // ESP32-C3 valid ranges: IRAM 0x40380000-0x403DFFFF, DRAM 0x3FC80000-0x3FCE0000
     bool validEntry = (entryPoint >= 0x40380000 && entryPoint <= 0x403DFFFF) ||
                       (entryPoint >= 0x3FC80000 && entryPoint <= 0x3FCE0000) ||
