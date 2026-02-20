@@ -146,8 +146,9 @@ esp-web-install-button::part(button):hover{background:transparent;color:var(--in
 
 <div class="info" id="postFlashTip" style="display:none;border-color:var(--success);margin-top:24px;margin-bottom:40px">
   <h4 style="color:var(--success)">✓ You're all set</h4>
-  <p>Pop your SD card in and drop some EPUBs on it — SUMI will find them wherever you put them.</p>
-  <p>If you've got a library of existing ebooks, it's worth running them through the <a href="https://sumi.page/convert/" style="color:var(--accent);font-weight:600">Universal Converter</a> first. Most EPUBs are built for color tablets — oversized images, web fonts, heavy CSS. The converter strips all that down and re-tunes everything for e-ink. Same books, just faster rendering and smaller files. Takes a few seconds per batch.</p>
+  <p><b>Step 1 — Set up your SD card.</b> Download the <a href="../sdcard" style="color:var(--accent);font-weight:600">SD card starter folder</a> from this repo and copy its contents to the root of your SD card. This includes the home screen themes, font data, and the folder structure SUMI expects. Without it, themes and some features won't work.</p>
+  <p><b>Step 2 — Add your books.</b> Drop EPUBs, TXT, or Markdown files into the <code>books</code> folder. SUMI will find them wherever you put them, but <code>books</code> keeps things tidy.</p>
+  <p><b>Step 3 — Optimize for e-ink.</b> If you've got a library of existing ebooks, run them through the <a href="https://sumi.page/convert/" style="color:var(--accent);font-weight:600">Universal Converter</a> first. Most EPUBs are built for color tablets — oversized images, web fonts, heavy CSS. The converter strips all that down and re-tunes everything for e-ink. Same books, just faster rendering and smaller files.</p>
 </div>
 
 <div class="divider"></div>

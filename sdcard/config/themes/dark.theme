@@ -1,0 +1,32 @@
+# SUMI Theme Configuration
+# Edit values and restart device to apply
+
+[theme]
+name = Dark
+
+[colors]
+inverted_mode = true
+background = black
+
+[selection]
+fill_color = white
+text_color = black
+
+[text]
+primary_color = white
+secondary_color = white
+
+[layout]
+margin_top = 9
+margin_side = 3
+item_height = 30
+item_spacing = 0
+item_padding_x = 8
+item_value_padding = 20
+
+[fonts]
+ui_font = 
+reader_font_xsmall = 
+reader_font_small = 
+reader_font_medium = 
+reader_font_large = 
