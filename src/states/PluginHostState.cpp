@@ -171,14 +171,28 @@ StateTransition PluginHostState::update(Core& core) {
       return StateTransition::to(StateId::Sleep);
     }
 
+    // Forward button releases to plugins (emulators need held-button tracking)
+    if (e.type == EventType::ButtonRelease) {
+      PluginButton pbtn = translateButton(e.button);
+      if (pbtn != PluginButton::None) {
+        plugin_->handleRelease(pbtn);
+      }
+      continue;
+    }
+
     if (e.type != EventType::ButtonPress) continue;
 
     PluginButton pbtn = translateButton(e.button);
     if (pbtn == PluginButton::None) continue;
 
-    // Power always goes to sleep
+    // Power: let plugin consume it first (e.g. SumiBoy uses it for Start).
+    // If plugin doesn't consume it, go to sleep.
     if (pbtn == PluginButton::Power) {
-      return StateTransition::to(StateId::Sleep);
+      if (!plugin_->handleInput(pbtn)) {
+        return StateTransition::to(StateId::Sleep);
+      }
+      needsRender_ = true;
+      continue;
     }
 
     // Track rapid Back presses - 3 quick Backs force-exits
@@ -299,6 +313,16 @@ StateTransition PluginHostState::update(Core& core) {
 void PluginHostState::render(Core& core) {
   if (!needsRender_ || !plugin_) return;
 
+  // Plugins that handle their own refresh (e.g. SumiBoy) do all rendering
+  // and display refresh inside update(). The host must NOT call clearScreen()
+  // or draw() here — those hit waitForRefresh() and would block/double-render,
+  // causing the emulator to freeze after the first frame.
+  if (plugin_->handlesOwnRefresh()) {
+    needsRender_ = false;
+    core.display.markDirty();
+    return;
+  }
+
   renderer_.clearScreen(0xFF);
 
   if (plugin_->needsFullRedraw || partialCount_ == 0) {
@@ -306,13 +330,6 @@ void PluginHostState::render(Core& core) {
     plugin_->needsFullRedraw = false;
   } else {
     plugin_->drawPartial();
-  }
-
-  // Skip display refresh if plugin handles its own (e.g. Benchmark timing modes)
-  if (plugin_->handlesOwnRefresh()) {
-    needsRender_ = false;
-    core.display.markDirty();
-    return;
   }
 
   // Periodic full refresh to clear e-ink ghosting

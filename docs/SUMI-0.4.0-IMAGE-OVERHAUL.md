@@ -6,29 +6,30 @@ This was the planning document for v0.4.0. Here's what was implemented:
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| 1 | Memory Arena (120KB) | ✅ Implemented |
-| 2 | JPEGDEC Integration | ⏸️ Deferred |
+| 1 | Memory Arena (82KB: 32+26+24) | ✅ Implemented |
+| 2 | JPEGDEC Integration | ✅ Implemented (v0.4.1) |
 | 3 | Flash Thumbnail Cache | ✅ Implemented |
-| 4 | Arena Migration | ✅ Partial |
+| 4 | Arena Migration | ✅ Complete |
 
 ### Implemented
 
-- **MemoryArena** — 120KB pre-allocated at boot (`src/core/MemoryArena.h/cpp`)
+- **MemoryArena** — 82KB as 3 independent allocations (32+26+24KB), 24KB task stack optional (`src/core/MemoryArena.h/cpp`)
 - **ThumbnailCache** — LittleFS storage for instant home screen (`src/content/ThumbnailCache.h/cpp`)
-- **JpegToBmpConverter** — Uses arena for decode buffers
+- **JpegToBmpConverter** — Uses arena for decode buffers, JPEGDEC with built-in dithering
 - **PngToBmpConverter** — Uses arena for decode buffers
 - **HomeState** — Uses arena scratchBuffer, integrates flash cache
-
-### Deferred
-
-- **JPEGDEC** — Requires more testing, picojpeg works fine with arena
-- **ZipFile arena** — Complex, low risk with current implementation
-- **Ditherer arena** — Still uses new/delete, acceptable until JPEGDEC
+- **JPEGDEC** — Replaced picojpeg as primary JPEG decoder (v0.4.1)
+- **ZipFile arena** — zipBuffer alias provides 32KB LZ77 dictionary from arena
+- **Ditherer** — OrderedDither uses arena ditherRegion
 
 ### See Also
 
 - `docs/MEMORY_ARCHITECTURE.md` — Current memory system documentation
 - `CHANGELOG.md` — Release notes for v0.4.0
+
+---
+
+> **Note:** Everything below is the **original planning document** written before implementation. The actual implementation uses a **100KB arena (50+26+24KB in 3 blocks)** instead of the 120KB single block described below. See `docs/MEMORY_ARCHITECTURE.md` for the current architecture.
 
 ---
 

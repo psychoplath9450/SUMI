@@ -1,5 +1,6 @@
 #include "ContentHandle.h"
 
+#include <ComicReader.h>
 #include <Epub.h>
 #include <Markdown.h>
 #include <Txt.h>
@@ -25,7 +26,7 @@ constexpr size_t maxSize() {
 
 ContentHandle::ContentHandle() : type(ContentType::None) {
   // Zero-initialize entire union for safety
-  constexpr size_t unionSize = maxSize<EpubProvider, XtcProvider, TxtProvider, MarkdownProvider>();
+  constexpr size_t unionSize = maxSize<EpubProvider, XtcProvider, TxtProvider, MarkdownProvider, ComicProvider>();
   memset(&epub, 0, unionSize);
 }
 
@@ -44,6 +45,9 @@ void ContentHandle::destroyActive() {
       break;
     case ContentType::Markdown:
       markdown.~MarkdownProvider();
+      break;
+    case ContentType::Comic:
+      comic.~ComicProvider();
       break;
     case ContentType::None:
       break;
@@ -64,6 +68,9 @@ void ContentHandle::constructProvider(ContentType newType) {
       break;
     case ContentType::Markdown:
       new (&markdown) MarkdownProvider();
+      break;
+    case ContentType::Comic:
+      new (&comic) ComicProvider();
       break;
     case ContentType::None:
       break;
@@ -99,6 +106,9 @@ Result<void> ContentHandle::open(const char* path, const char* cacheDir) {
     case ContentType::Markdown:
       result = markdown.open(path, cacheDir);
       break;
+    case ContentType::Comic:
+      result = comic.open(path, cacheDir);
+      break;
     default:
       result = ErrVoid(Error::InvalidFormat);
       break;
@@ -124,6 +134,8 @@ const ContentMetadata& ContentHandle::metadata() const {
       return txt.meta;
     case ContentType::Markdown:
       return markdown.meta;
+    case ContentType::Comic:
+      return comic.meta;
     default:
       return emptyMetadata_;
   }
@@ -139,6 +151,8 @@ uint32_t ContentHandle::pageCount() const {
       return txt.pageCount();
     case ContentType::Markdown:
       return markdown.pageCount();
+    case ContentType::Comic:
+      return comic.pageCount();
     default:
       return 0;
   }
@@ -159,6 +173,8 @@ uint16_t ContentHandle::tocCount() const {
       return txt.tocCount();
     case ContentType::Markdown:
       return markdown.tocCount();
+    case ContentType::Comic:
+      return comic.tocCount();
     default:
       return 0;
   }
@@ -174,6 +190,8 @@ Result<TocEntry> ContentHandle::getTocEntry(uint16_t index) const {
       return txt.getTocEntry(index);
     case ContentType::Markdown:
       return markdown.getTocEntry(index);
+    case ContentType::Comic:
+      return comic.getTocEntry(index);
     default:
       return Err<TocEntry>(Error::InvalidState);
   }
@@ -289,5 +307,9 @@ const TxtProvider* ContentHandle::asTxt() const { return type == ContentType::Tx
 const MarkdownProvider* ContentHandle::asMarkdown() const {
   return type == ContentType::Markdown ? &markdown : nullptr;
 }
+
+ComicProvider* ContentHandle::asComic() { return type == ContentType::Comic ? &comic : nullptr; }
+
+const ComicProvider* ContentHandle::asComic() const { return type == ContentType::Comic ? &comic : nullptr; }
 
 }  // namespace sumi

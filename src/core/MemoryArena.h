@@ -6,80 +6,83 @@
 namespace sumi {
 
 /**
- * Pre-allocated memory arena - 80KB for image/cache and text layout operations.
+ * Pre-allocated memory arena - 82KB for image/cache and text layout operations.
+ * Split into three independent allocations (32KB + 26KB + 24KB) to avoid requiring
+ * large contiguous heap blocks, which fail when BLE fragments memory.
  *
- * The arena can be released when not needed (e.g., BLE transfer mode)
+ * Layout:
+ *   Primary    (32KB): ZIP LZ77 decompression dictionary
+ *   Work       (26KB): scratch (8KB) + dither (8KB) + image rows (4KB) + 6KB spare
+ *   Task Stack (24KB): PageCache background task stack (for xTaskCreateStatic)
+ *
+ * The arena can be released when not needed (e.g., BLE transfer, emulator)
  * to free heap for other operations, then reclaimed when needed again.
  *
- * Bump allocator: The entire arena can be used as a temporary scratch pool
- * via scratchAlloc(). This is used by text layout (DP arrays, hyphenation
- * vectors) to avoid heap fragmentation. Call scratchReset() when done.
- * Use ArenaScratch for RAII-based automatic reset.
+ * Bump allocator: The 8KB scratch region can be used as a temporary scratch pool
+ * via scratchAlloc(). Used by text layout (DP arrays). Use ArenaScratch for RAII.
  */
 class MemoryArena {
  public:
   // === PRIMARY BUFFER (32KB) ===
   static constexpr size_t PRIMARY_BUFFER_SIZE = 32 * 1024;
 
-  // === WORK BUFFER (48KB) ===
-  static constexpr size_t WORK_BUFFER_SIZE = 48 * 1024;
+  // === WORK BUFFER (26KB) ===
+  static constexpr size_t WORK_BUFFER_SIZE = 26 * 1024;
 
-  // Work buffer regions (must fit in WORK_BUFFER_SIZE = 48KB)
-  static constexpr size_t ROW_BUFFER_SIZE = 4 * 1024;       // 4KB
-  static constexpr size_t DITHER_BUFFER_SIZE = 32 * 1024;   // 32KB for JPEGDEC dithering (width * 16, max ~2000px)
-  static constexpr size_t IMAGE_BUFFER2_SIZE = 4 * 1024;    // 4KB
-  static constexpr size_t SCRATCH_BUFFER_SIZE = 8 * 1024;   // 8KB
-  // Total: 4 + 32 + 4 + 8 = 48KB
+  // Work buffer regions (must fit in WORK_BUFFER_SIZE = 26KB)
+  static constexpr size_t SCRATCH_BUFFER_SIZE = 8 * 1024;     // 8KB - text layout DP arrays
+  static constexpr size_t DITHER_REGION_SIZE = 8 * 1024;      // 8KB - ditherer error rows (3x ~1.6KB)
+  static constexpr size_t IMAGE_ROW_REGION_SIZE = 4 * 1024;   // 4KB - GfxRenderer bitmap row buffers
+  // Remaining: 6KB spare
+  // Total: 8 + 8 + 4 + 6 = 26KB
 
-  // Legacy size constants
-  static constexpr size_t IMAGE_BUFFER_SIZE = PRIMARY_BUFFER_SIZE;
+  // === TASK STACK (24KB) - separate allocation ===
+  static constexpr size_t TASK_STACK_SIZE = 24 * 1024;        // 24KB - PageCache background task stack
+
+  // Legacy size constants (for Epub.cpp zipBuffer reference)
   static constexpr size_t ZIP_BUFFER_SIZE = 32 * 1024;
 
   // Buffer pointers (valid after init(), nullptr after release())
-  static uint8_t* primaryBuffer;
-  static uint8_t* imageBuffer;
-  static uint8_t* zipBuffer;
-  static uint8_t* rowBuffer;
-  static uint8_t* ditherBuffer;
-  static uint8_t* imageBuffer2;
-  static uint8_t* scratchBuffer;
-
-  // Dither row accessors
-  static int16_t* ditherRow0() { return reinterpret_cast<int16_t*>(ditherBuffer); }
-  static int16_t* ditherRow1() { return reinterpret_cast<int16_t*>(ditherBuffer + 4000); }
-  static int16_t* ditherRow2() { return reinterpret_cast<int16_t*>(ditherBuffer + 8000); }
+  static uint8_t* primaryBuffer;   // 32KB - ZIP LZ77 dictionary
+  static uint8_t* zipBuffer;       // Alias for primaryBuffer (first 32KB used by LZ77)
+  static uint8_t* scratchBuffer;   // 8KB - bump allocator region
+  static uint8_t* ditherRegion;    // 8KB - ditherer error rows
+  static uint8_t* imageRowRegion;  // 4KB - bitmap row buffers
+  static uint8_t* taskStackRegion; // 24KB - background task stack (for xTaskCreateStatic)
+  static uint8_t* fallbackBuffer;  // Framebuffer fallback for ZIP when arena unavailable
 
   // Initialize arena (allocates memory)
   static bool init();
 
-  // Release arena (frees memory for other uses like BLE)
+  // Release arena (frees memory for other uses like BLE transfer, emulator)
   static void release();
+
+  // Temporarily release/reclaim just the 32KB primary buffer.
+  // Used to free heap for parsing when BLE is connected (parser uses framebuffer as ZIP dict).
+  static void releasePrimary();
+  static bool reclaimPrimary();
 
   // Check if arena is currently allocated
   static bool isInitialized() { return initialized_; }
 
   // --- Bump allocator for temporary scratch allocations ---
-  // Returns aligned pointer to `size` bytes from the arena, or nullptr if exhausted.
-  // Memory is valid until scratchReset() is called.
   static void* scratchAlloc(size_t size);
-
-  // Reset bump allocator watermark — all scratch allocations become invalid.
   static void scratchReset();
-
-  // Bytes remaining in the scratch region.
   static size_t scratchRemaining();
 
   static void printStatus();
 
   static constexpr size_t totalSize() {
-    return PRIMARY_BUFFER_SIZE + WORK_BUFFER_SIZE;
+    return PRIMARY_BUFFER_SIZE + WORK_BUFFER_SIZE + TASK_STACK_SIZE;
   }
 
  private:
   friend class ArenaScratch;
   static bool initialized_;
-  static uint8_t* arenaBase_;  // Keep track of base for freeing
-  static size_t scratchOffset_;  // Bump allocator watermark (byte offset from arenaBase_)
+  static uint8_t* primaryBase_;    // 32KB allocation base
+  static uint8_t* workBase_;       // 26KB allocation base
+  static uint8_t* taskStackBase_;  // 24KB allocation base
+  static size_t scratchOffset_;    // Bump allocator watermark within scratch region
   static void scratchSetOffset(size_t offset) { scratchOffset_ = offset; }
   MemoryArena() = delete;
 };
@@ -87,13 +90,6 @@ class MemoryArena {
 /**
  * RAII guard that resets the arena bump allocator on destruction.
  * Use this around text layout operations to ensure scratch memory is reclaimed.
- *
- * Usage:
- *   {
- *     sumi::ArenaScratch guard;
- *     int* dp = guard.alloc<int>(n);  // from arena, not heap
- *     // ... use dp ...
- *   }  // automatically calls scratchReset()
  */
 class ArenaScratch {
   size_t savedOffset_;
@@ -102,18 +98,15 @@ class ArenaScratch {
   ArenaScratch();
   ~ArenaScratch();
 
-  // Non-copyable, non-movable
   ArenaScratch(const ArenaScratch&) = delete;
   ArenaScratch& operator=(const ArenaScratch&) = delete;
 
-  // Typed allocation helper. Returns nullptr if arena is exhausted or not initialized.
   template <typename T>
   T* alloc(size_t count) {
     void* p = MemoryArena::scratchAlloc(count * sizeof(T));
     return static_cast<T*>(p);
   }
 
-  // Returns true if the arena is available for scratch allocations
   bool isValid() const;
 };
 

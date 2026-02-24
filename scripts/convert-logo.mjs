@@ -90,7 +90,7 @@ async function convertToLogo(inputPath, outputPath, invert, threshold, rotate) {
   let output = "#pragma once\n";
   output += "#include <cstdint>\n";
   output += "\n";
-  output += "static const uint8_t PapyrixLogo[] = {\n";
+  output += "static const uint8_t SumiLogo[] = {\n";
 
   // Write bytes, 19 per line to match existing style
   for (let i = 0; i < bytesData.length; i++) {
@@ -145,7 +145,7 @@ Usage:
 
 Arguments:
   input     Input image (PNG, JPG, etc.)
-  output    Output header file (default: src/images/PapyrixLogo.h)
+  output    Output header file (default: src/images/SumiLogo.h)
 
 Options:
   --invert           Invert colors (black becomes white)
@@ -162,7 +162,7 @@ Examples:
   }
 
   const inputPath = positionals[0];
-  const outputPath = positionals[1] || "../src/images/PapyrixLogo.h";
+  const outputPath = positionals[1] || "../src/images/SumiLogo.h";
   const threshold = parseInt(values.threshold, 10);
   const rotate = parseInt(values.rotate, 10);
 

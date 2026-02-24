@@ -687,6 +687,13 @@ void readerStatusBar(const GfxRenderer& r, const Theme& t, int marginLeft, int m
   percentageTextWidth = r.getTextWidth(t.smallFontId, percentageText);
   r.drawText(t.smallFontId, 20 + marginLeft, textY, percentageText, t.primaryTextBlack);
 
+  // BLE indicator (after battery percentage)
+  if (data.bleConnected) {
+    const int bleX = 20 + marginLeft + percentageTextWidth + 4;
+    r.drawText(t.smallFontId, bleX, textY, "BLE", t.primaryTextBlack);
+    percentageTextWidth += 4 + r.getTextWidth(t.smallFontId, "BLE");
+  }
+
   // Battery icon (15x10 px)
   constexpr int batteryWidth = 15;
   constexpr int batteryHeight = 10;

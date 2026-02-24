@@ -237,6 +237,7 @@ bool FileListState::isSupportedFile(const char* name) const {
   if (strcasecmp(ext, "txt") == 0) return true;
   if (strcasecmp(ext, "md") == 0) return true;
   if (strcasecmp(ext, "markdown") == 0) return true;
+  if (strcasecmp(ext, "comic") == 0) return true;
 
   // Image formats (opened via Images app)
   if (strcasecmp(ext, "bmp") == 0) return true;
@@ -476,6 +477,12 @@ StateTransition FileListState::update(Core& core) {
     return StateTransition::to(StateId::Home);
   }
 
+  // Open book in reader
+  if (pendingOpen_) {
+    pendingOpen_ = false;
+    return StateTransition::to(StateId::Reader);
+  }
+
   return StateTransition::stay(StateId::FileList);
 }
 
@@ -641,12 +648,16 @@ void FileListState::openSelected(Core& core) {
     core.settings.fileListSelectedName[sizeof(core.settings.fileListSelectedName) - 1] = '\0';
     core.settings.fileListSelectedIndex = selectedIndex_;
 
-    // Select file - transition to Reader mode via restart
+    // Select file - transition to Reader state
     Serial.printf("[FILES] Selected: %s\n", selectedPath_);
-    showTransitionNotification("Opening book...");
-    saveTransition(BootMode::READER, selectedPath_, ReturnTo::FILE_MANAGER);
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-    ESP.restart();
+    strncpy(core.buf.path, selectedPath_, sizeof(core.buf.path) - 1);
+    core.buf.path[sizeof(core.buf.path) - 1] = '\0';
+    // Save lastBookPath for cold boot "continue reading"
+    strncpy(core.settings.lastBookPath, selectedPath_, sizeof(core.settings.lastBookPath) - 1);
+    core.settings.lastBookPath[sizeof(core.settings.lastBookPath) - 1] = '\0';
+    core.settings.transitionReturnTo = 1;  // ReturnTo::FILE_MANAGER
+    core.settings.saveToFile();
+    pendingOpen_ = true;
   }
 }
 

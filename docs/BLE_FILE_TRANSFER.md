@@ -6,7 +6,7 @@ Wireless file transfer from sumi.page to your SUMI device via Bluetooth Low Ener
 
 Transfer files directly to your SUMI device without removing the SD card. Uses Chrome's Web Bluetooth API with write-with-response for guaranteed delivery and device-confirmed progress.
 
-**Speed**: ~20-80 KB/s (writeWithoutResponse + ACK flow control)  
+**Speed**: ~10-25 KB/s (writeWithoutResponse + ACK flow control)  
 **Reliability**: Device ACKs every 4KB, auto-fallback to reliable mode if needed
 
 ## Requirements
@@ -17,7 +17,7 @@ Transfer files directly to your SUMI device without removing the SD card. Uses C
 - sumi.page open in the browser
 
 ### On your SUMI device:
-- Firmware v0.5.0 or later
+- Firmware v0.3.5 or later
 - Go to Settings → Wireless Transfer → Enable
 
 ## How to Use
@@ -103,7 +103,7 @@ Website                              Device
 
 ### Valid Folders
 
-`books`, `comics`, `images`, `sleep`, `flashcards`, `notes`, `maps`, `custom`, `config/fonts`
+`books`, `comics`, `images`, `sleep`, `flashcards`, `notes`, `maps`, `custom`, `config/fonts`, `config/themes`
 
 ## Troubleshooting
 

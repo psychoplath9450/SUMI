@@ -16,6 +16,7 @@ class RecentBooks {
   static constexpr int PATH_LEN = 128;
   static constexpr int TITLE_LEN = 64;
   static constexpr int AUTHOR_LEN = 48;
+  static constexpr int THUMB_LEN = 80;
 
   struct __attribute__((packed)) Entry {
     char path[PATH_LEN];
@@ -23,16 +24,22 @@ class RecentBooks {
     char author[AUTHOR_LEN];
     uint32_t lastAccess;  // Reserved (no RTC; ordering is by file position)
     uint16_t progress;    // 0-100 percent
-    
+    char thumbPath[THUMB_LEN];  // Persisted thumbnail BMP path (empty = none)
+
     bool isEmpty() const { return path[0] == '\0'; }
+    bool hasThumb() const { return thumbPath[0] != '\0'; }
   };
 
   // Record that a book was opened (moves to front if already in list)
-  static void recordOpen(Core& core, const char* path, const char* title, 
-                         const char* author, uint16_t progress = 0);
-  
+  static void recordOpen(Core& core, const char* path, const char* title,
+                         const char* author, uint16_t progress = 0,
+                         const char* thumbPath = nullptr);
+
   // Update progress for a book (doesn't change order)
   static void updateProgress(Core& core, const char* path, uint16_t progress);
+
+  // Update thumbnail path for a book (persists across sessions)
+  static void updateThumbPath(Core& core, const char* path, const char* thumbPath);
 
   // Load all recent books (returns count, fills entries array)
   // Entries are in most-recent-first order
@@ -45,7 +52,7 @@ class RecentBooks {
   static void clear(Core& core);
 
  private:
-  static constexpr uint8_t VERSION = 1;
+  static constexpr uint8_t VERSION = 2;  // v2: added thumbPath field
   static constexpr const char* INDEX_PATH = "/.sumi/recent.bin";
 };
 

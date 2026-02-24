@@ -18,9 +18,14 @@
 #if FEATURE_BLUETOOTH
 #include "../ble/BleHid.h"
 #include "../ble/BleFileTransfer.h"
+#include <NimBLEDevice.h>
 #endif
+#include "FontManager.h"
 #include "MappedInputManager.h"
 #include "ThemeManager.h"
+#if FEATURE_PLUGINS
+#include "PluginListState.h"
+#endif
 
 namespace sumi {
 
@@ -79,11 +84,22 @@ void SettingsState::exit(Core& core) {
   }
 #endif
   
-  // Re-allocate memory arena if it was released for BLE
+  // Re-allocate memory arena if it was released for BLE scan/pairing, file transfer, or plugins.
+#if FEATURE_BLUETOOTH
+  if (!sumi::MemoryArena::isInitialized()) {
+    if (!ble::isConnected()) {
+      ble::deinit();  // Free BLE stack memory before arena allocation
+    }
+    Serial.printf("[SETTINGS] Re-allocating memory arena (BLE %s)\n",
+                  ble::isConnected() ? "HID connected" : "not connected");
+    sumi::MemoryArena::init();
+  }
+#else
   if (!sumi::MemoryArena::isInitialized()) {
     Serial.println("[SETTINGS] Re-allocating memory arena");
     sumi::MemoryArena::init();
   }
+#endif
 }
 
 StateTransition SettingsState::update(Core& core) {
@@ -112,10 +128,15 @@ StateTransition SettingsState::update(Core& core) {
               case SettingsScreen::ConfirmDialog:
                 confirmView_.toggleSelection();
                 break;
+#if FEATURE_PLUGINS
+              case SettingsScreen::AppVisibility:
+                appVisibilityView_.moveUp();
+                break;
+#endif
 #if FEATURE_BLUETOOTH
               case SettingsScreen::Bluetooth:
                 if (btScanned_) {
-                  int count = ble::scanResultCount();
+                  int count = btTotalCount();
                   if (count > 0) btSelected_ = (btSelected_ == 0) ? count - 1 : btSelected_ - 1;
                 }
                 break;
@@ -146,10 +167,15 @@ StateTransition SettingsState::update(Core& core) {
               case SettingsScreen::ConfirmDialog:
                 confirmView_.toggleSelection();
                 break;
+#if FEATURE_PLUGINS
+              case SettingsScreen::AppVisibility:
+                appVisibilityView_.moveDown();
+                break;
+#endif
 #if FEATURE_BLUETOOTH
               case SettingsScreen::Bluetooth:
                 if (btScanned_) {
-                  int count = ble::scanResultCount();
+                  int count = btTotalCount();
                   if (count > 0) btSelected_ = (btSelected_ + 1) % count;
                 }
                 break;
@@ -181,6 +207,16 @@ StateTransition SettingsState::update(Core& core) {
                 cleanupView_.needsRender = true;
                 needsRender_ = true;
                 break;
+#if FEATURE_BLUETOOTH
+              case SettingsScreen::Bluetooth:
+                // Cycle BLE timeout down
+                if (core.settings.bleTimeout > 0) {
+                  core.settings.bleTimeout--;
+                  ble::setInactivityTimeout(core.settings.getBleTimeoutMs());
+                  core.settings.save(core.storage);
+                }
+                break;
+#endif
               default:
                 goBack(core);
                 break;
@@ -200,8 +236,12 @@ StateTransition SettingsState::update(Core& core) {
                 break;
 #if FEATURE_BLUETOOTH
               case SettingsScreen::Bluetooth:
-                // Rescan
-                enterBluetooth();
+                // Cycle BLE timeout up
+                if (core.settings.bleTimeout < Settings::BleNever) {
+                  core.settings.bleTimeout++;
+                  ble::setInactivityTimeout(core.settings.getBleTimeoutMs());
+                  core.settings.save(core.storage);
+                }
                 break;
 #endif
               default:
@@ -283,9 +323,14 @@ void SettingsState::render(Core& core) {
       case SettingsScreen::ConfirmDialog:
         viewNeedsRender = confirmView_.needsRender;
         break;
+#if FEATURE_PLUGINS
+      case SettingsScreen::AppVisibility:
+        viewNeedsRender = appVisibilityView_.needsRender;
+        break;
+#endif
 #if FEATURE_BLUETOOTH
       case SettingsScreen::Bluetooth:
-        viewNeedsRender = true;  // Always check for BLE updates
+        viewNeedsRender = needsRender_;
         break;
 #endif
     }
@@ -326,6 +371,12 @@ void SettingsState::render(Core& core) {
       ui::render(renderer_, THEME, confirmView_);
       confirmView_.needsRender = false;
       break;
+#if FEATURE_PLUGINS
+    case SettingsScreen::AppVisibility:
+      ui::render(renderer_, THEME, appVisibilityView_);
+      appVisibilityView_.needsRender = false;
+      break;
+#endif
 #if FEATURE_BLUETOOTH
     case SettingsScreen::Bluetooth:
       renderBluetooth();
@@ -346,7 +397,7 @@ void SettingsState::openSelected() {
     goApps_ = true;
     return;
   }
-  idx--;  // Shift remaining items down
+  idx -= 1;  // Shift remaining items down (Apps only; App Visibility moved to Device)
 #endif
 
   // idx 0=HomeArt, 1=Wireless Transfer, 2=Reader, 3=Device, then BT/Cleanup/SystemInfo
@@ -425,6 +476,13 @@ void SettingsState::goBack(Core& core) {
       currentScreen_ = SettingsScreen::Menu;
       menuView_.needsRender = true;
       break;
+#if FEATURE_PLUGINS
+    case SettingsScreen::AppVisibility:
+      saveAppVisibility();
+      currentScreen_ = SettingsScreen::Device;
+      deviceView_.needsRender = true;
+      break;
+#endif
     case SettingsScreen::BleTransfer:
       // Block back during active transfer
       if (ble_transfer::isTransferring()) {
@@ -525,6 +583,18 @@ void SettingsState::handleConfirm(Core& core) {
       break;
 
     case SettingsScreen::Device:
+#if FEATURE_PLUGINS
+      if (deviceView_.isSubMenu(deviceView_.selected)) {
+        // "App Visibility" sub-menu item
+        loadAppVisibility();
+        appVisibilityView_.selected = 0;
+        appVisibilityView_.scrollOffset = 0;
+        appVisibilityView_.needsRender = true;
+        currentScreen_ = SettingsScreen::AppVisibility;
+        needsRender_ = true;
+        break;
+      }
+#endif
       deviceView_.cycleValue(1);
       saveDeviceSettings();
       needsRender_ = true;
@@ -534,26 +604,55 @@ void SettingsState::handleConfirm(Core& core) {
       clearCache(cleanupView_.selected, core);
       break;
 
+#if FEATURE_PLUGINS
+    case SettingsScreen::AppVisibility:
+      appVisibilityView_.toggleSelected();
+      saveAppVisibility();
+      needsRender_ = true;
+      break;
+#endif
+
     case SettingsScreen::SystemInfo:
       goBack(core);
       break;
 
 #if FEATURE_BLUETOOTH
     case SettingsScreen::Bluetooth:
-      if (btScanned_ && ble::scanResultCount() > 0) {
+      if (btScanned_ && btTotalCount() > 0) {
         btConnecting_ = true;
         needsRender_ = true;
         renderer_.clearScreen(0xFF);
         ui::centeredMessage(renderer_, THEME, THEME.uiFontId, "Connecting...");
         renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
 
-        if (ble::connectTo(btSelected_)) {
-          Serial.printf("[BLE] Connected to device %d\n", btSelected_);
-          // Save address for auto-reconnect
+        int scanCount = ble::scanResultCount();
+        bool isSaved = (btSelected_ >= scanCount);
+        const char* devName = "device";
+        const char* devAddr = nullptr;
+        bool connected = false;
+
+        if (isSaved) {
+          // Saved device — use reconnect by address
+          int savedIdx = btSelected_ - scanCount;
+          devName = btSaved_[savedIdx].name;
+          devAddr = btSaved_[savedIdx].addr;
+          connected = ble::reconnect(devAddr);
+        } else {
+          // Scanned device — use connectTo by index
           const BleDevice* dev = ble::scanResult(btSelected_);
           if (dev) {
-            // Detect device type by name
-            String nameLower = String(dev->name);
+            devName = dev->name;
+            devAddr = dev->addr;
+          }
+          connected = ble::connectTo(btSelected_);
+        }
+
+        if (connected) {
+          Serial.printf("[BLE] Connected to %s\n", devName);
+          ble::setInactivityTimeout(core.settings.getBleTimeoutMs());
+          // Save address for auto-reconnect (if from scan, update saved)
+          if (!isSaved && devAddr) {
+            String nameLower = String(devName);
             nameLower.toLowerCase();
             bool isPageTurner = nameLower.indexOf("page") >= 0 ||
                                 nameLower.indexOf("remote") >= 0 ||
@@ -561,14 +660,29 @@ void SettingsState::handleConfirm(Core& core) {
                                 nameLower.indexOf("shutter") >= 0 ||
                                 nameLower.indexOf("free") >= 0;
             if (isPageTurner) {
-              strncpy(core.settings.blePageTurner, dev->addr,
+              strncpy(core.settings.blePageTurner, devAddr,
                       sizeof(core.settings.blePageTurner) - 1);
             } else {
-              strncpy(core.settings.bleKeyboard, dev->addr,
+              strncpy(core.settings.bleKeyboard, devAddr,
                       sizeof(core.settings.bleKeyboard) - 1);
             }
             core.settings.save(core.storage);
           }
+          // Show success message
+          renderer_.clearScreen(0xFF);
+          char msg[64];
+          snprintf(msg, sizeof(msg), "Connected: %s", devName);
+          ui::centeredMessage(renderer_, THEME, THEME.uiFontId, msg);
+          renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+          delay(1500);
+        } else {
+          // Show failure message
+          renderer_.clearScreen(0xFF);
+          char msg[64];
+          snprintf(msg, sizeof(msg), "Failed to connect: %s", devName);
+          ui::centeredMessage(renderer_, THEME, THEME.uiFontId, msg);
+          renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+          delay(1500);
         }
         btConnecting_ = false;
         needsRender_ = true;
@@ -666,35 +780,57 @@ void SettingsState::loadReaderSettings() {
   }
   readerView_.values[0] = 0;  // Not used for ThemeSelect
 
-  // Index 1: Font Size (0=Small, 1=Normal, 2=Large)
-  readerView_.values[1] = settings.fontSize;
+  // Index 1: Font (FontSelect) - load available .epdfont families from SD card
+  readerView_.fontCount = 0;
+  readerView_.currentFontIndex = 0;
+  strncpy(readerView_.fontNames[0], "Default", sizeof(readerView_.fontNames[0]) - 1);
+  readerView_.fontCount = 1;
+  auto fonts = FONT_MANAGER.listAvailableFonts();
+  for (size_t i = 0; i < fonts.size() && readerView_.fontCount < ui::ReaderSettingsView::MAX_FONTS; i++) {
+    if (!FontManager::isBinFont(fonts[i].c_str())) {
+      int idx = readerView_.fontCount;
+      strncpy(readerView_.fontNames[idx], fonts[i].c_str(), sizeof(readerView_.fontNames[idx]) - 1);
+      readerView_.fontNames[idx][sizeof(readerView_.fontNames[idx]) - 1] = '\0';
+      if (settings.readerFont[0] && strcmp(fonts[i].c_str(), settings.readerFont) == 0) {
+        readerView_.currentFontIndex = idx;
+      }
+      readerView_.fontCount++;
+    }
+  }
+  readerView_.values[1] = 0;  // Not used for FontSelect
 
-  // Index 2: Text Layout (0=Compact, 1=Standard, 2=Large)
-  readerView_.values[2] = settings.textLayout;
+  // Index 2: Font Size (0=XSmall, 1=Small, 2=Normal, 3=Large)
+  readerView_.values[2] = settings.fontSize;
 
-  // Index 3: Line Spacing (0=Compact, 1=Normal, 2=Relaxed, 3=Large)
-  readerView_.values[3] = settings.lineSpacing;
+  // Index 3: Text Layout (0=Compact, 1=Standard, 2=Large)
+  readerView_.values[3] = settings.textLayout;
 
-  // Index 4: Text Anti-Aliasing (toggle)
-  readerView_.values[4] = settings.textAntiAliasing;
+  // Index 4: Line Spacing (0=Compact, 1=Normal, 2=Relaxed, 3=Large)
+  readerView_.values[4] = settings.lineSpacing;
 
-  // Index 5: Paragraph Alignment (0=Justified, 1=Left, 2=Center, 3=Right)
-  readerView_.values[5] = settings.paragraphAlignment;
+  // Index 5: Text Anti-Aliasing (toggle)
+  readerView_.values[5] = settings.textAntiAliasing;
 
-  // Index 6: Hyphenation (toggle)
-  readerView_.values[6] = settings.hyphenation;
+  // Index 6: Paragraph Alignment (0=Justified, 1=Left, 2=Center, 3=Right)
+  readerView_.values[6] = settings.paragraphAlignment;
 
-  // Index 7: Show Images (toggle)
-  readerView_.values[7] = settings.showImages;
+  // Index 7: Hyphenation (toggle)
+  readerView_.values[7] = settings.hyphenation;
 
-  // Index 8: Show Tables (toggle)
-  readerView_.values[8] = settings.showTables;
+  // Index 8: Show Images (toggle)
+  readerView_.values[8] = settings.showImages;
 
-  // Index 9: Status Bar (0=None, 1=Show)
-  readerView_.values[9] = settings.statusBar;
+  // Index 9: Show Tables (toggle)
+  readerView_.values[9] = settings.showTables;
 
-  // Index 10: Reading Orientation (0=Portrait, 1=Landscape CW, 2=Inverted, 3=Landscape CCW)
-  readerView_.values[10] = settings.orientation;
+  // Index 10: Status Bar (0=None, 1=Show)
+  readerView_.values[10] = settings.statusBar;
+
+  // Index 11: Reading Orientation (0=Portrait, 1=Landscape CW, 2=Inverted, 3=Landscape CCW)
+  readerView_.values[11] = settings.orientation;
+
+  // Reset scroll to top
+  readerView_.scrollOffset = 0;
 }
 
 void SettingsState::saveReaderSettings() {
@@ -712,35 +848,40 @@ void SettingsState::saveReaderSettings() {
     themeWasChanged_ = true;
   }
 
-  // Index 1: Font Size
-  settings.fontSize = readerView_.values[1];
+  // Index 1: Font (FontSelect) - apply selected font
+  const char* selectedFont = readerView_.getCurrentFontName();
+  strncpy(settings.readerFont, selectedFont, sizeof(settings.readerFont) - 1);
+  settings.readerFont[sizeof(settings.readerFont) - 1] = '\0';
 
-  // Index 2: Text Layout
-  settings.textLayout = readerView_.values[2];
+  // Index 2: Font Size
+  settings.fontSize = readerView_.values[2];
 
-  // Index 3: Line Spacing
-  settings.lineSpacing = readerView_.values[3];
+  // Index 3: Text Layout
+  settings.textLayout = readerView_.values[3];
 
-  // Index 4: Text Anti-Aliasing
-  settings.textAntiAliasing = readerView_.values[4];
+  // Index 4: Line Spacing
+  settings.lineSpacing = readerView_.values[4];
 
-  // Index 5: Paragraph Alignment
-  settings.paragraphAlignment = readerView_.values[5];
+  // Index 5: Text Anti-Aliasing
+  settings.textAntiAliasing = readerView_.values[5];
 
-  // Index 6: Hyphenation
-  settings.hyphenation = readerView_.values[6];
+  // Index 6: Paragraph Alignment
+  settings.paragraphAlignment = readerView_.values[6];
 
-  // Index 7: Show Images
-  settings.showImages = readerView_.values[7];
+  // Index 7: Hyphenation
+  settings.hyphenation = readerView_.values[7];
 
-  // Index 8: Show Tables
-  settings.showTables = readerView_.values[8];
+  // Index 8: Show Images
+  settings.showImages = readerView_.values[8];
 
-  // Index 9: Status Bar
-  settings.statusBar = readerView_.values[9];
+  // Index 9: Show Tables
+  settings.showTables = readerView_.values[9];
 
-  // Index 10: Reading Orientation
-  settings.orientation = readerView_.values[10];
+  // Index 10: Status Bar
+  settings.statusBar = readerView_.values[10];
+
+  // Index 11: Reading Orientation
+  settings.orientation = readerView_.values[11];
 }
 
 void SettingsState::loadHomeArtSettings() {
@@ -891,6 +1032,31 @@ void SettingsState::saveDeviceSettings() {
   // Same as front buttons: changing layout mid-navigation causes ghost events.
 }
 
+#if FEATURE_PLUGINS
+void SettingsState::loadAppVisibility() {
+  const auto& settings = core_->settings;
+
+  // Populate from the global plugin registry
+  appVisibilityView_.appCount = std::min(PluginListState::pluginCount,
+                                          static_cast<int>(ui::AppVisibilityView::MAX_APPS));
+  for (int i = 0; i < appVisibilityView_.appCount; i++) {
+    strncpy(appVisibilityView_.appNames[i], PluginListState::plugins[i].name,
+            sizeof(appVisibilityView_.appNames[0]) - 1);
+    appVisibilityView_.appNames[i][sizeof(appVisibilityView_.appNames[0]) - 1] = '\0';
+    appVisibilityView_.visible[i] = !settings.isPluginHidden(i);
+  }
+}
+
+void SettingsState::saveAppVisibility() {
+  auto& settings = core_->settings;
+
+  // Write visibility state back to the bitmask
+  for (int i = 0; i < appVisibilityView_.appCount; i++) {
+    settings.setPluginHidden(i, !appVisibilityView_.visible[i]);
+  }
+}
+#endif
+
 void SettingsState::populateSystemInfo() {
   infoView_.clear();
 
@@ -943,29 +1109,69 @@ void SettingsState::populateSystemInfo() {
 }
 
 void SettingsState::clearCache(int type, Core& core) {
-  // Set up confirmation dialog messages based on action type
+  // Adjust indices for BLE-enabled builds (Forget BT is index 1)
+#if FEATURE_BLUETOOTH
   if (type == 0) {
-    // Clear Book Cache - show confirmation
     confirmView_.setup("Clear Caches?", "This will delete all book caches", "and reading progress.");
     pendingAction_ = 10;
     currentScreen_ = SettingsScreen::ConfirmDialog;
     needsRender_ = true;
     return;
   } else if (type == 1) {
-    // Clear Device Storage
+    // Forget Bluetooth — immediate action, no confirmation needed
+    if (ble::isConnected()) {
+      ble::disconnect();
+    }
+    core.settings.blePageTurner[0] = '\0';
+    core.settings.bleKeyboard[0] = '\0';
+    core.settings.save(core.storage);
+    // Also clear NimBLE bond table so the device re-pairs cleanly
+    if (ble::isReady()) {
+      NimBLEDevice::deleteAllBonds();
+      Serial.println("[BLE] Cleared NimBLE bond table");
+    }
+    renderer_.clearScreen(0xFF);
+    ui::centeredMessage(renderer_, THEME, THEME.uiFontId, "Bluetooth devices forgotten");
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+    delay(1500);
+    cleanupView_.needsRender = true;
+    needsRender_ = true;
+    Serial.println("[BLE] Forgot saved devices from Cleanup");
+    return;
+  } else if (type == 2) {
     confirmView_.setup("Clear Device?", "This will erase internal flash", "storage. Device will restart.");
     pendingAction_ = 11;
     currentScreen_ = SettingsScreen::ConfirmDialog;
     needsRender_ = true;
     return;
-  } else if (type == 2) {
-    // Factory Reset
+  } else if (type == 3) {
     confirmView_.setup("Factory Reset?", "This will erase ALL data including", "settings and stored data!");
     pendingAction_ = 12;
     currentScreen_ = SettingsScreen::ConfirmDialog;
     needsRender_ = true;
     return;
   }
+#else
+  if (type == 0) {
+    confirmView_.setup("Clear Caches?", "This will delete all book caches", "and reading progress.");
+    pendingAction_ = 10;
+    currentScreen_ = SettingsScreen::ConfirmDialog;
+    needsRender_ = true;
+    return;
+  } else if (type == 1) {
+    confirmView_.setup("Clear Device?", "This will erase internal flash", "storage. Device will restart.");
+    pendingAction_ = 11;
+    currentScreen_ = SettingsScreen::ConfirmDialog;
+    needsRender_ = true;
+    return;
+  } else if (type == 2) {
+    confirmView_.setup("Factory Reset?", "This will erase ALL data including", "settings and stored data!");
+    pendingAction_ = 12;
+    currentScreen_ = SettingsScreen::ConfirmDialog;
+    needsRender_ = true;
+    return;
+  }
+#endif
 }
 
 // ============================================================================
@@ -1261,63 +1467,73 @@ void SettingsState::renderBleTransfer() {
   // ACTIVE TRANSFER
   // ══════════════════════════════════════════════════════════════
   if (ble_transfer::isTransferring()) {
-    int y = 130;
-    
+    int y = 140;
+
     // Queue position header
     uint8_t qi = ble_transfer::queueIndex();
     uint8_t qt = ble_transfer::queueTotal();
     if (qt > 0) {
       char queueHeader[48];
-      snprintf(queueHeader, sizeof(queueHeader), "File %d of %d", qi, qt);
+      snprintf(queueHeader, sizeof(queueHeader), "Receiving file %d of %d", qi, qt);
       renderer_.drawCenteredText(t.menuFontId, y, queueHeader, t.primaryTextBlack, EpdFontFamily::BOLD);
     } else {
       renderer_.drawCenteredText(t.menuFontId, y, "Receiving file...", t.primaryTextBlack, EpdFontFamily::BOLD);
     }
-    y += mdH + 4;
-    
+    y += mdH + 8;
+
     // Filename
     const char* filename = ble_transfer::currentFilename();
     if (filename && filename[0]) {
       renderer_.drawCenteredText(t.smallFontId, y, filename, t.primaryTextBlack);
       y += smH;
     }
+    y += 24;
+
+    drawDivider(y);
     y += 28;
-    
-    // Wide progress bar
-    int progress = ble_transfer::transferProgress();
-    const int barW = W - 60;  // Nearly full width
-    const int barH = 28;
-    const int barX = cx - barW / 2;
-    renderer_.drawRect(barX, y, barW, barH, t.primaryTextBlack);
-    renderer_.drawRect(barX + 1, y + 1, barW - 2, barH - 2, t.primaryTextBlack);
-    if (progress > 0) {
-      int fillW = (barW - 6) * progress / 100;
-      renderer_.fillRect(barX + 3, y + 3, fillW, barH - 6, t.primaryTextBlack);
-    }
-    y += barH + 20;
-    
-    // Giant percentage (hero element)
-    char pctText[8];
-    snprintf(pctText, sizeof(pctText), "%d%%", progress);
-    renderer_.drawCenteredText(t.readerFontIdLarge, y, pctText, t.primaryTextBlack, EpdFontFamily::BOLD);
-    y += renderer_.getLineHeight(t.readerFontIdLarge) + 16;
-    
-    // Bytes received
-    uint32_t received = ble_transfer::bytesReceived();
+
+    // File size
     uint32_t expected = ble_transfer::expectedSize();
-    char progText[64];
+    char sizeText[48];
     if (expected < 1048576) {
-      snprintf(progText, sizeof(progText), "%.0f / %.0f KB", 
-               received / 1024.0f, expected / 1024.0f);
+      snprintf(sizeText, sizeof(sizeText), "File size: %.0f KB", expected / 1024.0f);
     } else {
-      snprintf(progText, sizeof(progText), "%.1f / %.1f MB", 
-               received / 1048576.0f, expected / 1048576.0f);
+      snprintf(sizeText, sizeof(sizeText), "File size: %.1f MB", expected / 1048576.0f);
     }
-    renderer_.drawCenteredText(t.menuFontId, y, progText, t.primaryTextBlack);
-    y += mdH + 40;
-    
-    renderer_.drawCenteredText(t.smallFontId, y, "Do not leave this screen", t.secondaryTextBlack);
-    
+    renderer_.drawCenteredText(t.menuFontId, y, sizeText, t.primaryTextBlack);
+    y += mdH + 8;
+
+    // Speed and ETA based on elapsed time
+    uint32_t elapsedMs = ble_transfer::transferElapsedMs();
+    uint32_t received = ble_transfer::bytesReceived();
+    if (elapsedMs > 2000 && received > 0) {
+      float speedKBs = (received / 1024.0f) / (elapsedMs / 1000.0f);
+      uint32_t remaining = expected > received ? expected - received : 0;
+      uint32_t etaSec = speedKBs > 0 ? (uint32_t)(remaining / 1024.0f / speedKBs) : 0;
+
+      char etaText[48];
+      if (etaSec >= 60) {
+        snprintf(etaText, sizeof(etaText), "About %d min %d sec remaining", etaSec / 60, etaSec % 60);
+      } else if (etaSec > 5) {
+        snprintf(etaText, sizeof(etaText), "About %d seconds remaining", etaSec);
+      } else {
+        snprintf(etaText, sizeof(etaText), "Almost done...");
+      }
+      renderer_.drawCenteredText(t.menuFontId, y, etaText, t.primaryTextBlack);
+    } else {
+      renderer_.drawCenteredText(t.menuFontId, y, "Starting transfer...", t.primaryTextBlack);
+    }
+    y += mdH + 48;
+
+    // Warning
+    drawDivider(y);
+    y += 28;
+    renderer_.drawCenteredText(t.menuFontId, y, "Do not leave this screen", t.primaryTextBlack, EpdFontFamily::BOLD);
+    y += mdH + 4;
+    renderer_.drawCenteredText(t.smallFontId, y, "The transfer will fail if you", t.secondaryTextBlack);
+    y += smH;
+    renderer_.drawCenteredText(t.smallFontId, y, "navigate away during download.", t.secondaryTextBlack);
+
     ui::ButtonBar buttons{"", "", "", ""};
     ui::buttonBar(renderer_, t, buttons);
     renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
@@ -1366,7 +1582,7 @@ void SettingsState::renderBleTransfer() {
     drawDivider(y);
     y += 28;
     
-    renderer_.drawCenteredText(t.menuFontId, y, "Open sumi.page in Chrome,", t.secondaryTextBlack);
+    renderer_.drawCenteredText(t.menuFontId, y, "Open sumi.page in Chrome/Edge,", t.secondaryTextBlack);
     y += mdH;
     renderer_.drawCenteredText(t.menuFontId, y, "convert your files, then tap", t.secondaryTextBlack);
     y += mdH;
@@ -1382,59 +1598,100 @@ void SettingsState::renderBleTransfer() {
 }
 
 #if FEATURE_BLUETOOTH
+int SettingsState::btTotalCount() const {
+  return ble::scanResultCount() + btSavedCount_;
+}
+
 void SettingsState::enterBluetooth() {
   btSelected_ = 0;
   btScanned_ = false;
   btConnecting_ = false;
 
-  // Release memory arena to free up heap for BLE stack (~40KB needed)
+  // Release arena before BLE init — NimBLE stack needs large contiguous heap
+  // for scanning/pairing. Arena gets re-allocated on settings exit.
   if (sumi::MemoryArena::isInitialized()) {
-    Serial.println("[BLE] Releasing memory arena for BLE stack");
     sumi::MemoryArena::release();
   }
-
   ble::init();
 
-  // Initialize file transfer service (runs alongside HID)
-  ble_transfer::init();
-  ble_transfer::startAdvertising();
-  Serial.println("[BLE] File transfer service ready - device can receive files from sumi.page");
-
-  // Try reconnecting to saved devices first
-  const char* savedKb = core_->settings.bleKeyboard;
-  const char* savedPt = core_->settings.blePageTurner;
-  bool hasSaved = (savedKb[0] != '\0' || savedPt[0] != '\0');
-
-  if (hasSaved && !ble::isConnected()) {
-    renderer_.clearScreen(0xFF);
-    ui::centeredMessage(renderer_, THEME, THEME.uiFontId, "Connecting to saved device...");
-    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
-
-    if (savedPt[0] != '\0' && ble::reconnect(savedPt)) {
-      Serial.println("[BLE] Reconnected to saved page turner");
-      btScanned_ = true;
-      needsRender_ = true;
-      return;
-    }
-    if (savedKb[0] != '\0' && ble::reconnect(savedKb)) {
-      Serial.println("[BLE] Reconnected to saved keyboard");
-      btScanned_ = true;
-      needsRender_ = true;
-      return;
-    }
-    Serial.println("[BLE] Saved device not available, scanning...");
-  }
-
-  // Show scanning message
+  // Always scan — show the device list so the user can pick
   renderer_.clearScreen(0xFF);
   ui::centeredMessage(renderer_, THEME, THEME.uiFontId, "Scanning for devices...");
   renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
 
   ble::startScan(10);
   btScanned_ = true;
-  needsRender_ = true;
+  populateSavedDevices();
 
-  Serial.printf("[BLE] Scan found %d devices\n", ble::scanResultCount());
+  Serial.printf("[BLE] Scan found %d devices, %d saved not in scan\n",
+                ble::scanResultCount(), btSavedCount_);
+
+  // Auto-connect: if a known page turner was detected during scan, connect
+  // immediately. Devices like Free2 stop advertising within a few seconds,
+  // so waiting for the user to select it from the list always fails.
+  int ptIdx = ble::foundPageTurnerIndex();
+  if (ptIdx >= 0 && !ble::isConnected()) {
+    const BleDevice* ptDev = ble::scanResult(ptIdx);
+    const char* ptName = ptDev ? ptDev->name : "Page Turner";
+    Serial.printf("[BLE] Auto-connecting to page turner: %s\n", ptName);
+
+    renderer_.clearScreen(0xFF);
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Connecting: %s", ptName);
+    ui::centeredMessage(renderer_, THEME, THEME.uiFontId, msg);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+
+    if (ble::connectTo(ptIdx)) {
+      Serial.printf("[BLE] Auto-connected to %s!\n", ptName);
+      ble::setInactivityTimeout(core_->settings.getBleTimeoutMs());
+      // Save address for auto-reconnect
+      if (ptDev) {
+        strncpy(core_->settings.blePageTurner, ptDev->addr,
+                sizeof(core_->settings.blePageTurner) - 1);
+        core_->settings.save(core_->storage);
+      }
+      renderer_.clearScreen(0xFF);
+      snprintf(msg, sizeof(msg), "Connected: %s", ptName);
+      ui::centeredMessage(renderer_, THEME, THEME.uiFontId, msg);
+      renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+      delay(1500);
+    } else {
+      Serial.println("[BLE] Auto-connect failed");
+      renderer_.clearScreen(0xFF);
+      snprintf(msg, sizeof(msg), "Auto-connect failed: %s", ptName);
+      ui::centeredMessage(renderer_, THEME, THEME.uiFontId, msg);
+      renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+      delay(1500);
+    }
+  }
+
+  needsRender_ = true;
+}
+
+void SettingsState::populateSavedDevices() {
+  btSavedCount_ = 0;
+  const char* savedPt = core_->settings.blePageTurner;
+  const char* savedKb = core_->settings.bleKeyboard;
+
+  // Helper: check if address is already in scan results
+  auto inScan = [](const char* addr) {
+    for (int i = 0; i < ble::scanResultCount(); i++) {
+      const BleDevice* dev = ble::scanResult(i);
+      if (dev && strcmp(dev->addr, addr) == 0) return true;
+    }
+    return false;
+  };
+
+  if (savedPt[0] != '\0' && !inScan(savedPt)) {
+    strncpy(btSaved_[btSavedCount_].name, "Page Turner", sizeof(btSaved_[0].name) - 1);
+    strncpy(btSaved_[btSavedCount_].addr, savedPt, sizeof(btSaved_[0].addr) - 1);
+    btSavedCount_++;
+  }
+  if (savedKb[0] != '\0' && !inScan(savedKb)) {
+    strncpy(btSaved_[btSavedCount_].name, "Keyboard", sizeof(btSaved_[0].name) - 1);
+    strncpy(btSaved_[btSavedCount_].addr, savedKb, sizeof(btSaved_[0].addr) - 1);
+    btSavedCount_++;
+  }
 }
 
 void SettingsState::renderBluetooth() {
@@ -1445,28 +1702,33 @@ void SettingsState::renderBluetooth() {
   // Standard title
   ui::title(renderer_, t, t.screenMarginTop, "Bluetooth");
 
-  // File transfer status at bottom
-  if (ble_transfer::isReady()) {
+  // Show timeout setting at bottom
+  {
     const int footerY = renderer_.getScreenHeight() - 35;
-    renderer_.drawCenteredText(font, footerY, "File transfer: Ready (sumi.page)", true);
+    static constexpr const char* TIMEOUT_LABELS[] = {"3 min", "5 min", "10 min", "30 min", "Never"};
+    const uint8_t idx = std::min(core_->settings.bleTimeout, uint8_t(4));
+    char footer[48];
+    snprintf(footer, sizeof(footer), "Disconnect after: %s  (Left/Right)", TIMEOUT_LABELS[idx]);
+    renderer_.drawCenteredText(font, footerY, footer, true);
   }
 
   if (!btScanned_) {
     renderer_.drawCenteredText(font, renderer_.getScreenHeight() / 2, "Press OK to scan", true);
-  } else if (ble::isConnected() && ble::scanResultCount() == 0) {
-    // Connected via saved device reconnect
+  } else if (ble::isConnected() && btTotalCount() == 0) {
+    // Connected via saved device reconnect, no list to show
     char status[64];
     snprintf(status, sizeof(status), "Connected: %s", ble::connectedDevice());
     renderer_.drawCenteredText(font, renderer_.getScreenHeight() / 2 - 10, status, true, EpdFontFamily::BOLD);
-    renderer_.drawCenteredText(font, renderer_.getScreenHeight() / 2 + 25, "Press Rescan to find other devices", true);
-  } else if (ble::scanResultCount() == 0) {
+    renderer_.drawCenteredText(font, renderer_.getScreenHeight() / 2 + 25, "Press OK to rescan", true);
+  } else if (btTotalCount() == 0) {
     renderer_.drawCenteredText(font, renderer_.getScreenHeight() / 2 - 20,
                                "No devices found", true);
     renderer_.drawCenteredText(font, renderer_.getScreenHeight() / 2 + 20,
-                               "Press OK or Rescan to try again", true);
+                               "Press OK to try again", true);
   } else {
     const int startY = 60;
     int y = startY;
+    int scanCount = ble::scanResultCount();
 
     // If connected, show status as first item
     if (ble::isConnected()) {
@@ -1476,12 +1738,11 @@ void SettingsState::renderBluetooth() {
       y += t.menuItemHeight + t.itemSpacing;
     }
 
-    // Device list using standard menu items
-    for (int i = 0; i < ble::scanResultCount(); i++) {
+    // Scanned device list
+    for (int i = 0; i < scanCount; i++) {
       const BleDevice* dev = ble::scanResult(i);
       if (!dev) continue;
 
-      // Build label: "Name  -XXdBm  HID"
       char label[64];
       if (dev->hasHID) {
         snprintf(label, sizeof(label), "%s  [HID]", dev->name);
@@ -1492,8 +1753,18 @@ void SettingsState::renderBluetooth() {
       bool sel = (i == btSelected_);
       ui::menuItem(renderer_, t, y, label, sel);
       y += t.menuItemHeight + t.itemSpacing;
+      if (y + t.menuItemHeight > renderer_.getScreenHeight() - 40) break;
+    }
 
-      // Stop if we'd overflow into footer
+    // Saved devices (not found in scan)
+    for (int i = 0; i < btSavedCount_; i++) {
+      int listIdx = scanCount + i;
+      char label[64];
+      snprintf(label, sizeof(label), "%s  [Saved]", btSaved_[i].name);
+
+      bool sel = (listIdx == btSelected_);
+      ui::menuItem(renderer_, t, y, label, sel);
+      y += t.menuItemHeight + t.itemSpacing;
       if (y + t.menuItemHeight > renderer_.getScreenHeight() - 40) break;
     }
   }

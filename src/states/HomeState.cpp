@@ -88,17 +88,15 @@ void HomeState::loadLastBook(Core& core) {
     strncpy(core.buf.path, savedPath, sizeof(core.buf.path) - 1);
     core.buf.path[sizeof(core.buf.path) - 1] = '\0';
     
-    // Get thumbnail path from hash
+    // Use persisted thumbnail path from RecentBooks (no hash re-derivation)
     uint32_t hash = LibraryIndex::hashPath(savedPath);
-    currentBookHash_ = hash;  // Store for flash cache
-    char thumbPath[80];
-    snprintf(thumbPath, sizeof(thumbPath), SUMI_CACHE_DIR "/epub_%lu/thumb.bmp", (unsigned long)hash);
-    if (core.settings.showImages && SdMan.exists(thumbPath)) {
-      coverBmpPath_ = thumbPath;
+    currentBookHash_ = hash;
+    if (core.settings.showImages && recentEntry.hasThumb() && SdMan.exists(recentEntry.thumbPath)) {
+      coverBmpPath_ = recentEntry.thumbPath;
       hasCoverImage_ = true;
     }
     view_.hasCoverBmp = hasCoverImage_;
-    
+
     // Get progress from LibraryIndex - use minimal stack
     LibraryIndex::Entry libEntry;
     if (LibraryIndex::findByHash(core, hash, libEntry)) {
@@ -151,10 +149,11 @@ void HomeState::loadRecentBooks(Core& core) {
     startIdx = 1;
   }
   
-  // Add remaining recent books (simplified - no thumbnail check to reduce SD operations)
+  // Add remaining recent books with persisted thumbnail paths
   for (int i = startIdx; i < count && view_.recentBookCount < ui::HomeView::MAX_RECENT_BOOKS; i++) {
     view_.addRecentBook(entries[i].title, entries[i].author, entries[i].path,
-                        entries[i].progress, false);
+                        entries[i].progress, entries[i].hasThumb(),
+                        entries[i].thumbPath);
   }
   
   Serial.printf("[HOME] Loaded %d recent books (showing %d)\n", count, view_.recentBookCount);
@@ -163,11 +162,14 @@ void HomeState::loadRecentBooks(Core& core) {
 void HomeState::openSelectedBook(Core& core) {
   const char* path = view_.getSelectedPath();
   if (path && path[0] != '\0') {
-    showTransitionNotification("Opening book...");
     strncpy(core.buf.path, path, sizeof(core.buf.path) - 1);
-    saveTransition(BootMode::READER, core.buf.path, ReturnTo::HOME);
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-    ESP.restart();
+    core.buf.path[sizeof(core.buf.path) - 1] = '\0';
+    // Save lastBookPath for "continue reading" on next cold boot
+    strncpy(core.settings.lastBookPath, core.buf.path, sizeof(core.settings.lastBookPath) - 1);
+    core.settings.lastBookPath[sizeof(core.settings.lastBookPath) - 1] = '\0';
+    core.settings.transitionReturnTo = 0;  // ReturnTo::HOME
+    core.settings.saveToFile();
+    pendingOpen_ = true;
   }
 }
 
@@ -211,10 +213,9 @@ void HomeState::updateSelectedBook(Core& core) {
         view_.isChapterBased = true;
       }
 
-      char thumbPath[80];
-      snprintf(thumbPath, sizeof(thumbPath), SUMI_CACHE_DIR "/epub_%lu/thumb.bmp", (unsigned long)hash);
-      if (core.settings.showImages && SdMan.exists(thumbPath)) {
-        coverBmpPath_ = thumbPath;
+      // Use persisted thumbnail path from RecentBooks
+      if (core.settings.showImages && recent.thumbPath[0] != '\0' && SdMan.exists(recent.thumbPath)) {
+        coverBmpPath_ = recent.thumbPath;
         hasCoverImage_ = true;
       }
     }
@@ -286,6 +287,12 @@ StateTransition HomeState::update(Core& core) {
 
       default:
         break;
+    }
+
+    // Check if a book open was requested (sets path on core.buf.path)
+    if (pendingOpen_) {
+      pendingOpen_ = false;
+      return StateTransition::to(StateId::Reader);
     }
   }
 
@@ -440,9 +447,57 @@ void HomeState::render(Core& core) {
   // Render rest of UI (text boxes will draw on top of cover)
   ui::render(renderer_, theme, view_);
 
-  renderer_.displayBuffer();
+  renderer_.displayBuffer(EInkDisplay::HALF_REFRESH);
   view_.needsRender = false;
   core.display.markDirty();
+
+  // First-boot welcome overlay — show once when no .sumi folder exists yet
+  if (core.settings.isFirstBoot) {
+    core.settings.isFirstBoot = false;
+    delay(2000);  // Let home screen settle before overlaying
+
+    const int W = renderer_.getScreenWidth();   // 480
+    const int pad = 24;
+    const int boxX = pad;
+    const int boxW = W - 2 * pad;
+    const int boxY = 480;
+    const int boxH = 280;
+
+    // White box with double border
+    renderer_.fillRect(boxX, boxY, boxW, boxH, false);
+    renderer_.drawRect(boxX, boxY, boxW, boxH, true);
+    renderer_.drawRect(boxX + 1, boxY + 1, boxW - 2, boxH - 2, true);
+
+    const int textX = boxX + 20;
+    const int textW = boxW - 40;
+    const int lineH = renderer_.getLineHeight(theme.menuFontId) + 4;
+    int y = boxY + 24;
+
+    // Title
+    renderer_.drawCenteredText(theme.menuFontId, y, "Welcome to SUMI", theme.primaryTextBlack, EpdFontFamily::BOLD);
+    y += lineH + 12;
+
+    // Body text
+    const char* lines[] = {
+      "SUMI reads any EPUB, but files",
+      "optimized on sumi.page load faster,",
+      "look sharper, and use less memory.",
+      "",
+      "Open sumi.page in Chrome or Edge",
+      "with Bluetooth enabled to convert",
+      "and send files wirelessly.",
+    };
+    for (const char* line : lines) {
+      if (line[0] == '\0') {
+        y += lineH / 2;
+      } else {
+        renderer_.drawCenteredText(theme.smallFontId, y, line, theme.primaryTextBlack);
+        y += renderer_.getLineHeight(theme.smallFontId) + 3;
+      }
+    }
+
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+  }
 }
 
 void HomeState::renderCoverToCard() {

@@ -15,7 +15,7 @@ ReaderNavigation::NavResult ReaderNavigation::next(ContentType type, const Posit
 
   const int pageCount = cache ? cache->pageCount() : 0;
 
-  if (type == ContentType::Xtc) {
+  if (type == ContentType::Xtc || type == ContentType::Comic) {
     if (current.flatPage + 1 < totalPages) {
       result.position.flatPage = current.flatPage + 1;
       result.needsRender = true;
@@ -54,7 +54,7 @@ ReaderNavigation::NavResult ReaderNavigation::prev(ContentType type, const Posit
   result.needsRender = false;
   result.needsCacheReset = false;
 
-  if (type == ContentType::Xtc) {
+  if (type == ContentType::Xtc || type == ContentType::Comic) {
     if (current.flatPage > 0) {
       result.position.flatPage = current.flatPage - 1;
       result.needsRender = true;

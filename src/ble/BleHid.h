@@ -46,6 +46,11 @@ const BleDevice* scanResult(int index);
 // Connect to scanned device by index
 bool connectTo(int index);
 
+// Returns index of known page turner found during scan, or -1 if none.
+// When >= 0, call connectTo(index) immediately for best chance of success
+// (devices like Free2 stop advertising within seconds).
+int foundPageTurnerIndex();
+
 // Auto-reconnect to saved address
 bool reconnect(const char* addr);
 
@@ -67,5 +72,11 @@ void deinit();
 
 // Check if initialized
 bool isReady();
+
+// Inactivity timeout management
+// Call from main loop — disconnects if no BLE input for timeoutMs.
+// Pass 0 to disable. Resets on every successful poll().
+void setInactivityTimeout(uint32_t timeoutMs);
+bool checkInactivityTimeout();  // Returns true if connection was closed due to timeout
 
 }  // namespace ble

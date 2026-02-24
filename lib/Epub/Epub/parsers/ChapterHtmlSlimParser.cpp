@@ -114,6 +114,22 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
+  // Abort early if memory is critically low — prevents abort() from OOM in callbacks.
+  // Uses total free heap (not largest contiguous block) because parser allocations are
+  // small (strings, vectors, shared_ptrs) and don't need contiguous memory.
+  if (self->stopRequested_) {
+    self->depth += 1;
+    return;
+  }
+  if (ESP.getFreeHeap() < 8192) {
+    Serial.printf("[%lu] [EHP] Low memory in startElement (%zu bytes), stopping parser\n",
+                  millis(), ESP.getFreeHeap());
+    self->aborted_ = true;
+    self->stopRequested_ = true;
+    XML_StopParser(self->xmlParser_, XML_FALSE);
+    return;
+  }
+
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
     self->depth += 1;
@@ -126,13 +142,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   if (matches(name, IMAGE_TAGS, NUM_IMAGE_TAGS)) {
-    // Skip all images when memory is critically low (avoid OOM crash during conversion)
-    size_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < 40000) {
-      Serial.printf("[%lu] [EHP] Skipping image - low memory (%zu bytes)\n", millis(), freeHeap);
-      self->depth += 1;
-      return;
-    }
+    // Memory check moved into cacheImage() — the early bail here was
+    // preventing already-cached BMP images (e.g. newspaper inline art)
+    // from loading even though they need zero conversion memory.
 
     std::string srcAttr;
     std::string altText;
@@ -375,28 +387,40 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (strcmp(name, "br") == 0) {
       self->flushPartWordBuffer();
       const auto style = self->currentTextBlock ? self->currentTextBlock->getStyle()
-                                                : static_cast<TextBlock::BLOCK_STYLE>(self->config.paragraphAlignment);
+                                                : (self->config.paragraphAlignment <= 3
+                                                       ? static_cast<TextBlock::BLOCK_STYLE>(self->config.paragraphAlignment)
+                                                       : TextBlock::JUSTIFIED);
       self->startNewTextBlock(style);
     } else {
-      // Determine block style: CSS text-align takes precedence
-      TextBlock::BLOCK_STYLE blockStyle = static_cast<TextBlock::BLOCK_STYLE>(self->config.paragraphAlignment);
-      if (cssStyle.hasTextAlign) {
-        switch (cssStyle.textAlign) {
-          case TextAlign::Left:
-            blockStyle = TextBlock::LEFT_ALIGN;
-            break;
-          case TextAlign::Right:
-            blockStyle = TextBlock::RIGHT_ALIGN;
-            break;
-          case TextAlign::Center:
-            blockStyle = TextBlock::CENTER_ALIGN;
-            break;
-          case TextAlign::Justify:
-            blockStyle = TextBlock::JUSTIFIED;
-            break;
-          default:
-            break;
+      // Determine block style based on alignment mode:
+      //  - "Book's Style" (value 4): respect the book's CSS text-align, default to Justified
+      //  - Other modes (0-3): user setting always wins, ignore CSS text-align
+      TextBlock::BLOCK_STYLE blockStyle;
+      constexpr uint8_t BOOK_STYLE = 4;
+      if (self->config.paragraphAlignment == BOOK_STYLE) {
+        // Book's Style: use CSS text-align if present, otherwise Justified
+        blockStyle = TextBlock::JUSTIFIED;
+        if (cssStyle.hasTextAlign) {
+          switch (cssStyle.textAlign) {
+            case TextAlign::Left:
+              blockStyle = TextBlock::LEFT_ALIGN;
+              break;
+            case TextAlign::Right:
+              blockStyle = TextBlock::RIGHT_ALIGN;
+              break;
+            case TextAlign::Center:
+              blockStyle = TextBlock::CENTER_ALIGN;
+              break;
+            case TextAlign::Justify:
+              blockStyle = TextBlock::JUSTIFIED;
+              break;
+            default:
+              break;
+          }
         }
+      } else {
+        // User-selected alignment: always override CSS
+        blockStyle = static_cast<TextBlock::BLOCK_STYLE>(self->config.paragraphAlignment);
       }
       self->startNewTextBlock(blockStyle);
     }
@@ -630,9 +654,10 @@ bool ChapterHtmlSlimParser::shouldAbort() const {
     return true;
   }
 
-  // Check memory pressure
-  const size_t freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  if (freeHeap < MIN_FREE_HEAP) {
+  // Check memory pressure — need room for XML buffers, strings, text blocks, page vectors.
+  // Uses total free heap (not contiguous) since parser allocations are many small ones.
+  const size_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < 8192) {
     Serial.printf("[%lu] [EHP] Low memory (%zu bytes free)\n", millis(), freeHeap);
     return true;
   }
@@ -730,6 +755,14 @@ bool ChapterHtmlSlimParser::parseLoop() {
         aborted_ = true;
         break;
       }
+      // Proactive heap check — abort before OOM causes abort().
+      // Uses total free heap (not contiguous) since parser does many small allocations.
+      const size_t freeTotal = ESP.getFreeHeap();
+      if (freeTotal < 8192) {
+        Serial.printf("[%lu] [EHP] Low memory during parse (%zu bytes), aborting\n", millis(), freeTotal);
+        aborted_ = true;
+        break;
+      }
       vTaskDelay(1);  // Yield to prevent watchdog reset
     }
 
@@ -791,8 +824,8 @@ bool ChapterHtmlSlimParser::parseLoop() {
     // add extra frames through getExternalGlyphWidth() → ExternalFont::getGlyph() (SD I/O).
     if (pendingEmergencySplit_ && currentTextBlock && !currentTextBlock->isEmpty()) {
       pendingEmergencySplit_ = false;
-      const size_t freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-      if (freeHeap < MIN_FREE_HEAP + (MIN_FREE_HEAP / 4)) {
+      const size_t freeHeap = ESP.getFreeHeap();
+      if (freeHeap < 8192) {
         Serial.printf("[%lu] [EHP] Low memory (%zu), aborting parse\n", millis(), freeHeap);
         aborted_ = true;
         break;
@@ -809,8 +842,10 @@ bool ChapterHtmlSlimParser::parseLoop() {
   // Reached end of file or aborted — finalize
   // Process last page if there is still text
   if (currentTextBlock && !stopRequested_) {
-    makePages();
-    if (!stopRequested_ && currentPage) {
+    if (!currentTextBlock->isEmpty()) {
+      makePages();
+    }
+    if (!stopRequested_ && currentPage && !currentPage->elements.empty()) {
       completePageFn(std::move(currentPage));
     }
     currentPage.reset();
@@ -905,9 +940,10 @@ void ChapterHtmlSlimParser::makePages() {
   flushPartWordBuffer();
 
   // Check memory before expensive layout operation
-  // Layout needs ~4-6KB for text processing; allow operation if we have 1.25× MIN_FREE_HEAP
-  const size_t freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  if (freeHeap < MIN_FREE_HEAP + (MIN_FREE_HEAP / 4)) {
+  // Layout needs ~4-6KB for text processing (DP arrays, word vectors, line extraction).
+  // Uses total free heap since layout allocations are many small ones.
+  const size_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < 8192) {
     Serial.printf("[%lu] [EHP] Insufficient memory for layout (%zu bytes)\n", millis(), freeHeap);
     currentTextBlock.reset();
     aborted_ = true;

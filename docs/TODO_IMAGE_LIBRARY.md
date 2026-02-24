@@ -1,17 +1,18 @@
 # SUMI Future Improvements - Image & Library System
 
-## Status: v0.4.0 Complete
+## Status: v0.4.1 Complete
 
 What we implemented:
-- ✅ Memory Arena (64KB pre-allocated, releasable for BLE)
+- ✅ Memory Arena (82KB: 32+26+24, releasable for BLE)
 - ✅ Flash Thumbnail Cache (instant home screen for opened books)
 - ✅ Arena migration for JPEG/PNG converters
 - ✅ HomeState uses arena scratchBuffer
 - ✅ **JPEGDEC Integration** - Replaced picojpeg with modern decoder
+- ✅ **ZipFile Arena Migration** - zipBuffer alias provides LZ77 dictionary
 
 ---
 
-## ✅ JPEGDEC Integration (DONE)
+## ✅ JPEGDEC Integration (DONE — v0.4.1)
 
 Replaced picojpeg (2011 vintage) with JPEGDEC by Larry Bank (bitbank2).
 
@@ -30,6 +31,12 @@ Replaced picojpeg (2011 vintage) with JPEGDEC by Larry Bank (bitbank2).
 - `setPixelType(TWO_BIT_DITHERED)` for 4 gray levels
 - `decodeDither()` handles Floyd-Steinberg internally
 - No more manual ditherer allocation for JPEG
+
+---
+
+## ✅ ZipFile Arena Migration (DONE)
+
+`zipBuffer` is now an alias for `primaryBuffer` in the arena. `Epub::readItemContentsToStream()` passes `MemoryArena::zipBuffer` as the `dictBuffer` parameter to `ZipFile::readFileToStream()`. This provides the 32KB LZ77 dictionary from arena memory instead of `malloc(32KB)`. Falls back to heap malloc when arena is unavailable.
 
 ---
 
@@ -63,39 +70,15 @@ Home screen refreshes with new covers
 
 ### Implementation Notes
 - Need to extract cover without fully parsing EPUB (just grab cover.jpg from ZIP)
-- Could use arena buffers (imageBuffer for decode, scratchBuffer for thumbnail)
+- Could use arena buffers (primaryBuffer for decode, scratchBuffer for thumbnail)
 - Flash cache already handles storage
 - Consider: limit to N covers per session to avoid blocking UI
 
 ---
 
-## TODO: JPEGDEC Integration
-
-**Goal:** Replace picojpeg with modern, maintained decoder that has built-in e-ink dithering.
-
-### Why
-- picojpeg is from 2011, designed for 8-bit microcontrollers
-- JPEGDEC has built-in Floyd-Steinberg for 1/2/4-bit output
-- JPEGDEC is fuzz-tested, actively maintained
-- Would delete 4 ditherer classes (AtkinsonDitherer, FloydSteinbergDitherer, Atkinson1BitDitherer, RawAtkinson1BitDitherer)
-
-### Steps
-1. Add JPEGDEC library to lib/
-2. Create new JpegToBmpConverter implementation
-3. Test with various JPEG sizes and types
-4. Keep picojpeg as fallback initially
-5. Once stable, remove picojpeg and old ditherers
-
-### Blockers
-- Need to test with real cover images
-- JPEGDEC uses different callback pattern than picojpeg
-- PNG still needs ditherers (until PNGdec integration)
-
----
-
 ## TODO: Home Screen as Library Carousel
 
-**Goal:** Home screen shows carousel of ALL books with covers, not just 3 recent.
+**Goal:** Home screen shows carousel of ALL books with covers, not just 10 recent.
 
 ### Current State
 ```
@@ -105,7 +88,7 @@ Home Screen:
 │  Title / Author     │
 │  Progress bar       │
 ├─────────────────────┤
-│  Recent 1 │ Recent 2│  ← Small cards, just titles
+│  Up/Down to scroll  │  ← 10 recent books
 └─────────────────────┘
 ```
 
@@ -140,45 +123,21 @@ Right: Jump to N-Z
 
 ### Dependencies
 - Library Cover Scanning (need covers for all books)
-- May need larger flash cache (currently 3 books)
+- May need larger flash cache (currently limited to recent books)
 - Consider: virtual scrolling, only load visible covers
-
----
-
-## TODO: ZipFile Arena Migration
-
-**Goal:** Move ZipFile malloc/free to use arena zipBuffer.
-
-### Current State
-- ZipFile has 8 malloc calls
-- Uses TINFL_LZ_DICT_SIZE (32KB) for inflate dictionary
-- Arena has zipBuffer (32KB) ready but unused
-
-### Why Deferred
-- ZipFile is complex with multiple code paths
-- Current implementation works fine
-- Lower risk than image processing (less fragmentation)
-
-### Steps
-1. Audit all ZipFile malloc/free patterns
-2. Replace dictionary malloc with MemoryArena::zipBuffer
-3. Put tinfl_decompressor on stack (small, ~11KB)
-4. Test EPUB loading thoroughly
 
 ---
 
 ## Priority Order
 
-1. **JPEGDEC Integration** - Eliminates ditherer complexity, more robust
-2. **Library Cover Scanning** - Required for full carousel
-3. **Home as Library Carousel** - Big UX improvement
-4. **ZipFile Arena** - Nice to have, low priority
+1. **Library Cover Scanning** - Required for full carousel
+2. **Home as Library Carousel** - Big UX improvement
 
 ---
 
 ## Notes
 
-- All TODO items use the existing 120KB arena
-- Flash cache may need expansion for full library (currently ~8KB for 3 books)
+- All TODO items use the existing 82KB arena (32+26+24)
+- Flash cache may need expansion for full library
 - Consider moving flash cache limit to config.h
 - LibraryIndex v2 already has most metadata needed for carousel

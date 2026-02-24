@@ -53,13 +53,21 @@ class BackgroundTask {
   BackgroundTask& operator=(const BackgroundTask&) = delete;
 
   /**
-   * Start the background task.
+   * Start the background task (dynamic stack allocation from heap).
    * @param name Task name for debugging (max 16 chars)
    * @param stackSize Stack size in bytes (use >= 4096 for complex operations)
    * @param func Task function - must check shouldStop() frequently
    * @param priority Task priority (1+ recommended, 0 = idle priority)
    */
   bool start(const char* name, uint32_t stackSize, TaskFunction func, int priority);
+
+  /**
+   * Start with pre-allocated stack buffer (no heap allocation for stack).
+   * Uses xTaskCreateStatic to avoid heap fragmentation.
+   * @param stackBuffer Pre-allocated stack memory (must persist while task runs)
+   * @param stackSize Size of stackBuffer in bytes
+   */
+  bool startStatic(const char* name, uint8_t* stackBuffer, uint32_t stackSize, TaskFunction func, int priority);
 
   /**
    * Request task to stop and wait for self-deletion.
@@ -103,4 +111,6 @@ class BackgroundTask {
   std::atomic<State> state_{State::IDLE};
   TaskFunction func_;
   std::string name_;  // Stored copy for debugging (prevents use-after-free)
+  StaticTask_t staticTaskTCB_;  // TCB for xTaskCreateStatic (reused across starts)
+  bool usedStaticAlloc_ = false;
 };

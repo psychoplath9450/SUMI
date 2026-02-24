@@ -19,6 +19,9 @@ enum class SettingsScreen : uint8_t {
   Cleanup,
   SystemInfo,
   ConfirmDialog,
+#if FEATURE_PLUGINS
+  AppVisibility,
+#endif
 #if FEATURE_BLUETOOTH
   Bluetooth,
 #endif
@@ -65,6 +68,9 @@ class SettingsState : public State {
   ui::CleanupMenuView cleanupView_;
   ui::SystemInfoView infoView_;
   ui::ConfirmDialogView confirmView_;
+#if FEATURE_PLUGINS
+  ui::AppVisibilityView appVisibilityView_;
+#endif
 
   // Navigation helpers
   void openSelected();
@@ -81,6 +87,12 @@ class SettingsState : public State {
   void saveHomeArtSettings();
   void populateSystemInfo();
 
+  // App visibility
+#if FEATURE_PLUGINS
+  void loadAppVisibility();
+  void saveAppVisibility();
+#endif
+
   // Actions
   void clearCache(int type, Core& core);
   
@@ -94,6 +106,17 @@ class SettingsState : public State {
   int8_t btSelected_ = 0;
   bool btScanned_ = false;
   bool btConnecting_ = false;
+
+  // Saved devices appended after scan results (not found in scan)
+  struct SavedDevice {
+    char name[32];   // "Page Turner" or "Keyboard"
+    char addr[18];   // MAC address
+  };
+  SavedDevice btSaved_[2];  // Max 2 saved devices (page turner + keyboard)
+  int8_t btSavedCount_ = 0;
+  int btTotalCount() const;   // scanResultCount + btSavedCount_
+  void populateSavedDevices();  // Fill btSaved_ with addresses not in scan
+
   void enterBluetooth();
   void renderBluetooth();
 #endif

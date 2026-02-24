@@ -44,8 +44,8 @@ struct Settings {
   // Pages per full refresh (to clear ghosting)
   enum PagesPerRefresh : uint8_t { PPR1 = 0, PPR5 = 1, PPR10 = 2, PPR15 = 3, PPR30 = 4, PPR_NEVER = 5 };
 
-  // Paragraph alignment (values match TextBlock::BLOCK_STYLE)
-  enum ParagraphAlignment : uint8_t { AlignJustified = 0, AlignLeft = 1, AlignCenter = 2, AlignRight = 3 };
+  // Paragraph alignment (values 0-3 match TextBlock::BLOCK_STYLE; 4 = use book's CSS)
+  enum ParagraphAlignment : uint8_t { AlignJustified = 0, AlignLeft = 1, AlignCenter = 2, AlignRight = 3, AlignBookStyle = 4 };
 
   // Text layout presets
   enum TextLayout : uint8_t { LayoutCompact = 0, LayoutStandard = 1, LayoutLarge = 2 };
@@ -58,6 +58,9 @@ struct Settings {
 
   // Startup behavior
   enum StartupBehavior : uint8_t { StartupLastDocument = 0, StartupHome = 1 };
+
+  // BLE disconnect timeout (minutes of inactivity)
+  enum BleTimeout : uint8_t { Ble3Min = 0, Ble5Min = 1, Ble10Min = 2, Ble30Min = 3, BleNever = 4 };
 
   // Settings fields (same order as CrossPointSettings for binary compatibility)
   uint8_t sleepScreen = SleepDark;
@@ -91,9 +94,21 @@ struct Settings {
   // "default" = built-in PROGMEM art, others load from SD
   char homeArtTheme[32] = "default";
 
+  // App visibility bitmask — 24 bits for up to MAX_PLUGINS (24)
+  // Each bit: 0 = visible (default), 1 = hidden
+  uint8_t hiddenPluginMask[3] = {0, 0, 0};
+
   // BLE saved devices for auto-reconnect
   char bleKeyboard[18] = "";     // "AA:BB:CC:DD:EE:FF"
   char blePageTurner[18] = "";   // "AA:BB:CC:DD:EE:FF"
+  uint8_t bleTimeout = Ble3Min;  // BLE disconnect timeout
+
+  // Custom reader font family (empty = use theme/builtin font)
+  // Name of directory under /config/fonts/ containing regular.epdfont
+  char readerFont[32] = "";
+
+  // Runtime flags (not persisted)
+  bool isFirstBoot = false;  // True when /.sumi doesn't exist yet at boot
 
   // Persistence (using drivers::Storage wrapper)
   Result<void> load(drivers::Storage& storage);
@@ -123,6 +138,17 @@ struct Settings {
 
   int getReaderFontId(const Theme& theme) const;
   bool hasExternalReaderFont(const Theme& theme) const;
+
+  uint32_t getBleTimeoutMs() const {
+    switch (bleTimeout) {
+      case Ble3Min:  return 3 * 60 * 1000;
+      case Ble5Min:  return 5 * 60 * 1000;
+      case Ble10Min: return 10 * 60 * 1000;
+      case Ble30Min: return 30 * 60 * 1000;
+      case BleNever: return 0;
+      default:       return 3 * 60 * 1000;
+    }
+  }
 
   int getPagesPerRefreshValue() const {
     constexpr int values[] = {1, 5, 10, 15, 30, 0};  // 0 = Never
@@ -172,6 +198,20 @@ struct Settings {
   }
 
   RenderConfig getRenderConfig(const Theme& theme, uint16_t viewportWidth, uint16_t viewportHeight) const;
+
+  // Plugin visibility helpers
+  bool isPluginHidden(int index) const {
+    if (index < 0 || index >= 24) return false;
+    return (hiddenPluginMask[index / 8] >> (index % 8)) & 1;
+  }
+  void setPluginHidden(int index, bool hidden) {
+    if (index < 0 || index >= 24) return;
+    if (hidden) {
+      hiddenPluginMask[index / 8] |= (1 << (index % 8));
+    } else {
+      hiddenPluginMask[index / 8] &= ~(1 << (index % 8));
+    }
+  }
 };
 
 }  // namespace sumi

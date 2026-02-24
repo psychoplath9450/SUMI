@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <HardwareSerial.h>
+#include <MemoryArena.h>
 #include <SdFat.h>
 #include <pngle.h>
 
@@ -87,12 +88,13 @@ struct PngContext {
   uint32_t nextOutY_srcStart;
   const std::function<bool()>* shouldAbort;
 
-  // Row buffers
+  // Row buffers (arena-backed when available, heap fallback)
   uint8_t* srcRowBuffer;  // Source row grayscale
   uint8_t* outRowBuffer;  // Output BMP row
   uint32_t* rowAccum;     // Accumulator for scaling
   uint16_t* rowCount;     // Count for scaling
   AtkinsonDitherer* ditherer;
+  bool usesArena;         // True if row buffers use arena scratch (don't free)
 
   int bytesPerRow;
 };
@@ -230,43 +232,79 @@ void pngInitCallback(pngle_t* pngle, uint32_t w, uint32_t h) {
     Serial.printf("[%lu] [PNG] Scaling %dx%d -> %dx%d\n", millis(), w, h, ctx->outWidth, ctx->outHeight);
   }
 
-  // Allocate buffers
-  ctx->srcRowBuffer = static_cast<uint8_t*>(malloc(w));
+  // Allocate buffers from arena scratch when available (avoids heap fragmentation).
+  // Image conversion and text layout never run simultaneously, so scratch is free.
   ctx->bytesPerRow = (ctx->outWidth * 2 + 31) / 32 * 4;
-  ctx->outRowBuffer = static_cast<uint8_t*>(malloc(ctx->bytesPerRow));
+  const size_t srcRowSize = w;
+  const size_t outRowSize = ctx->bytesPerRow;
+  const size_t accumSize = ctx->needsScaling ? ctx->outWidth * sizeof(uint32_t) : 0;
+  const size_t countSize = ctx->needsScaling ? ctx->outWidth * sizeof(uint16_t) : 0;
+  const size_t totalNeeded = srcRowSize + outRowSize + accumSize + countSize;
 
-  if (!ctx->srcRowBuffer || !ctx->outRowBuffer) {
-    Serial.printf("[%lu] [PNG] Failed to allocate row buffers\n", millis());
-    free(ctx->srcRowBuffer);  // safe if nullptr
-    free(ctx->outRowBuffer);  // safe if nullptr
-    ctx->srcRowBuffer = nullptr;
-    ctx->outRowBuffer = nullptr;
-    ctx->initFailed = true;
-    return;
-  }
+  ctx->usesArena = false;
+  if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::scratchBuffer &&
+      totalNeeded <= sumi::MemoryArena::SCRATCH_BUFFER_SIZE) {
+    // Pack all buffers into arena scratch (8KB)
+    uint8_t* p = sumi::MemoryArena::scratchBuffer;
+    ctx->srcRowBuffer = p;
+    p += srcRowSize;
+    ctx->outRowBuffer = p;
+    p += outRowSize;
+    if (ctx->needsScaling) {
+      ctx->rowAccum = reinterpret_cast<uint32_t*>(p);
+      p += accumSize;
+      ctx->rowCount = reinterpret_cast<uint16_t*>(p);
+    }
+    memset(sumi::MemoryArena::scratchBuffer, 0, totalNeeded);
+    ctx->usesArena = true;
+    Serial.printf("[%lu] [PNG] Using arena scratch for row buffers (%zu bytes)\n", millis(), totalNeeded);
+  } else {
+    // Fallback to heap
+    ctx->srcRowBuffer = static_cast<uint8_t*>(malloc(w));
+    ctx->outRowBuffer = static_cast<uint8_t*>(malloc(ctx->bytesPerRow));
 
-  if (ctx->needsScaling) {
-    ctx->rowAccum = new (std::nothrow) uint32_t[ctx->outWidth]();
-    ctx->rowCount = new (std::nothrow) uint16_t[ctx->outWidth]();
-    if (!ctx->rowAccum || !ctx->rowCount) {
-      Serial.printf("[%lu] [PNG] Failed to allocate scaling buffers\n", millis());
+    if (!ctx->srcRowBuffer || !ctx->outRowBuffer) {
+      Serial.printf("[%lu] [PNG] Failed to allocate row buffers\n", millis());
       free(ctx->srcRowBuffer);
       free(ctx->outRowBuffer);
-      delete[] ctx->rowAccum;  // safe if nullptr
-      delete[] ctx->rowCount;  // safe if nullptr
       ctx->srcRowBuffer = nullptr;
       ctx->outRowBuffer = nullptr;
-      ctx->rowAccum = nullptr;
-      ctx->rowCount = nullptr;
       ctx->initFailed = true;
       return;
     }
+
+    if (ctx->needsScaling) {
+      ctx->rowAccum = new (std::nothrow) uint32_t[ctx->outWidth]();
+      ctx->rowCount = new (std::nothrow) uint16_t[ctx->outWidth]();
+      if (!ctx->rowAccum || !ctx->rowCount) {
+        Serial.printf("[%lu] [PNG] Failed to allocate scaling buffers\n", millis());
+        free(ctx->srcRowBuffer);
+        free(ctx->outRowBuffer);
+        delete[] ctx->rowAccum;
+        delete[] ctx->rowCount;
+        ctx->srcRowBuffer = nullptr;
+        ctx->outRowBuffer = nullptr;
+        ctx->rowAccum = nullptr;
+        ctx->rowCount = nullptr;
+        ctx->initFailed = true;
+        return;
+      }
+    }
+  }
+
+  if (ctx->needsScaling) {
     ctx->nextOutY_srcStart = ctx->scaleY_fp;
   }
 
   // Skip ditherer allocation in quickMode for faster preview
+  // Use arena-backed memory when available to avoid heap fragmentation
   if (!ctx->quickMode) {
-    ctx->ditherer = new (std::nothrow) AtkinsonDitherer(ctx->outWidth);
+    if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::ditherRegion) {
+      ctx->ditherer = new (std::nothrow) AtkinsonDitherer(ctx->outWidth, sumi::MemoryArena::ditherRegion,
+                                                           sumi::MemoryArena::DITHER_REGION_SIZE);
+    } else {
+      ctx->ditherer = new (std::nothrow) AtkinsonDitherer(ctx->outWidth);
+    }
     if (!ctx->ditherer) {
       Serial.printf("[%lu] [PNG] Failed to allocate ditherer\n", millis());
       free(ctx->srcRowBuffer);
@@ -343,11 +381,13 @@ bool pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOut, int targetMaxWid
     }
   }
 
-  // Cleanup
-  if (ctx.srcRowBuffer) free(ctx.srcRowBuffer);
-  if (ctx.outRowBuffer) free(ctx.outRowBuffer);
-  if (ctx.rowAccum) delete[] ctx.rowAccum;
-  if (ctx.rowCount) delete[] ctx.rowCount;
+  // Cleanup — arena buffers are static, only free heap-allocated ones
+  if (!ctx.usesArena) {
+    if (ctx.srcRowBuffer) free(ctx.srcRowBuffer);
+    if (ctx.outRowBuffer) free(ctx.outRowBuffer);
+    if (ctx.rowAccum) delete[] ctx.rowAccum;
+    if (ctx.rowCount) delete[] ctx.rowCount;
+  }
   if (ctx.ditherer) delete ctx.ditherer;
 
   pngle_destroy(pngle);

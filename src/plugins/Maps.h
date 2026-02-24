@@ -304,9 +304,13 @@ void MapsApp::drawBrowser() {
 
         d_.setCursor(60, y + 18);
         char shortName[24];
-        strncpy(shortName, map.name, 23);
-        shortName[23] = '\0';
-        if (strlen(map.name) > 20) { shortName[20] = '\0'; strcat(shortName, "..."); }
+        if (strlen(map.name) > 20) {
+          memcpy(shortName, map.name, 20);
+          memcpy(shortName + 20, "...", 4);
+        } else {
+          strncpy(shortName, map.name, 23);
+          shortName[23] = '\0';
+        }
         d_.print(shortName);
 
         d_.setCursor(60, y + 36);

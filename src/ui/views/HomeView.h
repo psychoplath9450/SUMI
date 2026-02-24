@@ -71,10 +71,13 @@ struct HomeView {
   bool useArtBackground = false;  // When true, skip clearScreen/buttonBar (baked into art)
   
   // Library carousel state
+  static constexpr int MAX_THUMB_LEN = 80;
+
   struct RecentBookEntry {
     char title[MAX_TITLE_LEN];
     char author[MAX_AUTHOR_LEN];
     char path[MAX_PATH_LEN];
+    char thumbPath[MAX_THUMB_LEN];  // Persisted thumbnail path
     uint16_t progress;
     bool hasThumbnail;
   };
@@ -125,8 +128,9 @@ struct HomeView {
     }
   }
   
-  void addRecentBook(const char* title, const char* author, const char* path, 
-                     uint16_t progress, bool hasThumbnail) {
+  void addRecentBook(const char* title, const char* author, const char* path,
+                     uint16_t progress, bool hasThumbnail,
+                     const char* thumbPath = nullptr) {
     if (recentBookCount >= MAX_RECENT_BOOKS) return;
     auto& entry = recentBooks[recentBookCount];
     strncpy(entry.title, title, MAX_TITLE_LEN - 1);
@@ -135,6 +139,12 @@ struct HomeView {
     entry.author[MAX_AUTHOR_LEN - 1] = '\0';
     strncpy(entry.path, path, MAX_PATH_LEN - 1);
     entry.path[MAX_PATH_LEN - 1] = '\0';
+    if (thumbPath && thumbPath[0] != '\0') {
+      strncpy(entry.thumbPath, thumbPath, MAX_THUMB_LEN - 1);
+      entry.thumbPath[MAX_THUMB_LEN - 1] = '\0';
+    } else {
+      entry.thumbPath[0] = '\0';
+    }
     entry.progress = progress;
     entry.hasThumbnail = hasThumbnail;
     recentBookCount++;

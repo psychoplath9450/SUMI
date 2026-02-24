@@ -147,11 +147,25 @@ uint8_t quantize(int gray, int x, int y) {
   }
 }
 
-// Simple 1-bit quantization (black or white)
-uint8_t quantize1bit(int gray, int x, int y) { return gray < 128 ? 0 : 1; }
+// 1-bit noise dithering for fast home screen rendering
+// Uses hash-based noise for consistent dithering that works well at small sizes
+uint8_t quantize1bit(int gray, int x, int y) {
+  gray = adjustPixel(gray);
+
+  // Generate noise threshold using integer hash (no regular pattern to alias)
+  uint32_t hash = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
+  hash = (hash ^ (hash >> 13)) * 1274126177u;
+  const int threshold = static_cast<int>(hash >> 24);  // 0-255
+
+  // Simple threshold with noise: gray >= (128 + noise offset) -> white
+  // The noise adds variation around the 128 midpoint
+  const int adjustedThreshold = 128 + ((threshold - 128) / 2);  // Range: 64-192
+  return (gray >= adjustedThreshold) ? 1 : 0;
+}
 
 // BMP scaling implementation
 #include <HardwareSerial.h>
+#include <MemoryArena.h>
 #include <SdFat.h>
 
 #include "SDCardManager.h"
@@ -191,37 +205,39 @@ static void writeLE32Signed(Print& out, int32_t value) {
   out.write((value >> 24) & 0xFF);
 }
 
-static void writeBmpHeader1bit(Print& out, int width, int height) {
-  const int bytesPerRow = (width + 31) / 32 * 4;
+static void writeBmpHeader2bit(Print& out, int width, int height) {
+  const int bytesPerRow = (width * 2 + 31) / 32 * 4;  // 2bpp, DWORD aligned
   const int imageSize = bytesPerRow * height;
-  const uint32_t fileSize = 62 + imageSize;
+  const uint32_t fileSize = 70 + imageSize;  // 14 + 40 + 16 palette
 
   // BMP File Header (14 bytes)
   out.write('B');
   out.write('M');
   writeLE32(out, fileSize);
   writeLE32(out, 0);   // Reserved
-  writeLE32(out, 62);  // Offset to pixel data (14 + 40 + 8)
+  writeLE32(out, 70);  // Offset to pixel data (14 + 40 + 16)
 
   // DIB Header (40 bytes)
   writeLE32(out, 40);
   writeLE32Signed(out, width);
   writeLE32Signed(out, -height);  // Negative = top-down
   writeLE16(out, 1);              // Planes
-  writeLE16(out, 1);              // BPP
+  writeLE16(out, 2);              // BPP = 2
   writeLE32(out, 0);              // No compression
   writeLE32(out, imageSize);
   writeLE32(out, 2835);  // X pixels/meter
   writeLE32(out, 2835);  // Y pixels/meter
-  writeLE32(out, 2);     // Colors used
-  writeLE32(out, 2);     // Colors important
+  writeLE32(out, 4);     // Colors used
+  writeLE32(out, 4);     // Colors important
 
-  // Palette (8 bytes)
-  const uint8_t palette[8] = {
+  // Palette (16 bytes) — matches site and firmware native palette
+  const uint8_t palette[16] = {
       0x00, 0x00, 0x00, 0x00,  // Black
+      0x55, 0x55, 0x55, 0x00,  // Dark gray
+      0xAA, 0xAA, 0xAA, 0x00,  // Light gray
       0xFF, 0xFF, 0xFF, 0x00   // White
   };
-  out.write(palette, 8);
+  out.write(palette, 16);
 }
 
 // Convert 2-bit palette index to grayscale (0-255)
@@ -240,18 +256,34 @@ static inline uint8_t palette1bitToGray(uint8_t index) { return (index & 0x01) ?
 class RawAtkinson1BitDitherer {
  public:
   static constexpr int PADDING = 16;  // Extra padding for safety
-  
-  explicit RawAtkinson1BitDitherer(int width) : width(width), allocSize(width + PADDING) {
+
+  explicit RawAtkinson1BitDitherer(int width) : width(width), allocSize(width + PADDING), ownsMemory_(true) {
     // Use calloc for zero-initialization
     errorRow0 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
     errorRow1 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
     errorRow2 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
   }
 
+  // Arena-backed constructor: uses pre-allocated memory region (no heap alloc)
+  RawAtkinson1BitDitherer(int width, uint8_t* region, size_t regionSize)
+      : width(width), allocSize(width + PADDING), ownsMemory_(false) {
+    const size_t rowBytes = allocSize * sizeof(int16_t);
+    if (regionSize < rowBytes * 3) {
+      errorRow0 = errorRow1 = errorRow2 = nullptr;
+      return;
+    }
+    errorRow0 = reinterpret_cast<int16_t*>(region);
+    errorRow1 = reinterpret_cast<int16_t*>(region + rowBytes);
+    errorRow2 = reinterpret_cast<int16_t*>(region + rowBytes * 2);
+    memset(region, 0, rowBytes * 3);
+  }
+
   ~RawAtkinson1BitDitherer() {
-    free(errorRow0);
-    free(errorRow1);
-    free(errorRow2);
+    if (ownsMemory_) {
+      free(errorRow0);
+      free(errorRow1);
+      free(errorRow2);
+    }
   }
 
   RawAtkinson1BitDitherer(const RawAtkinson1BitDitherer&) = delete;
@@ -295,12 +327,13 @@ class RawAtkinson1BitDitherer {
  private:
   int width;
   int allocSize;
+  bool ownsMemory_;
   int16_t* errorRow0;
   int16_t* errorRow1;
   int16_t* errorRow2;
 };
 
-bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxWidth, int targetMaxHeight) {
+bool bmpTo2BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxWidth, int targetMaxHeight) {
   FsFile srcFile;
   if (!SdMan.openFileForRead("BMP", srcPath, srcFile)) {
     Serial.printf("[%lu] [BMP] Failed to open source: %s\n", millis(), srcPath);
@@ -346,7 +379,7 @@ bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxW
     return false;
   }
 
-  Serial.printf("[%lu] [BMP] Scaling %dx%d %d-bit BMP to 1-bit thumbnail\n", millis(), srcWidth, srcHeight, bpp);
+  Serial.printf("[%lu] [BMP] Scaling %dx%d %d-bit BMP to 2-bit thumbnail\n", millis(), srcWidth, srcHeight, bpp);
 
   // Calculate output dimensions (scale to fit target while maintaining aspect)
   int outWidth = srcWidth;
@@ -375,40 +408,59 @@ bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxW
 
   // Calculate row sizes
   const int srcRowBytes = (srcWidth * bpp + 31) / 32 * 4;  // bpp-bit source, 4-byte aligned
-  const int outRowBytes = (outWidth + 31) / 32 * 4;        // 1-bit output, 4-byte aligned
+  const int outRowBytes = (outWidth * 2 + 31) / 32 * 4;    // 2-bit output, 4-byte aligned
 
-  // Allocate buffers for source rows needed per output row
-  // Add safety padding to prevent buffer overflows
-  auto* srcRows = static_cast<uint8_t*>(malloc(srcRowBytes * maxSrcRowsPerOut + 32));
-  auto* outRow = static_cast<uint8_t*>(malloc(outRowBytes + 16));
-  if (!srcRows || !outRow) {
-    Serial.printf("[%lu] [BMP] Failed to allocate buffers\n", millis());
-    free(srcRows);
-    free(outRow);
-    srcFile.close();
-    return false;
+  // Allocate buffers — use arena primaryBuffer when available (no ZIP overlap during thumbnailing).
+  const size_t srcRowsSize = srcRowBytes * maxSrcRowsPerOut + 32;
+  const size_t outRowSize = outRowBytes + 16;
+  const size_t totalBufSize = srcRowsSize + outRowSize;
+  bool usesArena = false;
+  uint8_t* srcRows = nullptr;
+  uint8_t* outRow = nullptr;
+
+  if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::primaryBuffer &&
+      totalBufSize <= sumi::MemoryArena::PRIMARY_BUFFER_SIZE) {
+    srcRows = sumi::MemoryArena::primaryBuffer;
+    outRow = sumi::MemoryArena::primaryBuffer + srcRowsSize;
+    usesArena = true;
+    Serial.printf("[%lu] [BMP] Using arena primary for row buffers (%zu bytes)\n", millis(), totalBufSize);
+  } else {
+    srcRows = static_cast<uint8_t*>(malloc(srcRowsSize));
+    outRow = static_cast<uint8_t*>(malloc(outRowSize));
+    if (!srcRows || !outRow) {
+      Serial.printf("[%lu] [BMP] Failed to allocate buffers\n", millis());
+      free(srcRows);
+      free(outRow);
+      srcFile.close();
+      return false;
+    }
   }
 
   // Open destination file
   FsFile dstFile;
   if (!SdMan.openFileForWrite("BMP", dstPath, dstFile)) {
     Serial.printf("[%lu] [BMP] Failed to open destination: %s\n", millis(), dstPath);
-    free(srcRows);
-    free(outRow);
+    if (!usesArena) { free(srcRows); free(outRow); }
     srcFile.close();
     return false;
   }
 
-  writeBmpHeader1bit(dstFile, outWidth, outHeight);
+  writeBmpHeader2bit(dstFile, outWidth, outHeight);
 
-  // Create 1-bit ditherer (raw version - no contrast adjustment since source is already processed)
-  RawAtkinson1BitDitherer ditherer(outWidth);
+  // Create 2-bit ditherer — use arena ditherRegion when available
+  AtkinsonDitherer* ditherer;
+  if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::ditherRegion) {
+    ditherer = new AtkinsonDitherer(outWidth, sumi::MemoryArena::ditherRegion,
+                                    sumi::MemoryArena::DITHER_REGION_SIZE);
+  } else {
+    ditherer = new AtkinsonDitherer(outWidth);
+  }
 
   // Seek to pixel data
   if (!srcFile.seek(pixelOffset)) {
     Serial.printf("[%lu] [BMP] Failed to seek to pixel data\n", millis());
-    free(srcRows);
-    free(outRow);
+    if (!usesArena) { free(srcRows); free(outRow); }
+    delete ditherer;
     srcFile.close();
     dstFile.close();
     return false;
@@ -441,8 +493,8 @@ bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxW
       const int bufferSlot = srcY - srcYStart;
       if (srcFile.read(srcRows + bufferSlot * srcRowBytes, srcRowBytes) != srcRowBytes) {
         Serial.printf("[%lu] [BMP] Failed to read row %d\n", millis(), srcY);
-        free(srcRows);
-        free(outRow);
+        if (!usesArena) { free(srcRows); free(outRow); }
+        delete ditherer;
         srcFile.close();
         dstFile.close();
         return false;
@@ -487,20 +539,20 @@ bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxW
       }
 
       const uint8_t gray = (count > 0) ? (sum / count) : 0;
-      const uint8_t bit = ditherer.processPixel(gray, outX);
+      const uint8_t level = ditherer->processPixel(gray, outX);
 
-      // Pack 1-bit value (MSB first, 8 pixels per byte)
-      const int byteIdx = outX / 8;
-      const int bitOffset = 7 - (outX % 8);
-      outRow[byteIdx] |= (bit << bitOffset);
+      // Pack 2-bit value (MSB first, 4 pixels per byte)
+      const int byteIdx = outX / 4;
+      const int bitShift = 6 - (outX % 4) * 2;
+      outRow[byteIdx] |= (level << bitShift);
     }
 
-    ditherer.nextRow();
+    ditherer->nextRow();
     dstFile.write(outRow, outRowBytes);
   }
 
-  free(srcRows);
-  free(outRow);
+  if (!usesArena) { free(srcRows); free(outRow); }
+  delete ditherer;
   srcFile.close();
   dstFile.close();
 

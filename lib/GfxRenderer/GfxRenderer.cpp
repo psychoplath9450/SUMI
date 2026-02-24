@@ -2,6 +2,7 @@
 
 #include <ArabicShaper.h>
 #include <ExternalFont.h>
+#include <MemoryArena.h>
 #include <ScriptDetector.h>
 #include <StreamingEpdFont.h>
 #include <ThaiShaper.h>
@@ -52,6 +53,13 @@ static inline void rotateCoordinates(const GfxRenderer::Orientation orientation,
 void GfxRenderer::begin() {
   frameBuffer = einkDisplay.getFrameBuffer();
   assert(frameBuffer && "GfxRenderer::begin() called before display.begin()");
+
+  // Migrate bitmap row buffers from heap to arena if arena is now available
+  // (constructor runs before arena init, so initial allocation uses malloc)
+  if (bitmapRowsOwnMemory_ && sumi::MemoryArena::isInitialized() && sumi::MemoryArena::imageRowRegion) {
+    freeBitmapRowBuffers();
+    allocateBitmapRowBuffers();
+  }
 }
 
 void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
@@ -62,7 +70,6 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   // Bounds checking against physical panel dimensions
   if (rotatedX < 0 || rotatedX >= EInkDisplay::DISPLAY_WIDTH || rotatedY < 0 ||
       rotatedY >= EInkDisplay::DISPLAY_HEIGHT) {
-    Serial.printf("[%lu] [GFX] !! Outside range (%d, %d) -> (%d, %d)\n", millis(), x, y, rotatedX, rotatedY);
     return;
   }
 
@@ -153,11 +160,6 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     return;
   }
   const auto font = fontMap.at(fontId);
-
-  // no printable characters
-  if (!font.hasPrintableChars(text, style)) {
-    return;
-  }
 
   // Check if text contains Arabic script - use Arabic rendering path
   if (ScriptDetector::containsArabic(text)) {
@@ -332,16 +334,27 @@ void GfxRenderer::invertScreen() const {
   }
 }
 
-void GfxRenderer::displayBuffer(const EInkDisplay::RefreshMode refreshMode, bool turnOffScreen) const {
+void GfxRenderer::displayBuffer(EInkDisplay::RefreshMode refreshMode, bool turnOffScreen) const {
   if (renderStartMs > 0) {
     Serial.printf("[%lu] [GFX] Render took %lu ms\n", millis(), millis() - renderStartMs);
     renderStartMs = 0;
   }
-  einkDisplay.displayBuffer(refreshMode, turnOffScreen);
+
+  // Periodic refresh: auto-promote FAST_REFRESH to HALF_REFRESH to clear
+  // accumulated e-ink ghosting in states that don't manage their own counter
+  if (periodicRefreshInterval_ > 0 && refreshMode == EInkDisplay::FAST_REFRESH) {
+    fastRefreshCount_++;
+    if (fastRefreshCount_ >= periodicRefreshInterval_) {
+      refreshMode = EInkDisplay::HALF_REFRESH;
+      fastRefreshCount_ = 0;
+    }
+  }
+
+  einkDisplay.displayBuffer(refreshMode, turnOffScreen || fadingFix_);
 }
 
 void GfxRenderer::displayWindow(int x, int y, int width, int height, bool turnOffScreen) const {
-  einkDisplay.displayWindow(x, y, width, height, turnOffScreen);
+  einkDisplay.displayWindow(x, y, width, height, turnOffScreen || fadingFix_);
 }
 
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,
@@ -623,7 +636,7 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { einkDisplay.copyGrayscaleLsb
 
 void GfxRenderer::copyGrayscaleMsbBuffers() const { einkDisplay.copyGrayscaleMsbBuffers(frameBuffer); }
 
-void GfxRenderer::displayGrayBuffer(bool turnOffScreen) const { einkDisplay.displayGrayBuffer(turnOffScreen); }
+void GfxRenderer::displayGrayBuffer(bool turnOffScreen) const { einkDisplay.displayGrayBuffer(turnOffScreen || fadingFix_); }
 
 void GfxRenderer::freeBwBufferChunks() {
   for (auto& bwBufferChunk : bwBufferChunks) {
@@ -843,8 +856,17 @@ void GfxRenderer::getOrientedViewableTRBL(int* outTop, int* outRight, int* outBo
 }
 
 void GfxRenderer::allocateBitmapRowBuffers() {
+  // Use arena imageRowRegion when available (3400 bytes fits in 4KB region)
+  if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::imageRowRegion) {
+    bitmapOutputRow_ = sumi::MemoryArena::imageRowRegion;
+    bitmapRowBytes_ = sumi::MemoryArena::imageRowRegion + BITMAP_OUTPUT_ROW_SIZE;
+    bitmapRowsOwnMemory_ = false;
+    return;
+  }
+
   bitmapOutputRow_ = static_cast<uint8_t*>(malloc(BITMAP_OUTPUT_ROW_SIZE));
   bitmapRowBytes_ = static_cast<uint8_t*>(malloc(BITMAP_ROW_BYTES_SIZE));
+  bitmapRowsOwnMemory_ = true;
 
   if (!bitmapOutputRow_ || !bitmapRowBytes_) {
     Serial.printf("[%lu] [GFX] !! Failed to allocate bitmap row buffers\n", millis());
@@ -853,14 +875,13 @@ void GfxRenderer::allocateBitmapRowBuffers() {
 }
 
 void GfxRenderer::freeBitmapRowBuffers() {
-  if (bitmapOutputRow_) {
+  if (bitmapRowsOwnMemory_) {
     free(bitmapOutputRow_);
-    bitmapOutputRow_ = nullptr;
-  }
-  if (bitmapRowBytes_) {
     free(bitmapRowBytes_);
-    bitmapRowBytes_ = nullptr;
   }
+  bitmapOutputRow_ = nullptr;
+  bitmapRowBytes_ = nullptr;
+  bitmapRowsOwnMemory_ = false;
 }
 
 void GfxRenderer::renderExternalGlyph(const uint32_t cp, int* x, const int y, const bool pixelState) const {

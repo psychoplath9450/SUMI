@@ -17,11 +17,12 @@ constexpr const char* const ReaderSettingsView::ORIENTATION_VALUES[];
 
 const ReaderSettingsView::SettingDef ReaderSettingsView::DEFS[SETTING_COUNT] = {
     {"Theme", SettingType::ThemeSelect, nullptr, 0},
+    {"Font", SettingType::FontSelect, nullptr, 0},
     {"Font Size", SettingType::Enum, FONT_SIZE_VALUES, 4},
     {"Text Layout", SettingType::Enum, TEXT_LAYOUT_VALUES, 3},
     {"Line Spacing", SettingType::Enum, LINE_SPACING_VALUES, 4},
     {"Text Anti-Aliasing", SettingType::Toggle, nullptr, 0},
-    {"Paragraph Alignment", SettingType::Enum, ALIGNMENT_VALUES, 4},
+    {"Paragraph Alignment", SettingType::Enum, ALIGNMENT_VALUES, 5},
     {"Hyphenation", SettingType::Toggle, nullptr, 0},
     {"Show Images", SettingType::Toggle, nullptr, 0},
     {"Show Tables", SettingType::Toggle, nullptr, 0},
@@ -42,14 +43,18 @@ constexpr const char* const DeviceSettingsView::SIDE_BUTTON_VALUES[];
 // InReaderSettingsView static definitions
 // Reuses the same value string arrays as ReaderSettingsView
 const InReaderSettingsView::SettingDef InReaderSettingsView::DEFS[SETTING_COUNT] = {
+    {"Font", SettingType::FontSelect, nullptr, 0},
     {"Font Size", SettingType::Enum, ReaderSettingsView::FONT_SIZE_VALUES, 4},
     {"Text Layout", SettingType::Enum, ReaderSettingsView::TEXT_LAYOUT_VALUES, 3},
     {"Line Spacing", SettingType::Enum, ReaderSettingsView::LINE_SPACING_VALUES, 4},
-    {"Alignment", SettingType::Enum, ReaderSettingsView::ALIGNMENT_VALUES, 4},
+    {"Alignment", SettingType::Enum, ReaderSettingsView::ALIGNMENT_VALUES, 5},
     {"Hyphenation", SettingType::Toggle, nullptr, 0},
     {"Anti-Aliasing", SettingType::Toggle, nullptr, 0},
     {"Show Images", SettingType::Toggle, nullptr, 0},
     {"Status Bar", SettingType::Enum, ReaderSettingsView::STATUS_BAR_VALUES, 2},
+#if FEATURE_BLUETOOTH
+    {"Bluetooth", SettingType::Action, nullptr, 0},
+#endif
 };
 
 const DeviceSettingsView::SettingDef DeviceSettingsView::DEFS[SETTING_COUNT] = {
@@ -57,6 +62,9 @@ const DeviceSettingsView::SettingDef DeviceSettingsView::DEFS[SETTING_COUNT] = {
     {"Startup Behavior", STARTUP_VALUES, 2},         {"Short Power Button", SHORT_PWR_VALUES, 4},
     {"Pages Per Refresh", PAGES_REFRESH_VALUES, 6},  {"Sunlight Fading Fix", TOGGLE_VALUES, 2},
     {"Front Buttons", FRONT_BUTTON_VALUES, 2},       {"Side Buttons", SIDE_BUTTON_VALUES, 2},
+#if FEATURE_PLUGINS
+    {"App Visibility", nullptr, 0},  // Sub-menu action: opens AppVisibility screen
+#endif
 };
 
 // Render functions
@@ -145,8 +153,15 @@ void render(const GfxRenderer& r, const Theme& t, const ReaderSettingsView& v) {
   title(r, t, t.screenMarginTop, "Reader Settings");
 
   const int startY = 60;
-  for (int i = 0; i < ReaderSettingsView::SETTING_COUNT; i++) {
-    const int y = startY + i * (t.menuItemHeight + t.itemSpacing);
+  const int itemH = t.menuItemHeight + t.itemSpacing;
+  const int screenH = r.getScreenHeight();
+  const int availableH = screenH - startY - 45;
+  const int visibleItems = std::min(static_cast<int>(ReaderSettingsView::VISIBLE_ITEMS),
+                                    std::max(1, availableH / itemH));
+  const int end = std::min(v.scrollOffset + visibleItems,
+                           static_cast<int>(ReaderSettingsView::SETTING_COUNT));
+  for (int i = v.scrollOffset; i < end; i++) {
+    const int y = startY + (i - v.scrollOffset) * itemH;
     const auto& def = ReaderSettingsView::DEFS[i];
 
     if (def.type == ReaderSettingsView::SettingType::Toggle) {
@@ -156,7 +171,22 @@ void render(const GfxRenderer& r, const Theme& t, const ReaderSettingsView& v) {
     }
   }
 
+  // Scroll indicators when list overflows
+  const int pageW = r.getScreenWidth();
+  const int arrowX = pageW - 20;
+  if (v.scrollOffset > 0) {
+    r.drawLine(arrowX, startY - 4, arrowX - 6, startY + 6, t.primaryTextBlack);
+    r.drawLine(arrowX, startY - 4, arrowX + 6, startY + 6, t.primaryTextBlack);
+    r.drawLine(arrowX - 6, startY + 6, arrowX + 6, startY + 6, t.primaryTextBlack);
+  }
+  if (end < ReaderSettingsView::SETTING_COUNT) {
+    const int bottomY = startY + visibleItems * itemH + 4;
+    r.drawLine(arrowX, bottomY + 10, arrowX - 6, bottomY, t.primaryTextBlack);
+    r.drawLine(arrowX, bottomY + 10, arrowX + 6, bottomY, t.primaryTextBlack);
+    r.drawLine(arrowX - 6, bottomY, arrowX + 6, bottomY, t.primaryTextBlack);
+  }
 
+  buttonBar(r, t, v.buttons);
   r.displayBuffer();
 }
 
@@ -221,6 +251,39 @@ void render(const GfxRenderer& r, const Theme& t, const InReaderSettingsView& v)
   buttonBar(r, t, v.buttons);
   r.displayBuffer();
 }
+
+#if FEATURE_PLUGINS
+void render(const GfxRenderer& r, const Theme& t, const AppVisibilityView& v) {
+  r.clearScreen(t.backgroundColor);
+
+  title(r, t, t.screenMarginTop, "App Visibility");
+
+  const int startY = 60;
+  const int itemH = t.menuItemHeight + t.itemSpacing;
+  const int end = std::min(v.scrollOffset + static_cast<int>(AppVisibilityView::VISIBLE_ITEMS), v.appCount);
+
+  for (int i = v.scrollOffset; i < end; i++) {
+    const int y = startY + (i - v.scrollOffset) * itemH;
+    toggle(r, t, y, v.appNames[i], v.visible[i], i == v.selected);
+  }
+
+  // Scroll indicators
+  const int pageW = r.getScreenWidth();
+  const int arrowX = pageW / 2;
+  if (v.scrollOffset > 0) {
+    r.drawLine(arrowX, startY - 6, arrowX - 6, startY - 1, t.primaryTextBlack);
+    r.drawLine(arrowX, startY - 6, arrowX + 6, startY - 1, t.primaryTextBlack);
+  }
+  if (end < v.appCount) {
+    const int bottomY = startY + AppVisibilityView::VISIBLE_ITEMS * itemH + 4;
+    r.drawLine(arrowX, bottomY + 6, arrowX - 6, bottomY, t.primaryTextBlack);
+    r.drawLine(arrowX, bottomY + 6, arrowX + 6, bottomY, t.primaryTextBlack);
+  }
+
+  buttonBar(r, t, v.buttons);
+  r.displayBuffer();
+}
+#endif  // FEATURE_PLUGINS
 
 void render(const GfxRenderer& r, const Theme& t, const ConfirmDialogView& v) {
   const int pageWidth = r.getScreenWidth();

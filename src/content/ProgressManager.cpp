@@ -34,8 +34,8 @@ bool ProgressManager::save(Core& core, const char* cacheDir, ContentType type, c
     data[2] = progress.sectionPage & 0xFF;
     data[3] = (progress.sectionPage >> 8) & 0xFF;
     Serial.printf("[PROGRESS] Saved EPUB: spine=%d page=%d\n", progress.spineIndex, progress.sectionPage);
-  } else if (type == ContentType::Xtc) {
-    // XTC: save flat page number (4 bytes)
+  } else if (type == ContentType::Xtc || type == ContentType::Comic) {
+    // XTC/Comic: save flat page number (4 bytes)
     data[0] = progress.flatPage & 0xFF;
     data[1] = (progress.flatPage >> 8) & 0xFF;
     data[2] = (progress.flatPage >> 16) & 0xFF;
@@ -96,7 +96,7 @@ ProgressManager::Progress ProgressManager::load(Core& core, const char* cacheDir
     progress.spineIndex = data[0] | (data[1] << 8);
     progress.sectionPage = data[2] | (data[3] << 8);
     Serial.printf("[PROGRESS] Loaded EPUB: spine=%d page=%d\n", progress.spineIndex, progress.sectionPage);
-  } else if (type == ContentType::Xtc) {
+  } else if (type == ContentType::Xtc || type == ContentType::Comic) {
     progress.flatPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
     Serial.printf("[PROGRESS] Loaded XTC: page %u\n", progress.flatPage);
   } else {
@@ -125,7 +125,7 @@ ProgressManager::Progress ProgressManager::validate(Core& core, ContentType type
         validated.sectionPage = 0;
       }
     }
-  } else if (type == ContentType::Xtc) {
+  } else if (type == ContentType::Xtc || type == ContentType::Comic) {
     // Validate flat page
     uint32_t total = core.content.pageCount();
     if (validated.flatPage >= total) {

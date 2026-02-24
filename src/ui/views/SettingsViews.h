@@ -53,8 +53,13 @@ void render(const GfxRenderer& r, const Theme& t, const SettingsMenuView& v);
 // ============================================================================
 
 struct CleanupMenuView {
+#if FEATURE_BLUETOOTH
+  static constexpr const char* const ITEMS[] = {"Clear Book Cache", "Forget Bluetooth Devices", "Clear Device Storage", "Factory Reset"};
+  static constexpr int ITEM_COUNT = 4;
+#else
   static constexpr const char* const ITEMS[] = {"Clear Book Cache", "Clear Device Storage", "Factory Reset"};
   static constexpr int ITEM_COUNT = 3;
+#endif
 
   ButtonBar buttons{"Back", "Run", "", ""};
   int8_t selected = 0;
@@ -177,7 +182,7 @@ void render(const GfxRenderer& r, const Theme& t, const SystemInfoView& v);
 
 struct ReaderSettingsView {
   // Setting types
-  enum class SettingType : uint8_t { Toggle, Enum, ThemeSelect };
+  enum class SettingType : uint8_t { Toggle, Enum, ThemeSelect, FontSelect };
 
   struct SettingDef {
     const char* label;
@@ -190,12 +195,14 @@ struct ReaderSettingsView {
   static constexpr const char* const FONT_SIZE_VALUES[] = {"XSmall", "Small", "Normal", "Large"};
   static constexpr const char* const TEXT_LAYOUT_VALUES[] = {"Compact", "Standard", "Large"};
   static constexpr const char* const LINE_SPACING_VALUES[] = {"Compact", "Normal", "Relaxed", "Large"};
-  static constexpr const char* const ALIGNMENT_VALUES[] = {"Justified", "Left", "Center", "Right"};
+  static constexpr const char* const ALIGNMENT_VALUES[] = {"Justified", "Left", "Center", "Right", "Book's Style"};
   static constexpr const char* const STATUS_BAR_VALUES[] = {"None", "Show"};
   static constexpr const char* const ORIENTATION_VALUES[] = {"Portrait", "Landscape CW", "Inverted", "Landscape CCW"};
 
-  static constexpr int SETTING_COUNT = 11;
+  static constexpr int SETTING_COUNT = 12;
   static constexpr int MAX_THEMES = 16;
+  static constexpr int MAX_FONTS = 16;
+  static constexpr int VISIBLE_ITEMS = 11;
   static const SettingDef DEFS[SETTING_COUNT];
 
   ButtonBar buttons{"Back", "", "<", ">"};
@@ -205,84 +212,12 @@ struct ReaderSettingsView {
   int themeCount = 0;
   int currentThemeIndex = 0;
 
+  // Font selection state (loaded from FontManager)
+  char fontNames[MAX_FONTS][32] = {};
+  int fontCount = 0;
+  int currentFontIndex = 0;
+
   // Current values (indices for enums, bool for toggles)
-  uint8_t values[SETTING_COUNT] = {0};
-  int8_t selected = 0;
-  bool needsRender = true;
-
-  void moveUp() {
-    selected = (selected == 0) ? SETTING_COUNT - 1 : selected - 1;
-    needsRender = true;
-  }
-
-  void moveDown() {
-    selected = (selected + 1) % SETTING_COUNT;
-    needsRender = true;
-  }
-
-  void cycleValue(int delta) {
-    const auto& def = DEFS[selected];
-    if (def.type == SettingType::Toggle) {
-      values[selected] = values[selected] ? 0 : 1;
-    } else if (def.type == SettingType::ThemeSelect) {
-      if (themeCount > 0) {
-        currentThemeIndex = (currentThemeIndex + themeCount + delta) % themeCount;
-      }
-    } else {
-      values[selected] = static_cast<uint8_t>((values[selected] + def.enumCount + delta) % def.enumCount);
-    }
-    needsRender = true;
-  }
-
-  const char* getCurrentValueStr(int index) const {
-    const auto& def = DEFS[index];
-    if (def.type == SettingType::Toggle) {
-      return values[index] ? "ON" : "OFF";
-    }
-    if (def.type == SettingType::ThemeSelect) {
-      if (themeCount > 0 && currentThemeIndex < themeCount) {
-        return themeNames[currentThemeIndex];
-      }
-      return "light";
-    }
-    // Bounds check to prevent array out-of-bounds access from corrupted settings
-    if (def.enumCount == 0 || values[index] >= def.enumCount) {
-      return def.enumCount > 0 ? def.enumValues[0] : "???";
-    }
-    return def.enumValues[values[index]];
-  }
-
-  const char* getCurrentThemeName() const {
-    if (themeCount > 0 && currentThemeIndex < themeCount) {
-      return themeNames[currentThemeIndex];
-    }
-    return "light";
-  }
-};
-
-void render(const GfxRenderer& r, const Theme& t, const ReaderSettingsView& v);
-
-// ============================================================================
-// InReaderSettingsView - Lightweight settings overlay for use inside the reader
-// Subset of reader settings that can be changed without exiting the book.
-// Excludes Theme and Orientation (require re-cache/restart).
-// ============================================================================
-
-struct InReaderSettingsView {
-  enum class SettingType : uint8_t { Toggle, Enum };
-
-  struct SettingDef {
-    const char* label;
-    SettingType type;
-    const char* const* enumValues;
-    uint8_t enumCount;
-  };
-
-  static constexpr int SETTING_COUNT = 8;
-  static constexpr int VISIBLE_ITEMS = 10;
-  static const SettingDef DEFS[SETTING_COUNT];
-
-  ButtonBar buttons{"Back", "", "<", ">"};
   uint8_t values[SETTING_COUNT] = {0};
   int8_t selected = 0;
   int8_t scrollOffset = 0;
@@ -304,6 +239,14 @@ struct InReaderSettingsView {
     const auto& def = DEFS[selected];
     if (def.type == SettingType::Toggle) {
       values[selected] = values[selected] ? 0 : 1;
+    } else if (def.type == SettingType::ThemeSelect) {
+      if (themeCount > 0) {
+        currentThemeIndex = (currentThemeIndex + themeCount + delta) % themeCount;
+      }
+    } else if (def.type == SettingType::FontSelect) {
+      if (fontCount > 0) {
+        currentFontIndex = (currentFontIndex + fontCount + delta) % fontCount;
+      }
     } else {
       values[selected] = static_cast<uint8_t>((values[selected] + def.enumCount + delta) % def.enumCount);
     }
@@ -315,10 +258,142 @@ struct InReaderSettingsView {
     if (def.type == SettingType::Toggle) {
       return values[index] ? "ON" : "OFF";
     }
+    if (def.type == SettingType::ThemeSelect) {
+      if (themeCount > 0 && currentThemeIndex < themeCount) {
+        return themeNames[currentThemeIndex];
+      }
+      return "light";
+    }
+    if (def.type == SettingType::FontSelect) {
+      if (fontCount > 0 && currentFontIndex < fontCount) {
+        return fontNames[currentFontIndex];
+      }
+      return "Default";
+    }
+    // Bounds check to prevent array out-of-bounds access from corrupted settings
     if (def.enumCount == 0 || values[index] >= def.enumCount) {
       return def.enumCount > 0 ? def.enumValues[0] : "???";
     }
     return def.enumValues[values[index]];
+  }
+
+  const char* getCurrentThemeName() const {
+    if (themeCount > 0 && currentThemeIndex < themeCount) {
+      return themeNames[currentThemeIndex];
+    }
+    return "light";
+  }
+
+  // Returns font family name for storage, or "" for default/builtin
+  const char* getCurrentFontName() const {
+    if (fontCount > 0 && currentFontIndex > 0 && currentFontIndex < fontCount) {
+      return fontNames[currentFontIndex];
+    }
+    return "";
+  }
+
+  void ensureVisible() {
+    if (selected < scrollOffset) scrollOffset = selected;
+    if (selected >= scrollOffset + VISIBLE_ITEMS) scrollOffset = selected - VISIBLE_ITEMS + 1;
+  }
+};
+
+void render(const GfxRenderer& r, const Theme& t, const ReaderSettingsView& v);
+
+// ============================================================================
+// InReaderSettingsView - Lightweight settings overlay for use inside the reader
+// Subset of reader settings that can be changed without exiting the book.
+// Excludes Theme and Orientation (require re-cache/restart).
+// ============================================================================
+
+struct InReaderSettingsView {
+  enum class SettingType : uint8_t { Toggle, Enum, FontSelect, Action };
+
+  struct SettingDef {
+    const char* label;
+    SettingType type;
+    const char* const* enumValues;
+    uint8_t enumCount;
+  };
+
+#if FEATURE_BLUETOOTH
+  static constexpr int SETTING_COUNT = 10;
+#else
+  static constexpr int SETTING_COUNT = 9;
+#endif
+  static constexpr int MAX_FONTS = 16;
+  static constexpr int VISIBLE_ITEMS = 10;
+  static const SettingDef DEFS[SETTING_COUNT];
+
+  ButtonBar buttons{"Back", "", "<", ">"};
+
+  // Font selection state (loaded from FontManager)
+  char fontNames[MAX_FONTS][32] = {};
+  int fontCount = 0;
+  int currentFontIndex = 0;
+
+  uint8_t values[SETTING_COUNT] = {0};
+  int8_t selected = 0;
+  int8_t scrollOffset = 0;
+  bool needsRender = true;
+
+  void moveUp() {
+    selected = (selected == 0) ? SETTING_COUNT - 1 : selected - 1;
+    ensureVisible();
+    needsRender = true;
+  }
+
+  void moveDown() {
+    selected = (selected + 1) % SETTING_COUNT;
+    ensureVisible();
+    needsRender = true;
+  }
+
+  void cycleValue(int delta) {
+    const auto& def = DEFS[selected];
+    if (def.type == SettingType::Action) {
+      return;  // Actions are handled externally
+    } else if (def.type == SettingType::Toggle) {
+      values[selected] = values[selected] ? 0 : 1;
+    } else if (def.type == SettingType::FontSelect) {
+      if (fontCount > 0) {
+        currentFontIndex = (currentFontIndex + fontCount + delta) % fontCount;
+      }
+    } else {
+      values[selected] = static_cast<uint8_t>((values[selected] + def.enumCount + delta) % def.enumCount);
+    }
+    needsRender = true;
+  }
+
+  // Action status text (set externally by reader state)
+  char actionStatus[24] = "Connect";
+
+  const char* getCurrentValueStr(int index) const {
+    const auto& def = DEFS[index];
+    if (def.type == SettingType::Toggle) {
+      return values[index] ? "ON" : "OFF";
+    }
+    if (def.type == SettingType::FontSelect) {
+      if (fontCount > 0 && currentFontIndex < fontCount) {
+        return fontNames[currentFontIndex];
+      }
+      return "Default";
+    }
+    if (def.type == SettingType::Action) {
+      return actionStatus;
+    }
+    if (def.enumCount == 0 || values[index] >= def.enumCount) {
+      return def.enumCount > 0 ? def.enumValues[0] : "???";
+    }
+    return def.enumValues[values[index]];
+  }
+
+  // Returns font family name for storage, or "" for default/builtin
+  const char* getCurrentFontName() const {
+    if (fontCount > 0 && currentFontIndex > 0 && currentFontIndex < fontCount) {
+      return fontNames[currentFontIndex];
+    }
+    return "";
   }
 
   void ensureVisible() {
@@ -346,10 +421,14 @@ struct DeviceSettingsView {
   struct SettingDef {
     const char* label;
     const char* const* values;
-    uint8_t valueCount;
+    uint8_t valueCount;  // 0 = sub-menu action (no cycling)
   };
 
+#if FEATURE_PLUGINS
+  static constexpr int SETTING_COUNT = 9;
+#else
   static constexpr int SETTING_COUNT = 8;
+#endif
   static const SettingDef DEFS[SETTING_COUNT];
 
   ButtonBar buttons{"Back", "", "<", ">"};
@@ -369,21 +448,75 @@ struct DeviceSettingsView {
 
   void cycleValue(int delta) {
     const auto& def = DEFS[selected];
+    if (def.valueCount == 0) return;  // Sub-menu action, handled externally
     values[selected] = static_cast<uint8_t>((values[selected] + def.valueCount + delta) % def.valueCount);
     needsRender = true;
   }
 
+  bool isSubMenu(int index) const { return DEFS[index].valueCount == 0; }
+
   const char* getCurrentValueStr(int index) const {
     const auto& def = DEFS[index];
+    if (def.valueCount == 0) return ">";  // Sub-menu indicator
     // Bounds check to prevent array out-of-bounds access from corrupted settings
-    if (def.valueCount == 0 || values[index] >= def.valueCount) {
-      return def.valueCount > 0 ? def.values[0] : "???";
+    if (values[index] >= def.valueCount) {
+      return def.values[0];
     }
     return def.values[values[index]];
   }
 };
 
 void render(const GfxRenderer& r, const Theme& t, const DeviceSettingsView& v);
+
+// ============================================================================
+// AppVisibilityView - Per-app show/hide toggles
+// ============================================================================
+#if FEATURE_PLUGINS
+
+struct AppVisibilityView {
+  static constexpr int MAX_APPS = 24;
+  static constexpr int VISIBLE_ITEMS = 12;
+
+  // App list populated from PluginListState registry
+  char appNames[MAX_APPS][24] = {};
+  bool visible[MAX_APPS] = {};  // true = shown, false = hidden
+  int appCount = 0;
+  int8_t selected = 0;
+  int8_t scrollOffset = 0;
+  bool needsRender = true;
+
+  ButtonBar buttons{"Back", "Toggle", "", ""};
+
+  void moveUp() {
+    if (appCount == 0) return;
+    selected = (selected == 0) ? appCount - 1 : selected - 1;
+    ensureVisible();
+    needsRender = true;
+  }
+
+  void moveDown() {
+    if (appCount == 0) return;
+    selected = (selected + 1) % appCount;
+    ensureVisible();
+    needsRender = true;
+  }
+
+  void toggleSelected() {
+    if (selected >= 0 && selected < appCount) {
+      visible[selected] = !visible[selected];
+      needsRender = true;
+    }
+  }
+
+  void ensureVisible() {
+    if (selected < scrollOffset) scrollOffset = selected;
+    if (selected >= scrollOffset + VISIBLE_ITEMS) scrollOffset = selected - VISIBLE_ITEMS + 1;
+  }
+};
+
+void render(const GfxRenderer& r, const Theme& t, const AppVisibilityView& v);
+
+#endif  // FEATURE_PLUGINS
 
 // ============================================================================
 // ConfirmDialogView - Yes/No confirmation dialog (matches old ConfirmActionActivity)

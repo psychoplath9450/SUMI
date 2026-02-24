@@ -2,13 +2,19 @@
 #include <Arduino.h>
 #include <SPI.h>
 
+#ifdef ARDUINO
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+#endif
+
 class EInkDisplay {
  public:
   // Constructor with pin configuration
   EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t rst, int8_t busy);
 
   // Destructor
-  ~EInkDisplay() = default;
+  ~EInkDisplay();
 
   // Refresh modes (guarded to avoid redefinition in test builds)
   enum RefreshMode {
@@ -26,15 +32,15 @@ class EInkDisplay {
   static constexpr uint16_t DISPLAY_WIDTH_BYTES = DISPLAY_WIDTH / 8;
   static constexpr uint32_t BUFFER_SIZE = DISPLAY_WIDTH_BYTES * DISPLAY_HEIGHT;
 
-  // Frame buffer operations
-  void clearScreen(uint8_t color = 0xFF) const;
+  // Frame buffer operations (waitForRefresh guards against RED RAM race)
+  void clearScreen(uint8_t color = 0xFF);
   void drawImage(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-                 bool fromProgmem = false) const;
+                 bool fromProgmem = false);
 
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
 #endif
-  void setFramebuffer(const uint8_t* bwBuffer) const;
+  void setFramebuffer(const uint8_t* bwBuffer);
 
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
   void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer);
@@ -63,6 +69,15 @@ class EInkDisplay {
 
   // Access to frame buffer
   uint8_t* getFrameBuffer() const { return frameBuffer; }
+
+  // Async refresh: wait for any in-progress background refresh to complete.
+  // Called automatically at the start of displayBuffer/displayWindow/displayGrayBuffer.
+  void waitForRefresh();
+
+  // Check if async refresh is in progress (non-blocking).
+  // Useful for emulators/animations that want to skip rendering when the
+  // display is busy rather than blocking on waitForRefresh().
+  bool isRefreshing() const { return refreshPending_; }
 
   // Save the current framebuffer to a PBM file (desktop/test builds only)
   void saveFrameBufferAsPBM(const char* filename);
@@ -99,4 +114,22 @@ class EInkDisplay {
   // Low-level display operations
   void setRamArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
   void writeRamBuffer(uint8_t ramBuffer, const uint8_t* data, uint32_t size);
+
+#ifdef ARDUINO
+  // Async refresh task — runs refreshDisplay + RED RAM sync in background
+  // so the main loop can process input while the e-ink waveform runs.
+  struct AsyncRefreshJob {
+    RefreshMode mode = FAST_REFRESH;
+    bool turnOffScreen = false;
+    bool syncRedRam = false;  // Single-buffer: sync RED RAM after refresh
+  };
+
+  static void refreshTaskFunc(void* param);
+  void startRefreshTask();
+
+  TaskHandle_t refreshTaskHandle_ = nullptr;
+  SemaphoreHandle_t refreshDoneSemaphore_ = nullptr;
+  volatile bool refreshPending_ = false;
+  AsyncRefreshJob pendingJob_;
+#endif
 };

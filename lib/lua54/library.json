@@ -1,0 +1,13 @@
+{
+  "name": "lua54",
+  "version": "5.4.7",
+  "description": "Lua 5.4.7 scripting language (embedded subset for SUMI plugins)",
+  "keywords": "lua, scripting, embedded",
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "flags": "-DLUA_CORE -DLUA_LIB",
+    "srcFilter": ["+<*.c>", "-<lua.c>", "-<luac.c>"]
+  }
+}

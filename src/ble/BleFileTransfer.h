@@ -74,6 +74,7 @@ bool isTransferring();
 int transferProgress();
 uint32_t bytesReceived();
 uint32_t expectedSize();
+uint32_t transferElapsedMs();
 const char* currentFilename();
 
 // Queue info

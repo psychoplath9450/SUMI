@@ -11,20 +11,13 @@ static_assert(ZipFile::DECOMP_DICT_SIZE == TINFL_LZ_DICT_SIZE,
               "ZipFile::DECOMP_DICT_SIZE must match TINFL_LZ_DICT_SIZE");
 
 bool inflateOneShot(const uint8_t* inputBuf, const size_t deflatedSize, uint8_t* outputBuf, const size_t inflatedSize) {
-  // Setup inflator
-  const auto inflator = static_cast<tinfl_decompressor*>(malloc(sizeof(tinfl_decompressor)));
-  if (!inflator) {
-    Serial.printf("[%lu] [ZIP] Failed to allocate memory for inflator\n", millis());
-    return false;
-  }
-  memset(inflator, 0, sizeof(tinfl_decompressor));
-  tinfl_init(inflator);
+  tinfl_decompressor inflator;
+  tinfl_init(&inflator);
 
   size_t inBytes = deflatedSize;
   size_t outBytes = inflatedSize;
-  const tinfl_status status = tinfl_decompress(inflator, inputBuf, &inBytes, nullptr, outputBuf, &outBytes,
+  const tinfl_status status = tinfl_decompress(&inflator, inputBuf, &inBytes, nullptr, outputBuf, &outBytes,
                                                TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-  free(inflator);
 
   if (status != TINFL_STATUS_DONE) {
     Serial.printf("[%lu] [ZIP] tinfl_decompress() failed with status %d\n", millis(), status);
@@ -624,22 +617,14 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
   }
 
   if (fileStat.method == MZ_DEFLATED) {
-    // Separate allocations: fits in fragmented heap where one large block wouldn't.
-    // tinfl_decompressor ~11KB, chunkSize ~1KB, dictionary 32KB - each fits in smaller fragments.
-    const auto inflator = static_cast<tinfl_decompressor*>(malloc(sizeof(tinfl_decompressor)));
-    if (!inflator) {
-      Serial.printf("[%lu] [ZIP] Failed to allocate inflator (largest free: %u)\n", millis(),
-                    heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-      if (!wasOpen) {
-        close();
-      }
-      return false;
-    }
-    tinfl_init(inflator);
+    // tinfl_decompressor (~11KB) on stack instead of heap to avoid fragmentation failures.
+    // The dictionary (32KB) comes from the caller's arena buffer when available.
+    tinfl_decompressor inflatorStorage;
+    tinfl_init(&inflatorStorage);
+    tinfl_decompressor* inflator = &inflatorStorage;
 
     const auto fileReadBuffer = static_cast<uint8_t*>(malloc(chunkSize));
     if (!fileReadBuffer) {
-      free(inflator);
       if (!wasOpen) {
         close();
       }
@@ -649,10 +634,9 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     const bool ownDict = (dictBuffer == nullptr);
     auto outputBuffer = dictBuffer ? dictBuffer : static_cast<uint8_t*>(malloc(TINFL_LZ_DICT_SIZE));
     if (!outputBuffer) {
-      Serial.printf("[%lu] [ZIP] Failed to allocate outputBuffer (32KB), largest free: %u\n", 
+      Serial.printf("[%lu] [ZIP] Failed to allocate outputBuffer (32KB), largest free: %u\n",
                     millis(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
       free(fileReadBuffer);
-      free(inflator);
       if (!wasOpen) {
         close();
       }
@@ -707,7 +691,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
           }
           if (ownDict) free(outputBuffer);
           free(fileReadBuffer);
-          free(inflator);
           return false;
         }
         // Update output position in buffer (with wraparound)
@@ -721,7 +704,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
         }
         if (ownDict) free(outputBuffer);
         free(fileReadBuffer);
-        free(inflator);
         return false;
       }
 
@@ -731,7 +713,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
         }
         if (ownDict) free(outputBuffer);
         free(fileReadBuffer);
-        free(inflator);
         return true;
       }
     }
@@ -743,7 +724,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     }
     if (ownDict) free(outputBuffer);
     free(fileReadBuffer);
-    free(inflator);
     return false;
   }
 

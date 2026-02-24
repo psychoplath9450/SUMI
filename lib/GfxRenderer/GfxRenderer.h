@@ -58,8 +58,18 @@ class GfxRenderer {
   static constexpr size_t BITMAP_ROW_BYTES_SIZE = EInkDisplay::DISPLAY_WIDTH * 4;  // 32-bit max
   uint8_t* bitmapOutputRow_ = nullptr;
   uint8_t* bitmapRowBytes_ = nullptr;
+  bool bitmapRowsOwnMemory_ = false;
   void allocateBitmapRowBuffers();
   void freeBitmapRowBuffers();
+
+  // Periodic refresh counter — auto-promotes FAST_REFRESH to HALF_REFRESH
+  // every N fast refreshes to clear accumulated e-ink ghosting.
+  // Mutable: display policy state, not renderer content state.
+  mutable int periodicRefreshInterval_ = 0;  // 0 = disabled (Reader manages its own)
+  mutable int fastRefreshCount_ = 0;
+
+  // Sunlight fading fix — power off display after each refresh
+  bool fadingFix_ = false;
 
   // Word width cache for performance optimization during EPUB section creation.
   // Key: FNV-1a hash of (fontId, text, style). Value: measured width in pixels.
@@ -92,7 +102,8 @@ class GfxRenderer {
   void freeBwBufferChunks();
 
  public:
-  explicit GfxRenderer(EInkDisplay& einkDisplay) : einkDisplay(einkDisplay), renderMode(BW), orientation(Portrait) {
+  explicit GfxRenderer(EInkDisplay& einkDisplay)
+      : einkDisplay(einkDisplay), renderMode(BW), orientation(Portrait) {
     allocateBitmapRowBuffers();
   }
   ~GfxRenderer() { freeBitmapRowBuffers(); }
@@ -155,6 +166,20 @@ class GfxRenderer {
   void displayWindow(int x, int y, int width, int height, bool turnOffScreen = false) const;
   void invertScreen() const;
   void clearScreen(uint8_t color = 0xFF) const;
+
+  // Check if an async display refresh is in progress (non-blocking).
+  // Emulators/animations can skip rendering when the display is busy.
+  bool isRefreshing() const { return einkDisplay.isRefreshing(); }
+
+  // Periodic refresh: auto-promote FAST_REFRESH to HALF_REFRESH every N fast
+  // refreshes to clear accumulated e-ink ghosting. Set to 0 to disable.
+  void setPeriodicRefreshInterval(int interval) { periodicRefreshInterval_ = interval; }
+  void resetPeriodicRefreshCounter() { fastRefreshCount_ = 0; }
+
+  // Sunlight fading fix: power off display after each refresh to prevent
+  // e-ink fading in direct sunlight. Applied automatically to all displayBuffer
+  // calls unless explicitly overridden by passing turnOffScreen=true/false.
+  void setFadingFix(bool enabled) { fadingFix_ = enabled; }
   void clearArea(int x, int y, int width, int height, uint8_t color = 0xFF) const;
 
   // Drawing
@@ -199,6 +224,7 @@ class GfxRenderer {
 
   // Grayscale functions
   void setRenderMode(const RenderMode mode) { this->renderMode = mode; }
+  RenderMode getRenderMode() const { return renderMode; }
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer(bool turnOffScreen = false) const;

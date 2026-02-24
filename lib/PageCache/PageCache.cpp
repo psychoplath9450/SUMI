@@ -6,6 +6,9 @@
 
 #include "ContentParser.h"
 
+#include <Arduino.h>
+#include <esp_heap_caps.h>
+
 namespace {
 constexpr uint8_t CACHE_FILE_VERSION = 19;  // v19: add allowTallImages for landscape scroll
 
@@ -266,6 +269,14 @@ bool PageCache::extend(ContentParser& parser, uint16_t additionalPages, const Ab
     // HOT PATH: Parser has live session from previous extend, just append new pages.
     // No re-parsing — O(chunk) work instead of O(totalPages).
     Serial.printf("[CACHE] Hot extend from %d pages (+%d)\n", currentPages, chunk);
+
+    // Guard: parsing allocates Page vectors, TextBlocks, strings — abort() on OOM.
+    // Uses total free heap (not contiguous) since parser does many small allocations.
+    const size_t freeBlock = ESP.getFreeHeap();
+    if (freeBlock < 12288) {
+      Serial.printf("[CACHE] Skipping hot extend — low memory (%zu bytes)\n", freeBlock);
+      return true;  // Existing pages are still valid
+    }
 
     std::vector<uint32_t> lut;
     if (!loadLut(lut)) return false;

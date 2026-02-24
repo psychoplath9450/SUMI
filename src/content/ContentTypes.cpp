@@ -24,6 +24,9 @@ ContentType detectContentType(const char* path) {
   if (strcasecmp(ext, ".md") == 0 || strcasecmp(ext, ".markdown") == 0) {
     return ContentType::Markdown;
   }
+  if (strcasecmp(ext, ".comic") == 0) {
+    return ContentType::Comic;
+  }
 
   return ContentType::None;
 }

@@ -8,11 +8,12 @@
 namespace sumi {
 
 void RecentBooks::recordOpen(Core& core, const char* path, const char* title,
-                             const char* author, uint16_t progress) {
+                             const char* author, uint16_t progress,
+                             const char* thumbPath) {
   constexpr int MAX_TRACK = MAX_RECENT;
   Entry entries[MAX_TRACK];
   int count = loadAll(core, entries, MAX_TRACK);
-  
+
   // Check if already in list
   int existingIdx = -1;
   for (int i = 0; i < count; i++) {
@@ -21,7 +22,7 @@ void RecentBooks::recordOpen(Core& core, const char* path, const char* title,
       break;
     }
   }
-  
+
   // Create new entry
   Entry newEntry = {};
   strncpy(newEntry.path, path, PATH_LEN - 1);
@@ -29,6 +30,16 @@ void RecentBooks::recordOpen(Core& core, const char* path, const char* title,
   strncpy(newEntry.author, author, AUTHOR_LEN - 1);
   newEntry.lastAccess = 0;  // No RTC; ordering maintained by file position (newest first)
   newEntry.progress = progress;
+  // Persist thumbnail: use new path if provided, else preserve existing
+  if (thumbPath && thumbPath[0] != '\0') {
+    strncpy(newEntry.thumbPath, thumbPath, THUMB_LEN - 1);
+    newEntry.thumbPath[THUMB_LEN - 1] = '\0';
+  } else if (existingIdx >= 0 && entries[existingIdx].hasThumb()) {
+    strncpy(newEntry.thumbPath, entries[existingIdx].thumbPath, THUMB_LEN - 1);
+    newEntry.thumbPath[THUMB_LEN - 1] = '\0';
+  } else {
+    newEntry.thumbPath[0] = '\0';
+  }
   
   // Write directly to file - new entry first, then existing (skip duplicate)
   FsFile file;
@@ -136,6 +147,40 @@ bool RecentBooks::getMostRecent(Core& core, Entry& entry) {
     return true;
   }
   return false;
+}
+
+void RecentBooks::updateThumbPath(Core& core, const char* path, const char* thumbPath) {
+  if (!thumbPath || thumbPath[0] == '\0') return;
+
+  constexpr int MAX_TRACK = MAX_RECENT;
+  Entry entries[MAX_TRACK];
+  int count = loadAll(core, entries, MAX_TRACK);
+
+  // Find and update
+  bool found = false;
+  for (int i = 0; i < count; i++) {
+    if (strcmp(entries[i].path, path) == 0) {
+      // Only write if thumbnail changed
+      if (strcmp(entries[i].thumbPath, thumbPath) == 0) return;
+      strncpy(entries[i].thumbPath, thumbPath, THUMB_LEN - 1);
+      entries[i].thumbPath[THUMB_LEN - 1] = '\0';
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) return;
+
+  // Write back
+  FsFile file;
+  if (!SdMan.openFileForWrite("RECENT", INDEX_PATH, file)) {
+    return;
+  }
+
+  file.write(VERSION);
+  file.write(static_cast<uint8_t>(count));
+  file.write(reinterpret_cast<const uint8_t*>(entries), sizeof(Entry) * count);
+  file.close();
 }
 
 void RecentBooks::clear(Core& core) {

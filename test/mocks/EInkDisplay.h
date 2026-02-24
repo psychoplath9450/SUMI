@@ -14,6 +14,7 @@ class EInkDisplay {
   static constexpr uint32_t BUFFER_SIZE = DISPLAY_WIDTH_BYTES * DISPLAY_HEIGHT;
 
   EInkDisplay(int8_t, int8_t, int8_t, int8_t, int8_t, int8_t) { memset(frameBuffer_, 0xFF, BUFFER_SIZE); }
+  ~EInkDisplay() = default;
 
   uint8_t* getFrameBuffer() const { return const_cast<uint8_t*>(frameBuffer_); }
   void clearScreen(uint8_t color = 0xFF) { memset(frameBuffer_, color, BUFFER_SIZE); }
@@ -25,6 +26,7 @@ class EInkDisplay {
   void copyGrayscaleMsbBuffers(uint8_t*) {}
   void displayGrayBuffer(bool) {}
   void cleanupGrayscaleBuffers(uint8_t*) {}
+  void waitForRefresh() {}
 
  private:
   uint8_t frameBuffer_[BUFFER_SIZE];

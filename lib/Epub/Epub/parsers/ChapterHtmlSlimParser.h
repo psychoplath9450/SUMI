@@ -96,7 +96,7 @@ class ChapterHtmlSlimParser {
   static constexpr uint32_t MAX_PARSE_TIME_MS = 20000;     // 20 second timeout
   static constexpr uint16_t YIELD_CHECK_INTERVAL = 100;    // Check every 100 iterations
   static constexpr uint16_t CSS_HEAP_CHECK_INTERVAL = 64;  // Check heap for CSS every 64 elements
-  static constexpr size_t MIN_FREE_HEAP = 4096;            // 4KB minimum free heap
+  static constexpr size_t MIN_FREE_HEAP = 1024;             // 1KB minimum free heap (DP arrays use arena)
 
   // Pre-parse data URI stripper to prevent expat OOM on large embedded images
   DataUriStripper dataUriStripper_;

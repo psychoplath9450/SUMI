@@ -129,6 +129,7 @@ struct ReaderStatusBarData {
   int batteryPercent;      // -1 if unavailable
   uint8_t mode;            // Settings::StatusBarMode
   bool isPartial = false;  // True when page cache is incomplete
+  bool bleConnected = false;  // Show BLE indicator next to battery
 };
 
 // Reader status bar - Battery (left), title (center), page numbers (right)

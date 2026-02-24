@@ -33,7 +33,7 @@ enum class PluginRunMode : uint8_t {
   Simple,       // draw() + handleInput() — most plugins
   SelfRefresh,  // plugin manages its own partial refresh regions
   WithUpdate,   // has periodic update() (timers, stopwatch)
-  Animation,    // continuous frame loop (Cube3D)
+  Animation,    // continuous frame loop
 };
 
 class PluginInterface {
@@ -51,6 +51,9 @@ class PluginInterface {
 
   // Input — return true if consumed, false to let host handle (Back → exit)
   virtual bool handleInput(PluginButton btn) = 0;
+
+  // Button release — override if plugin needs to track held buttons (e.g. emulators)
+  virtual bool handleRelease(PluginButton btn) { (void)btn; return false; }
 
   // Character input from BLE keyboard (override for text-input plugins)
   virtual bool handleChar(char c) { (void)c; return false; }
@@ -70,7 +73,6 @@ class PluginInterface {
   virtual bool wantsLandscape() const { return false; }
 
   // Self-refresh — override to return true if plugin calls displayBuffer() itself
-  // (used by Benchmark to time refresh modes directly)
   virtual bool handlesOwnRefresh() const { return false; }
 
   bool needsFullRedraw = true;

@@ -256,10 +256,17 @@ class MetadataCallbacks : public NimBLECharacteristicCallbacks {
         }
 
         // Validate folder
-        const char* validFolders[] = {"books", "comics", "images", "sleep", "flashcards", "notes", "maps", "custom", "config/fonts"};
+        const char* validFolders[] = {"books", "comics", "images", "sleep", "flashcards", "notes", "maps", "custom", "games", "config/fonts", "config/themes"};
         bool folderValid = false;
         for (const char* vf : validFolders) {
             if (strcmp(_folder, vf) == 0) { folderValid = true; break; }
+        }
+        // Allow config/fonts/* subfolders for .epdfont font families
+        if (!folderValid && strncmp(_folder, "config/fonts/", 13) == 0) {
+            const char* sub = _folder + 13;
+            if (strlen(sub) > 0 && strlen(sub) < 32 && !strchr(sub, '/') && !strstr(sub, "..")) {
+                folderValid = true;
+            }
         }
         if (!folderValid) {
             Serial.printf("[BLE-FT] ERROR: Invalid folder\n");
@@ -611,6 +618,7 @@ int transferProgress() {
 
 uint32_t bytesReceived() { return _receivedBytes; }
 uint32_t expectedSize() { return _expectedSize; }
+uint32_t transferElapsedMs() { return _transferring ? (millis() - _transferStartTime) : 0; }
 const char* currentFilename() { return _filename; }
 
 uint8_t queueIndex() { return _queueIndex; }
@@ -656,6 +664,7 @@ bool isTransferring() { return false; }
 int transferProgress() { return 0; }
 uint32_t bytesReceived() { return 0; }
 uint32_t expectedSize() { return 0; }
+uint32_t transferElapsedMs() { return 0; }
 const char* currentFilename() { return ""; }
 uint8_t queueIndex() { return 0; }
 uint8_t queueTotal() { return 0; }

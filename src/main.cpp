@@ -19,8 +19,6 @@
 #include <driver/gpio.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
-#include <esp_ota_ops.h>
-#include <esp_partition.h>
 // Medium font (16pt)
 #include <builtinFonts/reader_medium_2b.h>
 #include <builtinFonts/reader_medium_bold_2b.h>
@@ -42,7 +40,6 @@
 #include "ui/Elements.h"
 
 // New refactored core system
-#include "core/BootMode.h"
 #include "core/Core.h"
 #include "core/MemoryArena.h"
 #include "core/StateMachine.h"
@@ -69,7 +66,6 @@
 #include "plugins/Solitaire.h"
 #include "plugins/Sudoku.h"
 #include "plugins/ChessGame.h"
-#include "plugins/Cube3D.h"
 #include "plugins/SumiBoy.h"
 #endif
 
@@ -85,6 +81,10 @@
 #include "ble/BleFileTransfer.h"
 #endif
 #endif  // FEATURE_PLUGINS
+
+#if FEATURE_BLUETOOTH
+#include "ble/BleHid.h"
+#endif
 
 #define SPI_FQ 40000000
 // Display SPI pins (custom pins for XteinkX4, not hardware SPI defaults)
@@ -117,7 +117,7 @@ static bool bootLoopRecovered = false;  // Set if recovery was triggered this bo
  * Must be called very early in startup, before any complex init.
  * Uses RTC memory (survives soft resets) to track rapid reboot count.
  * If the device reboots BOOT_LOOP_THRESHOLD times within BOOT_LOOP_WINDOW_MS,
- * we assume a boot loop and force the OTA boot partition back to app0 (SUMI).
+ * we assume a boot loop and reset state to attempt clean recovery.
  */
 static void bootLoopGuard() {
   // On power-on reset, RTC memory is garbage - detect and reset
@@ -143,40 +143,11 @@ static void bootLoopGuard() {
   if (rtcBootCount >= BOOT_LOOP_THRESHOLD) {
     Serial.println("[BOOT] *** BOOT LOOP DETECTED - forcing recovery ***");
 
-    // Force boot partition back to app0 (SUMI main firmware)
-    const esp_partition_t* app0 = esp_partition_find_first(
-        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
-    if (app0) {
-      esp_ota_set_boot_partition(app0);
-      Serial.println("[BOOT] Reset boot partition to app0 (SUMI)");
-    }
-
-    // Clear any pending transitions that might cause more reboots
-    // (will be done properly once settings are loaded, but zero the flag in NVS too)
     rtcBootCount = 0;
     rtcBootTimestamp = 0;
     bootLoopRecovered = true;
 
     Serial.println("[BOOT] Recovery complete - continuing normal boot");
-  }
-}
-
-/**
- * Ensure SUMI is the active boot partition on every successful startup.
- * This prevents stale OTA boot configs from causing issues if the emulator
- * crashes and the watchdog somehow gets us back to SUMI.
- */
-static void ensureSumiBootPartition() {
-  const esp_partition_t* running = esp_ota_get_running_partition();
-  const esp_partition_t* boot = esp_ota_get_boot_partition();
-
-  if (!running || !boot) return;
-
-  // If we're running from app0 but boot is set to app1, fix it
-  if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
-      boot->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_0) {
-    Serial.println("[BOOT] Boot partition was set to app1 but we're on app0 - resetting");
-    esp_ota_set_boot_partition(running);
   }
 }
 
@@ -409,10 +380,7 @@ void showErrorScreen(const char* message) {
   renderer.displayBuffer();
 }
 
-// Track current boot mode for loop behavior
-static sumi::BootMode currentBootMode = sumi::BootMode::UI;
-
-// Early initialization - common to both boot modes
+// Early initialization
 // Returns false if critical initialization failed
 bool earlyInit() {
   // Disable task watchdog — setup takes >5s (ADC reads + SD init + display refresh)
@@ -433,10 +401,6 @@ bool earlyInit() {
   // Boot loop detection - must be early, before anything that could crash
   bootLoopGuard();
 
-  // Ensure we're always set to boot SUMI on next restart
-  // (prevents stale OTA config from re-entering a failed emulator)
-  ensureSumiBootPartition();
-
   inputManager.begin();
 
   // Initialize SPI and SD card before wakeup verification so settings are available
@@ -453,6 +417,9 @@ bool earlyInit() {
     Serial.println("[MIGRATE] Renaming /.papyrix -> /.sumi");
     SdMan.rename("/.papyrix", "/.sumi");
   }
+
+  // Detect first boot (no .sumi folder yet) — used for welcome overlay on home screen
+  sumi::core.settings.isFirstBoot = !SdMan.exists(SUMI_DIR);
 
   // Load settings before wakeup verification - without this, a full power cycle
   // (no USB) resets RTC memory and the short power button setting is ignored
@@ -501,24 +468,49 @@ bool earlyInit() {
   return true;
 }
 
-// Initialize UI mode - full state registration, all resources
-void initUIMode() {
-  Serial.printf("[%lu] [BOOT] Initializing UI mode\n", millis());
-  Serial.printf("[%lu] [BOOT] [UI mode] Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
+// Unified system initialization — all states registered, no dual-boot split.
+// Determines initial state from settings (StartupLastDocument → Reader, else Home).
+// State transitions happen in-process via StateTransition::to() — no ESP.restart().
+void initSystem() {
+  Serial.printf("[%lu] [BOOT] Initializing system\n", millis());
+  Serial.printf("[%lu] [BOOT] Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
                 ESP.getMaxAllocHeap());
 
-  // Initialize theme and font managers (full)
+  // Determine initial state before font loading (XTC content can skip custom fonts)
+  sumi::StateId initialState = sumi::StateId::Home;
+  bool startInReader = false;
+
+  // Check "Last Document" startup behavior for cold-boot reader start
+  if (sumi::core.settings.startupBehavior == sumi::Settings::StartupLastDocument &&
+      sumi::core.settings.lastBookPath[0] != '\0' &&
+      SdMan.exists(sumi::core.settings.lastBookPath)) {
+    Serial.printf("[%lu] [BOOT] 'Last Document' startup: %s\n", millis(), sumi::core.settings.lastBookPath);
+    startInReader = true;
+    initialState = sumi::StateId::Reader;
+  }
+
+  // Detect content type for font optimization (XTC doesn't need custom fonts)
+  bool needsCustomFonts = true;
+  if (startInReader) {
+    sumi::ContentType contentType = sumi::detectContentType(sumi::core.settings.lastBookPath);
+    needsCustomFonts = (contentType != sumi::ContentType::Xtc);
+  }
+
+  // Initialize theme and font managers
   FONT_MANAGER.init(renderer);
   THEME_MANAGER.loadTheme(sumi::core.settings.themeName);
   THEME_MANAGER.createDefaultThemeFiles();
   Serial.printf("[%lu] [   ] Theme loaded: %s\n", millis(), THEME_MANAGER.currentThemeName());
 
   setupDisplayAndFonts();
-  applyThemeFonts();
+  if (needsCustomFonts) {
+    applyThemeFonts();
+  } else {
+    Serial.printf("[%lu] [BOOT] Skipping custom fonts for XTC content\n", millis());
+  }
 
-  // Show boot splash only on cold boot (not mode transition)
-  const auto& preInitTransition = sumi::getTransition();
-  if (!preInitTransition.isValid()) {
+  // Show boot splash when starting at Home
+  if (!startInReader) {
     ui::BootView bootView;
     bootView.setLogo(SumiLogo, 128, 128);
     bootView.setVersion(SUMI_VERSION);
@@ -526,7 +518,7 @@ void initUIMode() {
     ui::render(renderer, THEME, bootView);
   }
 
-  // Register ALL states for UI mode
+  // Register ALL states (unified — transitions happen in-process)
   stateMachine.registerState(&startupState);
   stateMachine.registerState(&homeState);
   stateMachine.registerState(&fileListState);
@@ -559,11 +551,8 @@ void initUIMode() {
   sumi::PluginListState::registerPlugin("Solitaire", "Games", []() -> sumi::PluginInterface* {
     return new sumi::SolitaireGame(pluginRenderer);
   });
-  sumi::PluginListState::registerPlugin("Benchmark", "Tools", []() -> sumi::PluginInterface* {
-    return new sumi::Cube3DApp(pluginRenderer);
-  });
   sumi::PluginListState::registerPlugin("SumiBoy", "Games", []() -> sumi::PluginInterface* {
-    return new sumi::SumiBoyApp(pluginRenderer);
+    return new sumi::SumiBoyRomPicker(pluginRenderer);
   });
 #endif  // FEATURE_GAMES
 
@@ -589,7 +578,13 @@ void initUIMode() {
   });
 #endif
 
-  Serial.printf("[BOOT] Registered %d plugins\n", sumi::PluginListState::pluginCount);
+  // Scan SD card for user-created Lua plugins
+  sumi::PluginListState::scanLuaPlugins(pluginRenderer);
+
+  Serial.printf("[BOOT] Registered %d plugins (%d built-in + %d Lua)\n",
+                sumi::PluginListState::pluginCount,
+                sumi::PluginListState::pluginCount - sumi::PluginListState::luaPluginCount_,
+                sumi::PluginListState::luaPluginCount_);
 #endif  // FEATURE_PLUGINS
 
   // Initialize core
@@ -600,14 +595,23 @@ void initUIMode() {
     return;
   }
 
-  Serial.printf("[%lu] [CORE] State machine starting (UI mode)\n", millis());
+  Serial.printf("[%lu] [CORE] State machine starting (initial: %s)\n", millis(),
+                startInReader ? "Reader" : "Home");
   mappedInputManager.setSettings(&sumi::core.settings);
   ui::setFrontButtonLayout(sumi::core.settings.frontButtonLayout);
 
-  // Always start at Home when returning to UI mode
-  // (previously could return to FileList, but Home is more intuitive)
-  sumi::StateId initialState = sumi::StateId::Home;
-  Serial.printf("[%lu] [BOOT] Starting at Home\n", millis());
+  // Enable periodic half-refresh in non-reader states to clear e-ink ghosting.
+  // Reader manages its own counter and disables this on enter.
+  if (!startInReader) {
+    renderer.setPeriodicRefreshInterval(sumi::core.settings.getPagesPerRefreshValue());
+  }
+
+  // Set up reader path if starting in reader
+  if (startInReader) {
+    strncpy(sumi::core.buf.path, sumi::core.settings.lastBookPath, sizeof(sumi::core.buf.path) - 1);
+    sumi::core.buf.path[sizeof(sumi::core.buf.path) - 1] = '\0';
+    Serial.printf("[%lu] [BOOT] Opening book: %s\n", millis(), sumi::core.buf.path);
+  }
 
   stateMachine.init(sumi::core, initialState);
 
@@ -615,89 +619,17 @@ void initUIMode() {
   Serial.printf("[%lu] [CORE] Forcing initial render\n", millis());
   stateMachine.update(sumi::core);
 
-  Serial.printf("[%lu] [BOOT] [UI mode] After init - Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
-                ESP.getMaxAllocHeap());
-}
-
-// Initialize Reader mode - minimal state registration, single font size
-void initReaderMode() {
-  Serial.printf("[%lu] [BOOT] Initializing READER mode\n", millis());
-  Serial.printf("[%lu] [BOOT] [READER mode] Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
-                ESP.getMaxAllocHeap());
-
-  // Detect content type early to decide if we need custom fonts
-  // XTC/XTCH files contain pre-rendered bitmaps and don't need fonts for page rendering
-  const auto& transition = sumi::getTransition();
-  sumi::ContentType contentType = sumi::detectContentType(transition.bookPath);
-  bool needsCustomFonts = (contentType != sumi::ContentType::Xtc);
-
-  // Initialize theme and font managers (minimal - no cache)
-  FONT_MANAGER.init(renderer);
-  THEME_MANAGER.loadTheme(sumi::core.settings.themeName);
-  // Skip createDefaultThemeFiles() - not needed in reader mode
-  Serial.printf("[%lu] [   ] Theme loaded: %s (reader mode)\n", millis(), THEME_MANAGER.currentThemeName());
-
-  setupDisplayAndFonts();  // Builtin fonts - always needed for UI
-
-  if (needsCustomFonts) {
-    applyThemeFonts();  // Custom fonts - skip for XTC/XTCH to save ~500KB+ RAM
-  } else {
-    Serial.printf("[%lu] [BOOT] Skipping custom fonts for XTC content\n", millis());
-  }
-
-  // Register ONLY states needed for Reader mode
-  stateMachine.registerState(&readerState);
-  stateMachine.registerState(&sleepState);
-  stateMachine.registerState(&errorState);
-
-  // Initialize core
-  auto result = sumi::core.init();
-  if (!result.ok()) {
-    Serial.printf("[%lu] [CORE] Init failed: %s\n", millis(), sumi::errorToString(result.err));
-    showErrorScreen("Core init failed");
-    return;
-  }
-
-  Serial.printf("[%lu] [CORE] State machine starting (READER mode)\n", millis());
-  mappedInputManager.setSettings(&sumi::core.settings);
-  ui::setFrontButtonLayout(sumi::core.settings.frontButtonLayout);
-
-  if (transition.bookPath[0] != '\0') {
-    // Copy path to shared buffer for ReaderState to consume
-    strncpy(sumi::core.buf.path, transition.bookPath, sizeof(sumi::core.buf.path) - 1);
-    sumi::core.buf.path[sizeof(sumi::core.buf.path) - 1] = '\0';
-    Serial.printf("[%lu] [BOOT] Opening book: %s\n", millis(), sumi::core.buf.path);
-  } else {
-    // No book path - fall back to UI mode to avoid boot loop
-    Serial.printf("[%lu] [BOOT] ERROR: No book path in transition, falling back to UI\n", millis());
-    initUIMode();
-    return;
-  }
-
-  stateMachine.init(sumi::core, sumi::StateId::Reader);
-
-  // Force initial render
-  Serial.printf("[%lu] [CORE] Forcing initial render\n", millis());
-  stateMachine.update(sumi::core);
-
-  Serial.printf("[%lu] [BOOT] [READER mode] After init - Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
+  Serial.printf("[%lu] [BOOT] After init - Free heap: %lu, Max block: %lu\n", millis(), ESP.getFreeHeap(),
                 ESP.getMaxAllocHeap());
 }
 
 void setup() {
-  // Early initialization (common to both modes)
+  // Early initialization
   if (!earlyInit()) {
     return;  // Critical failure
   }
 
-  // Detect boot mode from RTC memory or settings
-  currentBootMode = sumi::detectBootMode();
-
-  if (currentBootMode == sumi::BootMode::READER) {
-    initReaderMode();
-  } else {
-    initUIMode();
-  }
+  initSystem();
 
   // Ensure we're not still holding the power button before leaving setup
   waitForPowerRelease();
@@ -717,6 +649,9 @@ void loop() {
 
   inputManager.update();
 
+  // Apply sunlight fading fix setting to renderer (like CrossPoint's fadingFix)
+  renderer.setFadingFix(sumi::core.settings.sunlightFadingFix != 0);
+
   if (Serial && millis() - lastMemPrint >= 10000) {
     Serial.printf("[%lu] [MEM] Free: %d bytes, Total: %d bytes, Min Free: %d bytes\n", millis(), ESP.getFreeHeap(),
                   ESP.getHeapSize(), ESP.getMinFreeHeap());
@@ -725,6 +660,18 @@ void loop() {
 
   // Poll input and push events to queue
   sumi::core.input.poll();
+
+#if FEATURE_BLUETOOTH
+  // Check BLE inactivity timeout — disconnect and reclaim memory if idle too long
+  if (ble::isReady() && ble::checkInactivityTimeout()) {
+    Serial.println("[BLE] Timed out, reclaiming memory");
+    ble_transfer::deinit();
+    ble::deinit();
+    if (!sumi::MemoryArena::isInitialized()) {
+      sumi::MemoryArena::init();
+    }
+  }
+#endif
 
   // Auto-sleep after inactivity
   // Skip if BLE file transfer is active — sleeping during transfer crashes with

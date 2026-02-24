@@ -104,4 +104,5 @@ void applyThemeFonts();
 #define PLUGINS_FLASHCARDS_DIR "/flashcards"
 #define PLUGINS_IMAGES_DIR "/images"
 #define PLUGINS_MAPS_DIR "/maps"
+#define PLUGINS_GAMES_DIR "/games"
 #endif

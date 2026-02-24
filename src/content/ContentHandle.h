@@ -2,6 +2,7 @@
 
 #include "../core/Result.h"
 #include "ContentTypes.h"
+#include "ComicProvider.h"
 #include "EpubProvider.h"
 #include "MarkdownProvider.h"
 #include "TxtProvider.h"
@@ -20,6 +21,7 @@ struct ContentHandle {
     XtcProvider xtc;
     TxtProvider txt;
     MarkdownProvider markdown;
+    ComicProvider comic;
   };
 
   ContentHandle();
@@ -62,11 +64,13 @@ struct ContentHandle {
   XtcProvider* asXtc();
   TxtProvider* asTxt();
   MarkdownProvider* asMarkdown();
+  ComicProvider* asComic();
 
   const EpubProvider* asEpub() const;
   const XtcProvider* asXtc() const;
   const TxtProvider* asTxt() const;
   const MarkdownProvider* asMarkdown() const;
+  const ComicProvider* asComic() const;
 
  private:
   void destroyActive();

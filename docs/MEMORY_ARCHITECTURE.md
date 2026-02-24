@@ -2,51 +2,65 @@
 
 ## Overview
 
-SUMI uses a pre-allocated memory arena to eliminate heap fragmentation during image processing. This document describes the memory layout and how different components use the shared buffers.
+SUMI uses a pre-allocated memory arena to eliminate heap fragmentation during image processing and text layout. The arena is split into three independent allocations so each block can fit in fragmented heap alongside NimBLE's BLE stack.
 
 ## Memory Budget
 
 | Component | Size | Notes |
 |-----------|------|-------|
 | ESP32-C3 SRAM | ~400KB | Total available |
+| Static BSS | ~115KB | Global variables, FreeRTOS |
 | Display framebuffer | 48KB | 800×480 ÷ 8 |
-| Memory Arena | 80KB | Pre-allocated at boot |
-| BLE stack | ~25KB | Much smaller than WiFi |
-| FreeRTOS + stacks | ~30KB | Task stacks |
-| **Available for app** | **~215KB** | Fonts, UI, plugins |
+| Memory Arena | 58–82KB | 32+26KB essential, +24KB task stack (optional) |
+| NimBLE (when connected) | ~48KB | BLE HID keyboard/page turner |
+| **Available for app** | **~100–150KB** | Fonts, page cache, UI, plugins |
 
 ## Memory Arena
 
-The arena is allocated once in `earlyInit()` and never freed. All image processing operations share these buffers.
+The arena is allocated at boot and released when BLE needs large contiguous heap (scanning, pairing). It consists of three independent `heap_caps_malloc` calls — not one contiguous block — so each piece can fit in fragmented memory.
 
 ### Buffer Layout
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ MemoryArena (80KB total — one contiguous allocation)         │
+│ ALLOCATION 1: PRIMARY BUFFER (32KB)                          │
+│   primaryBuffer │ 32KB │ Full buffer base pointer            │
+│   zipBuffer     │      │ Alias for primaryBuffer             │
+│                 │      │ 32KB used as LZ77 dictionary        │
 ├──────────────────────────────────────────────────────────────┤
-│ PRIMARY BUFFER (32KB)                                        │
-│   primaryBuffer │ 32KB │ Aliased as imageBuffer + zipBuffer │
-│                 │      │ (time-shared, never concurrent)    │
+│ ALLOCATION 2: WORK BUFFER (26KB)                             │
+│   scratchBuffer  │  8KB │ Bump allocator (DP arrays, temp)   │
+│   ditherRegion   │  8KB │ Ditherer error rows (3× ~1.6KB)    │
+│   imageRowRegion │  4KB │ Bitmap row I/O buffers             │
+│   (spare)        │  6KB │ Unmapped headroom                  │
 ├──────────────────────────────────────────────────────────────┤
-│ WORK BUFFER (48KB)                                           │
-│   rowBuffer     │  4KB │ Bitmap row I/O                     │
-│   ditherBuffer  │ 32KB │ Error diffusion for JPEG dithering │
-│   imageBuffer2  │  4KB │ Scaling accumulators               │
-│   scratchBuffer │  8KB │ Thumbnails, Group5, temp ops       │
+│ ALLOCATION 3: TASK STACK (24KB) — OPTIONAL                   │
+│   taskStackRegion │ 24KB │ PageCache background task stack   │
+│                   │      │ Used by xTaskCreateStatic          │
+│                   │      │ Falls back to heap if unavailable  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The arena also serves as a **bump allocator** for temporary scratch allocations
-via `scratchAlloc()`. Text layout uses this for DP line-breaking arrays and
-hyphenation vectors, avoiding heap fragmentation. The `ArenaScratch` RAII guard
-saves the watermark on construction and restores it on destruction, supporting
-nested usage.
+### Framebuffer Fallback (BLE Coexistence)
+
+When BLE is connected and fragments the heap, the 48KB display framebuffer doubles as a ZIP dictionary via `MemoryArena::fallbackBuffer`. Set by `ReaderState::enter()` when BLE HID is active. The parser's `createOrExtendCache()` releases the 32KB primaryBuffer when `fallbackBuffer != nullptr`, giving the XML parser enough heap while the framebuffer provides the LZ77 dictionary.
+
+| Buffer | Size | Use |
+|--------|------|-----|
+| `fallbackBuffer` | 48KB | Alias for display framebuffer, used as ZIP dict when BLE is active |
+
+**Why three blocks?** After BLE connects, NimBLE holds ~48KB of heap. The largest contiguous free block is typically ~82KB. A single 82KB allocation would fail. Three smaller blocks (32+26+24) each fit in whatever contiguous space remains. The 24KB task stack is optional — if it can't be allocated, `BackgroundTask` falls back to `xTaskCreate` with heap allocation.
+
+**Essential vs optional:** The 32KB primary and 26KB work buffers (58KB total) MUST succeed for inline images to work. The `zipBuffer` alias on `primaryBuffer` provides the 32KB LZ77 dictionary for ZIP decompression. Without it, deflated inline images in EPUBs fail.
+
+### Bump Allocator
+
+The 8KB scratch region doubles as a bump allocator for temporary allocations via `scratchAlloc()`. Text layout uses this for DP line-breaking arrays and hyphenation vectors, avoiding heap fragmentation. The `ArenaScratch` RAII guard saves the watermark on construction and restores it on destruction, supporting nested usage.
 
 ### Source Files
 
-- `src/core/MemoryArena.h` — Buffer definitions, bump allocator API, ArenaScratch
-- `src/core/MemoryArena.cpp` — Allocation, initialization, bump allocator impl
+- `src/core/MemoryArena.h` — Buffer definitions, sizes, bump allocator API, ArenaScratch
+- `src/core/MemoryArena.cpp` — 3-block allocation, release, bump allocator impl
 
 ### Usage Pattern
 
@@ -56,13 +70,10 @@ if (!sumi::MemoryArena::isInitialized()) {
   return false;
 }
 
-// Use pre-allocated buffer (no malloc needed)
-uint8_t* buffer = sumi::MemoryArena::imageBuffer;
-
-// For dithering, use the typed accessors
-int16_t* errorRow0 = sumi::MemoryArena::ditherRow0();
-int16_t* errorRow1 = sumi::MemoryArena::ditherRow1();
-int16_t* errorRow2 = sumi::MemoryArena::ditherRow2();
+// Use pre-allocated buffers (no malloc needed)
+uint8_t* zipDict = sumi::MemoryArena::zipBuffer;       // 32KB LZ77 dictionary
+uint8_t* imgRow  = sumi::MemoryArena::imageRowRegion;   // 4KB
+uint8_t* dither  = sumi::MemoryArena::ditherRegion;     // 8KB
 
 // Bump allocator for temporary arrays (e.g., text layout DP)
 {
@@ -71,26 +82,75 @@ int16_t* errorRow2 = sumi::MemoryArena::ditherRow2();
   size_t* ans = guard.alloc<size_t>(n);
   // ... use dp, ans ...
 }  // watermark auto-restored here
+
+// Static task allocation (avoids 24KB heap malloc for background task)
+if (sumi::MemoryArena::taskStackRegion) {
+  task.startStatic("Name", sumi::MemoryArena::taskStackRegion,
+                   sumi::MemoryArena::TASK_STACK_SIZE, func, 0);
+} else {
+  task.start("Name", 24576, func, 0);  // heap fallback
+}
 ```
+
+## BLE Coexistence
+
+The arena and NimBLE BLE stack compete for the same heap. NimBLE needs ~48KB contiguous for initialization, scanning, and pairing.
+
+### Lifecycle
+
+```
+Boot:
+  MemoryArena::init()           ← 3 allocations succeed (heap is clean)
+
+Enter BLE settings:
+  MemoryArena::release()        ← Free all 3 blocks
+  ble::init()                   ← NimBLE takes ~48KB
+  ble::startScan() / connectTo()
+
+Exit settings (BLE connected):
+  MemoryArena::init()           ← Re-allocate alongside NimBLE
+    32KB primary  → succeeds    ← largest free ~82KB
+    26KB work     → succeeds    ← ~50KB remains
+    24KB task     → succeeds    ← ~26KB remains
+
+Enter reader (BLE HID connected):
+  ReaderState::enter()
+    fallbackBuffer = framebuffer  ← 48KB framebuffer as ZIP dict backup
+    createOrExtendCache()
+      releases primaryBuffer      ← frees 32KB for parser heap
+      ZIP uses fallbackBuffer     ← framebuffer provides LZ77 dictionary
+
+BLE timeout / disconnect:
+  ble::deinit()                 ← NimBLE frees ~48KB
+  MemoryArena::init()           ← All 3 blocks succeed again
+```
+
+### Why Covers Work But Inline Images Don't (Without Arena)
+
+Cover BMPs in EPUBs are stored **uncompressed** (ZIP method 0) — they only need a 1KB read buffer. Inline BMPs are stored **deflated** (ZIP method 8) — they need a 32KB LZ77 dictionary. When the arena is initialized, `zipBuffer` provides that dictionary. When it's not, ZIP falls back to `malloc(32KB)` which fails in fragmented heap.
 
 ## Buffer Consumers
 
-### JpegToBmpConverter
+### JPEGDEC (JpegToBmpConverter)
 
 | Buffer | Use |
 |--------|-----|
-| `primaryBuffer` (as imageBuffer) | MCU row decode (32KB handles 2048×16) |
-| `imageBuffer2` | Scaling accumulators (rowAccum, rowCount) |
-| `rowBuffer` | Output BMP row |
-| `ditherBuffer` | Error diffusion rows for Atkinson/Floyd-Steinberg |
+| `ditherRegion` | Ditherer error rows |
+| heap `grayBuffer` | Full image grayscale buffer (heap-allocated, width×height) |
 
 ### PngToBmpConverter
 
 | Buffer | Use |
 |--------|-----|
-| `primaryBuffer` (as imageBuffer) | Source row buffer |
-| `imageBuffer2` | Scaling accumulators |
-| `rowBuffer` | Output BMP row |
+| `scratchBuffer` | Source/output row buffers + scaling accumulators |
+| `ditherRegion` | Ditherer error rows |
+
+### BitmapHelpers (bmpTo1BitBmpScaled)
+
+| Buffer | Use |
+|--------|-----|
+| `primaryBuffer` | Source rows + output row buffer |
+| `ditherRegion` | Ditherer error rows |
 
 ### Text Layout (ParsedText)
 
@@ -98,10 +158,7 @@ int16_t* errorRow2 = sumi::MemoryArena::ditherRow2();
 |--------|-----|
 | Arena bump allocator | DP cost array and answer array for line breaking |
 
-The minimum-raggedness DP line-breaking algorithm allocates two arrays
-proportional to the number of words. These come from the arena bump allocator
-via `ArenaScratch`, falling back to `std::vector` on heap if the arena is
-unavailable.
+The minimum-raggedness DP line-breaking algorithm allocates two arrays proportional to the number of words. These come from the arena bump allocator via `ArenaScratch`, falling back to `std::vector` on heap if the arena is unavailable.
 
 ### HomeState (Thumbnails)
 
@@ -119,10 +176,17 @@ Thumbnail flow:
 
 | Buffer | Use |
 |--------|-----|
-| `zipBuffer` | TINFL dictionary (32KB, fixed size) |
+| `zipBuffer` | TINFL dictionary (32KB, fixed size required by miniz) |
 
-Note: `zipBuffer` is an alias for `primaryBuffer` — they share the same 32KB.
-EPUB decompression and image decoding are time-shared (ZIP finishes before images start).
+`zipBuffer` is an alias for `primaryBuffer`. EPUB decompression and image decoding are time-shared (ZIP finishes before images start). When the arena is unavailable, `Epub::readItemContentsToStream()` passes `nullptr` and ZipFile falls back to `malloc(32KB)`.
+
+### BackgroundTask (PageCache)
+
+| Buffer | Use |
+|--------|-----|
+| `taskStackRegion` | FreeRTOS task stack for `xTaskCreateStatic` |
+
+When `taskStackRegion` is available, `BackgroundTask::startStatic()` uses it to avoid a 24KB heap allocation. When unavailable, falls back to `BackgroundTask::start()` which calls `xTaskCreate` with heap-allocated stack.
 
 ## Flash Thumbnail Cache
 
@@ -165,8 +229,10 @@ setup()
        ├─ SD card mount
        ├─ Settings load
        ├─ LittleFS mount
-       └─ MemoryArena::init()  ← Arena allocated here
-           └─ heap_caps_malloc(80KB) — single contiguous block
+       └─ MemoryArena::init()  ← 3 independent heap_caps_malloc calls
+           ├─ 32KB primary buffer
+           ├─ 26KB work buffer
+           └─ 24KB task stack (optional)
 ```
 
 ## Debugging
@@ -179,11 +245,12 @@ sumi::MemoryArena::printStatus();
 
 Output:
 ```
-[MEM] === Arena Status (80KB allocated) ===
+[MEM] === Arena Status (32+26+24KB) ===
 [MEM] PRIMARY (32KB): 0x3FC80000
-[MEM] WORK (48KB): row=0x3FC88000 dither=0x3FC89000 buf2=0x3FC91000 scratch=0x3FC92000
-[MEM] Bump: 0/81920 bytes used
-[MEM] Heap free: 215432, largest: 180224
+[MEM] WORK (26KB): scratch=0x3FC8C800 dither=0x3FC8E800 imgrow=0x3FC90800
+[MEM] TASK STACK (24KB): 0x3FC91800
+[MEM] Scratch: 0/8192 bytes used
+[MEM] Heap free: 100240, largest: 81908
 ```
 
 ## Design Rationale
@@ -192,17 +259,20 @@ Output:
 
 ESP32 malloc/free cycles cause fragmentation. After enough image operations, the heap becomes swiss cheese — plenty of total free bytes but no single block large enough for the next allocation. Pre-allocating fixed buffers eliminates this failure mode entirely.
 
-### Why 80KB?
+### Why 32+26+24KB?
 
-- 32KB `primaryBuffer`: Handles 2048×16 MCU rows (worst case inline image) AND TINFL_LZ_DICT_SIZE (32KB). Time-shared — ZIP decompression finishes before image decode starts.
-- 4KB `rowBuffer`: 2048×2 bytes (max BMP row width at 32bpp)
-- 32KB `ditherBuffer`: JPEGDEC dithering needs width×16 pixels of error state
-- 4KB `imageBuffer2`: Scaling accumulators for prescaled decode
-- 8KB `scratchBuffer`: Thumbnails, Group5 compression, temp ops
+- **32KB `primaryBuffer`**: Serves as the TINFL_LZ_DICT_SIZE (32KB) dictionary for ZIP decompression. Also used as scratch space for BMP scaling row buffers during thumbnailing (time-shared — ZIP decompression finishes before image operations start).
+- **8KB `scratchBuffer`**: Thumbnails, Group5 compression, bump allocator for DP arrays.
+- **8KB `ditherRegion`**: Ordered dithering error rows (3 rows × ~1.6KB each for 800px width).
+- **4KB `imageRowRegion`**: BMP row I/O buffer (max 800×4 bytes).
+- **6KB spare**: Headroom in work buffer for future needs.
+- **24KB `taskStackRegion`** (optional): PageCache background task stack. Avoids 24KB heap `xTaskCreate` allocation. Falls back to heap when unavailable.
 
-Total 80KB leaves ~215KB free for fonts, page cache, UI state, plugins. The bump
-allocator overlay lets text layout reuse the arena for DP arrays without any
-additional heap allocation.
+Total 58KB essential + 24KB optional = 82KB. With BLE connected (~48KB held by NimBLE), the 58KB essential portion easily fits in the remaining ~100KB heap.
+
+### Why three blocks instead of one?
+
+After NimBLE connects, it holds ~48KB in the middle of the heap. The largest contiguous free block is typically ~82KB. A single 82KB allocation fails. Three smaller allocations (32+26+24) each fit in the available contiguous space. The 24KB task stack is optional — if heap is too fragmented for even that, the task falls back to heap allocation.
 
 ### Why not use PSRAM?
 

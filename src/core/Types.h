@@ -24,6 +24,7 @@ enum class ContentType : uint8_t {
   Xtc,
   Txt,
   Markdown,
+  Comic,
 };
 
 // Content hint from EPUB dc:subject (set by sumi.page tools)

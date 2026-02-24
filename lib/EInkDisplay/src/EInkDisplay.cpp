@@ -127,6 +127,61 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t 
     Serial.printf("[%lu]   SCLK=%d, MOSI=%d, CS=%d, DC=%d, RST=%d, BUSY=%d\n", millis(), sclk, mosi, cs, dc, rst, busy);
 }
 
+EInkDisplay::~EInkDisplay() {
+#ifdef ARDUINO
+  if (refreshTaskHandle_) {
+    vTaskDelete(refreshTaskHandle_);
+    refreshTaskHandle_ = nullptr;
+  }
+  if (refreshDoneSemaphore_) {
+    vSemaphoreDelete(refreshDoneSemaphore_);
+    refreshDoneSemaphore_ = nullptr;
+  }
+#endif
+}
+
+#ifdef ARDUINO
+void EInkDisplay::startRefreshTask() {
+  refreshDoneSemaphore_ = xSemaphoreCreateBinary();
+  xSemaphoreGive(refreshDoneSemaphore_);  // Start in "done" state
+
+  xTaskCreate(refreshTaskFunc, "eink_refresh", 4096, this, 1, &refreshTaskHandle_);
+  if (Serial) Serial.printf("[%lu]   Async refresh task created\n", millis());
+}
+
+void EInkDisplay::refreshTaskFunc(void* param) {
+  auto* self = static_cast<EInkDisplay*>(param);
+  while (true) {
+    // Wait for notification from displayBuffer
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    // Execute the refresh (blocks on waitWhileBusy — this is the slow part)
+    self->refreshDisplay(self->pendingJob_.mode, self->pendingJob_.turnOffScreen);
+
+#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
+    // Sync RED RAM with current frame for next fast refresh
+    if (self->pendingJob_.syncRedRam) {
+      self->setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+      self->writeRamBuffer(CMD_WRITE_RAM_RED, self->frameBuffer, BUFFER_SIZE);
+    }
+#endif
+
+    self->refreshPending_ = false;
+    xSemaphoreGive(self->refreshDoneSemaphore_);
+  }
+}
+
+void EInkDisplay::waitForRefresh() {
+  if (!refreshPending_) return;
+  unsigned long start = millis();
+  xSemaphoreTake(refreshDoneSemaphore_, portMAX_DELAY);
+  xSemaphoreGive(refreshDoneSemaphore_);  // Restore for next check
+  if (Serial) Serial.printf("[%lu]   waitForRefresh: waited %lu ms\n", millis(), millis() - start);
+}
+#else
+void EInkDisplay::waitForRefresh() {}
+#endif
+
 void EInkDisplay::begin() {
   if (Serial) Serial.printf("[%lu] EInkDisplay: begin() called\n", millis());
 
@@ -172,6 +227,13 @@ void EInkDisplay::begin() {
 
   // Initialize display controller
   initDisplayController();
+
+#ifdef ARDUINO
+  // Create async refresh task (safe here — FreeRTOS is fully running by begin())
+  if (!refreshTaskHandle_) {
+    startRefreshTask();
+  }
+#endif
 
   if (Serial) Serial.printf("[%lu]   E-ink display driver initialized\n", millis());
 }
@@ -314,10 +376,18 @@ void EInkDisplay::setRamArea(const uint16_t x, uint16_t y, uint16_t w, uint16_t 
   sendData((y + h - 1) / 256);  // high byte
 }
 
-void EInkDisplay::clearScreen(const uint8_t color) const { memset(frameBuffer, color, BUFFER_SIZE); }
+void EInkDisplay::clearScreen(const uint8_t color) {
+  // Wait for any async refresh to finish syncing RED RAM before modifying
+  // the framebuffer. Without this, a rapid button press can trigger a new
+  // render that overwrites the framebuffer while the background task is
+  // still reading it for the RED RAM sync, causing e-ink ghosting.
+  waitForRefresh();
+  memset(frameBuffer, color, BUFFER_SIZE);
+}
 
 void EInkDisplay::drawImage(const uint8_t* imageData, const uint16_t x, const uint16_t y, const uint16_t w,
-                            const uint16_t h, const bool fromProgmem) const {
+                            const uint16_t h, const bool fromProgmem) {
+  waitForRefresh();
   if (!frameBuffer) {
     if (Serial) Serial.printf("[%lu]   ERROR: Frame buffer not allocated!\n", millis());
     return;
@@ -360,7 +430,10 @@ void EInkDisplay::writeRamBuffer(uint8_t ramBuffer, const uint8_t* data, uint32_
   if (Serial) Serial.printf("[%lu]   %s RAM write complete (%lu ms)\n", millis(), bufferName, duration);
 }
 
-void EInkDisplay::setFramebuffer(const uint8_t* bwBuffer) const { memcpy(frameBuffer, bwBuffer, BUFFER_SIZE); }
+void EInkDisplay::setFramebuffer(const uint8_t* bwBuffer) {
+  waitForRefresh();
+  memcpy(frameBuffer, bwBuffer, BUFFER_SIZE);
+}
 
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
 void EInkDisplay::swapBuffers() {
@@ -374,6 +447,7 @@ void EInkDisplay::grayscaleRevert() {
   if (!inGrayscaleMode) {
     return;
   }
+  waitForRefresh();  // Ensure previous async refresh is done
 
   inGrayscaleMode = false;
 
@@ -384,16 +458,19 @@ void EInkDisplay::grayscaleRevert() {
 }
 
 void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) {
+  waitForRefresh();
   setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
   writeRamBuffer(CMD_WRITE_RAM_BW, lsbBuffer, BUFFER_SIZE);
 }
 
 void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
+  waitForRefresh();
   setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, BUFFER_SIZE);
 }
 
 void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
+  waitForRefresh();
   setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
   writeRamBuffer(CMD_WRITE_RAM_BW, lsbBuffer, BUFFER_SIZE);
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, BUFFER_SIZE);
@@ -402,12 +479,19 @@ void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* 
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
 /**
  * In single buffer mode, this should be called with the previously written BW buffer
- * to reconstruct the RED buffer for proper differential fast refreshes following a
- * grayscale display.
+ * to reconstruct both BW and RED RAM for proper differential fast refreshes following
+ * a grayscale display.
+ *
+ * After grayscale rendering: BW RAM has stale LSB data, RED RAM has stale MSB data.
+ * Both must be synced back to the BW content to prevent the next displayBuffer()
+ * from triggering grayscaleRevert() against mismatched RAM contents (causes washout).
  */
 void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
+  waitForRefresh();
   setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+  writeRamBuffer(CMD_WRITE_RAM_BW, bwBuffer, BUFFER_SIZE);
   writeRamBuffer(CMD_WRITE_RAM_RED, bwBuffer, BUFFER_SIZE);
+  inGrayscaleMode = false;
 }
 #endif
 
@@ -417,6 +501,9 @@ void EInkDisplay::displayBuffer(RefreshMode mode, bool turnOffScreen) {
     // previous frame data in RED RAM which may be stale after power-off
     mode = HALF_REFRESH;
   }
+
+  // Wait for any previous async refresh before touching SPI/display
+  waitForRefresh();
 
   // If currently in grayscale mode, revert first to black/white
   if (inGrayscaleMode) {
@@ -428,14 +515,12 @@ void EInkDisplay::displayBuffer(RefreshMode mode, bool turnOffScreen) {
   setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
   if (mode != FAST_REFRESH) {
-    // For full refresh, write to both buffers before refresh
+    // For full/half refresh, write to both buffers before refresh
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, BUFFER_SIZE);
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, BUFFER_SIZE);
   } else {
-    // For fast refresh, write to BW buffer only
+    // For fast refresh: write BW (new frame). RED already has previous frame.
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, BUFFER_SIZE);
-    // In single buffer mode, the RED RAM should already contain the previous frame
-    // In dual buffer mode, we write back frameBufferActive which is the last frame
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive, BUFFER_SIZE);
 #endif
@@ -445,14 +530,30 @@ void EInkDisplay::displayBuffer(RefreshMode mode, bool turnOffScreen) {
   swapBuffers();
 #endif
 
-  // Refresh the display
+#ifdef ARDUINO
+  // Dispatch refresh + RED sync to background task. The display controller
+  // has the frame data in its own RAM. The e-ink waveform (80-3000ms) runs
+  // in the background while the main loop processes input.
+  //
+  // For single-buffer mode, the async task also syncs RED RAM after refresh.
+  // This uses the framebuffer contents at that point — safe because states
+  // don't modify the framebuffer until the next user-triggered render, and
+  // waitForRefresh() blocks at the start of the next displayBuffer() call.
+  xSemaphoreTake(refreshDoneSemaphore_, portMAX_DELAY);
+  pendingJob_.mode = mode;
+  pendingJob_.turnOffScreen = turnOffScreen;
+  pendingJob_.syncRedRam = true;
+  refreshPending_ = true;
+  xTaskNotifyGive(refreshTaskHandle_);
+
+#else
+  // Desktop/test builds: synchronous refresh
   refreshDisplay(mode, turnOffScreen);
 
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
-  // In single buffer mode always sync RED RAM after refresh to prepare for next fast refresh
-  // This ensures RED contains the currently displayed frame for differential comparison
   setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
   writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, BUFFER_SIZE);
+#endif
 #endif
 }
 
@@ -460,6 +561,7 @@ void EInkDisplay::displayBuffer(RefreshMode mode, bool turnOffScreen) {
 // Displays only a rectangular region of the frame buffer, preserving the rest of the screen.
 // Requirements: x and w must be byte-aligned (multiples of 8 pixels)
 void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen) {
+  waitForRefresh();  // Ensure previous async refresh is done
   if (Serial) Serial.printf("[%lu]   Displaying window at (%d,%d) size (%dx%d)\n", millis(), x, y, w, h);
 
   // Validate bounds
@@ -534,6 +636,7 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
 }
 
 void EInkDisplay::displayGrayBuffer(const bool turnOffScreen) {
+  waitForRefresh();  // Ensure previous async refresh is done
   drawGrayscale = false;
   inGrayscaleMode = true;
 
@@ -630,6 +733,7 @@ void EInkDisplay::setCustomLUT(const bool enabled, const unsigned char* lutData)
 }
 
 void EInkDisplay::deepSleep() {
+  waitForRefresh();  // Ensure refresh completes before sleep
   if (Serial) Serial.printf("[%lu]   Preparing display for deep sleep...\n", millis());
 
   // First, power down the display properly

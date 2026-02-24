@@ -693,12 +693,11 @@ bool Epub::generateThumbBmp() const {
     }
     coverFile.close();
 
-    // Use 1-bit dithering for JPEG thumbnails (smaller files). PNG thumbnails are
-    // always 2-bit since PngToBmpConverter doesn't support 1-bit output.
+    // Use 2-bit dithering for all thumbnails (4 gray levels, matches cover quality)
     ImageConvertConfig config;
     config.maxWidth = THUMB_WIDTH;
     config.maxHeight = THUMB_HEIGHT;
-    config.oneBit = FsHelpers::isJpegFile(coverImageHref);
+    config.oneBit = false;
     config.logTag = "EBP";
 
     const bool success = ImageConverterFactory::convertToBmp(coverTempPath, thumbTempPath, config);
@@ -1001,7 +1000,8 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
 
   // Use MemoryArena::zipBuffer if no dictBuffer provided (avoids 32KB malloc)
   uint8_t* buffer = dictBuffer ? dictBuffer : sumi::MemoryArena::zipBuffer;
-  
+  if (!buffer) buffer = sumi::MemoryArena::fallbackBuffer;
+
   const std::string path = FsHelpers::normalisePath(itemHref);
   return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize, buffer);
 }

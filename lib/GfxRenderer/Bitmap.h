@@ -55,6 +55,8 @@ class Bitmap {
   bool topDown = false;
   uint32_t bfOffBits = 0;
   uint16_t bpp = 0;
+  uint32_t colorsUsed = 0;
+  bool nativePalette = false;  // true if all palette entries map to native gray levels
   int rowBytes = 0;
   uint8_t paletteLum[256] = {};
 

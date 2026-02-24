@@ -75,6 +75,8 @@ class FileListState : public State {
   bool launchPlugin_ = false;
 #endif
 
+  bool pendingOpen_ = false;  // Set by openSelected to trigger Reader transition
+
   void loadFiles(Core& core);
   void promptDelete(Core& core);
   void navigateUp(Core& core);

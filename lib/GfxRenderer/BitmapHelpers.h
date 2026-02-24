@@ -16,10 +16,10 @@ int adjustPixel(int gray);
 // This is expected behavior - pure white (255,255,255) maps to 254.
 uint8_t rgbToGray(uint8_t r, uint8_t g, uint8_t b);
 
-// Scale down a BMP file to create a 1-bit thumbnail.
-// Uses 2x2 pixel averaging for clean downscaling with Atkinson dithering.
+// Scale down a BMP file to create a 2-bit (4 gray level) thumbnail.
+// Uses area averaging for clean downscaling with Atkinson dithering.
 // Returns true on success, false on failure.
-bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxWidth, int targetMaxHeight);
+bool bmpTo2BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxWidth, int targetMaxHeight);
 
 // 1-bit Atkinson dithering - better quality than noise dithering for thumbnails
 // Error distribution pattern (same as 2-bit but quantizes to 2 levels):
@@ -29,8 +29,8 @@ bool bmpTo1BitBmpScaled(const char* srcPath, const char* dstPath, int targetMaxW
 class Atkinson1BitDitherer {
  public:
   static constexpr int PADDING = 16;  // Extra padding for safety
-  
-  explicit Atkinson1BitDitherer(int width) : width(width), allocSize(width + PADDING) {
+
+  explicit Atkinson1BitDitherer(int width) : width(width), allocSize(width + PADDING), ownsMemory_(true) {
     // Use calloc for zero-initialization
     errorRow0 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
     errorRow1 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
@@ -43,10 +43,26 @@ class Atkinson1BitDitherer {
     }
   }
 
+  // Arena-backed constructor: uses pre-allocated memory region (no heap alloc)
+  Atkinson1BitDitherer(int width, uint8_t* region, size_t regionSize)
+      : width(width), allocSize(width + PADDING), ownsMemory_(false) {
+    const size_t rowBytes = allocSize * sizeof(int16_t);
+    if (regionSize < rowBytes * 3) {
+      errorRow0 = errorRow1 = errorRow2 = nullptr;
+      return;
+    }
+    errorRow0 = reinterpret_cast<int16_t*>(region);
+    errorRow1 = reinterpret_cast<int16_t*>(region + rowBytes);
+    errorRow2 = reinterpret_cast<int16_t*>(region + rowBytes * 2);
+    memset(region, 0, rowBytes * 3);
+  }
+
   ~Atkinson1BitDitherer() {
-    free(errorRow0);
-    free(errorRow1);
-    free(errorRow2);
+    if (ownsMemory_) {
+      free(errorRow0);
+      free(errorRow1);
+      free(errorRow2);
+    }
   }
 
   Atkinson1BitDitherer(const Atkinson1BitDitherer& other) = delete;
@@ -105,6 +121,7 @@ class Atkinson1BitDitherer {
  private:
   int width;
   int allocSize;
+  bool ownsMemory_;
   int16_t* errorRow0;
   int16_t* errorRow1;
   int16_t* errorRow2;
@@ -119,8 +136,8 @@ class Atkinson1BitDitherer {
 class AtkinsonDitherer {
  public:
   static constexpr int PADDING = 16;  // Extra padding for safety (max access is x+4, so 16 is overkill)
-  
-  explicit AtkinsonDitherer(int width) : width(width), allocSize(width + PADDING) {
+
+  explicit AtkinsonDitherer(int width) : width(width), allocSize(width + PADDING), ownsMemory_(true) {
     // Use calloc for zero-initialization to prevent undefined behavior
     errorRow0 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
     errorRow1 = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
@@ -133,10 +150,26 @@ class AtkinsonDitherer {
     }
   }
 
+  // Arena-backed constructor: uses pre-allocated memory region (no heap alloc)
+  AtkinsonDitherer(int width, uint8_t* region, size_t regionSize)
+      : width(width), allocSize(width + PADDING), ownsMemory_(false) {
+    const size_t rowBytes = allocSize * sizeof(int16_t);
+    if (regionSize < rowBytes * 3) {
+      errorRow0 = errorRow1 = errorRow2 = nullptr;
+      return;
+    }
+    errorRow0 = reinterpret_cast<int16_t*>(region);
+    errorRow1 = reinterpret_cast<int16_t*>(region + rowBytes);
+    errorRow2 = reinterpret_cast<int16_t*>(region + rowBytes * 2);
+    memset(region, 0, rowBytes * 3);
+  }
+
   ~AtkinsonDitherer() {
-    free(errorRow0);
-    free(errorRow1);
-    free(errorRow2);
+    if (ownsMemory_) {
+      free(errorRow0);
+      free(errorRow1);
+      free(errorRow2);
+    }
   }
   AtkinsonDitherer(const AtkinsonDitherer& other) = delete;
   AtkinsonDitherer& operator=(const AtkinsonDitherer& other) = delete;
@@ -213,6 +246,7 @@ class AtkinsonDitherer {
  private:
   int width;
   int allocSize;
+  bool ownsMemory_;
   int16_t* errorRow0;
   int16_t* errorRow1;
   int16_t* errorRow2;
@@ -229,8 +263,9 @@ class AtkinsonDitherer {
 class FloydSteinbergDitherer {
  public:
   static constexpr int PADDING = 16;  // Extra padding for safety
-  
-  explicit FloydSteinbergDitherer(int width) : width(width), allocSize(width + PADDING), rowCount(0) {
+
+  explicit FloydSteinbergDitherer(int width)
+      : width(width), allocSize(width + PADDING), rowCount(0), ownsMemory_(true) {
     // Use calloc for zero-initialization
     errorCurRow = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
     errorNextRow = static_cast<int16_t*>(calloc(allocSize, sizeof(int16_t)));
@@ -241,9 +276,24 @@ class FloydSteinbergDitherer {
     }
   }
 
+  // Arena-backed constructor: uses pre-allocated memory region (no heap alloc)
+  FloydSteinbergDitherer(int width, uint8_t* region, size_t regionSize)
+      : width(width), allocSize(width + PADDING), rowCount(0), ownsMemory_(false) {
+    const size_t rowBytes = allocSize * sizeof(int16_t);
+    if (regionSize < rowBytes * 2) {
+      errorCurRow = errorNextRow = nullptr;
+      return;
+    }
+    errorCurRow = reinterpret_cast<int16_t*>(region);
+    errorNextRow = reinterpret_cast<int16_t*>(region + rowBytes);
+    memset(region, 0, rowBytes * 2);
+  }
+
   ~FloydSteinbergDitherer() {
-    free(errorCurRow);
-    free(errorNextRow);
+    if (ownsMemory_) {
+      free(errorCurRow);
+      free(errorNextRow);
+    }
   }
 
   FloydSteinbergDitherer(const FloydSteinbergDitherer& other) = delete;
@@ -348,6 +398,7 @@ class FloydSteinbergDitherer {
   int width;
   int allocSize;
   int rowCount;
+  bool ownsMemory_;
   int16_t* errorCurRow;
   int16_t* errorNextRow;
 };

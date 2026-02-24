@@ -2,9 +2,6 @@
 
 #include <Arduino.h>
 
-#include <functional>
-#include <string>
-
 #include "../core/Core.h"
 
 namespace sumi {
@@ -13,8 +10,38 @@ namespace sumi {
 constexpr uint8_t LibraryIndex::VERSION;
 
 uint32_t LibraryIndex::hashPath(const char* path) {
-  // Use std::hash for consistency with Epub cache path hashing
-  return static_cast<uint32_t>(std::hash<std::string>{}(std::string(path)));
+  // MurmurHash2 — matches GCC 8.4 std::hash<std::string> on 32-bit targets.
+  // Must stay in sync with Epub.h cachePath hash so thumbnail lookups work.
+  // Avoids std::string heap allocation which can abort() on ESP32.
+  const auto* data = reinterpret_cast<const uint8_t*>(path);
+  size_t len = strlen(path);
+  constexpr uint32_t seed = 0xc70f6907u;
+  constexpr uint32_t m = 0x5bd1e995u;
+  uint32_t hash = seed ^ static_cast<uint32_t>(len);
+
+  while (len >= 4) {
+    uint32_t k;
+    memcpy(&k, data, 4);
+    k *= m;
+    k ^= k >> 24;
+    k *= m;
+    hash *= m;
+    hash ^= k;
+    data += 4;
+    len -= 4;
+  }
+
+  switch (len) {
+    case 3: hash ^= static_cast<uint32_t>(data[2]) << 16; [[fallthrough]];
+    case 2: hash ^= static_cast<uint32_t>(data[1]) << 8;  [[fallthrough]];
+    case 1: hash ^= static_cast<uint32_t>(data[0]);
+            hash *= m;
+  }
+
+  hash ^= hash >> 13;
+  hash *= m;
+  hash ^= hash >> 15;
+  return hash;
 }
 
 bool LibraryIndex::updateEntry(Core& core, const char* bookPath, uint16_t currentPage, uint16_t totalPages,

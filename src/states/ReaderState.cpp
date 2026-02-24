@@ -1,6 +1,7 @@
 #include "ReaderState.h"
 
 #include <Arduino.h>
+#include <ComicReader.h>
 #include <ContentParser.h>
 #include <CoverHelpers.h>
 #include <Epub/Page.h>
@@ -11,9 +12,11 @@
 #include <PlainTextParser.h>
 #include <SDCardManager.h>
 #include <Serialization.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 
 #include "../config.h"
+#include "../core/MemoryArena.h"
 #if FEATURE_BLUETOOTH
 #include "../ble/BleHid.h"
 #endif
@@ -28,7 +31,6 @@
 #include "../content/LibraryIndex.h"
 #include "../content/ReaderNavigation.h"
 #include "../content/RecentBooks.h"
-#include "../core/BootMode.h"
 #include "../core/Core.h"
 #include "../ui/Elements.h"
 #include "ThemeManager.h"
@@ -226,11 +228,16 @@ void ReaderState::enter(Core& core) {
   THEME_MANAGER.clearCache();
   renderer_.clearWidthCache();
 
+  // Reader manages its own refresh counter, disable the global one
+  renderer_.setPeriodicRefreshInterval(0);
+
   contentLoaded_ = false;
   loadFailed_ = false;
   needsRender_ = true;
   tocMode_ = false;
   settingsMode_ = false;
+  centerLongPressFired_ = false;
+  enterTime_ = millis();
   pagesUntilFullRefresh_ = 1;  // Use HALF_REFRESH on first render (FULL causes 5 flashes)
   stopBackgroundCaching();  // Ensure any previous task is stopped
   parser_.reset();          // Safe - task is stopped
@@ -246,10 +253,8 @@ void ReaderState::enter(Core& core) {
     core.buf.path[0] = '\0';
   }
 
-  // Determine source state from boot transition
-  const auto& transition = getTransition();
-  sourceState_ =
-      (transition.isValid() && transition.returnTo == ReturnTo::FILE_MANAGER) ? StateId::FileList : StateId::Home;
+  // Determine source state (where to return on exit)
+  sourceState_ = (core.settings.transitionReturnTo == 1) ? StateId::FileList : StateId::Home;
 
   Serial.printf("[READER] Entering with path: %s\n", contentPath_);
 
@@ -276,6 +281,9 @@ void ReaderState::enter(Core& core) {
       renderer_.setOrientation(GfxRenderer::Orientation::Portrait);
       break;
   }
+
+  // Set framebuffer as fallback ZIP dictionary for when arena is unavailable (BLE connected)
+  MemoryArena::fallbackBuffer = renderer_.getFrameBuffer();
 
   // Open content using ContentHandle
   auto result = core.content.open(contentPath_, SUMI_CACHE_DIR);
@@ -309,12 +317,14 @@ void ReaderState::enter(Core& core) {
   // Detect landscape scroll content (comics, scanned docs)
   // These content types benefit from landscape (800px wide) with vertical scrolling
   const ContentHint hint = core.content.metadata().hint;
-  landscapeScroll_ = (hint == ContentHint::Comic ||
+  const ContentType contentType = core.content.metadata().type;
+  landscapeScroll_ = (contentType == ContentType::Comic ||
+                      hint == ContentHint::Comic ||
                       hint == ContentHint::ComicRtl ||
                       hint == ContentHint::ComicWebtoon ||
                       hint == ContentHint::BookScanned);
   if (landscapeScroll_) {
-    renderer_.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+    renderer_.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
     Serial.printf("[READER] Landscape scroll mode for hint %d\n", static_cast<int>(hint));
   }
 
@@ -367,9 +377,25 @@ void ReaderState::enter(Core& core) {
 
   Serial.printf("[READER] Loaded: %s\n", core.content.metadata().title);
 
-  // Start background caching (includes thumbnail generation)
-  // This runs once per book open regardless of starting position
-  startBackgroundCaching(core);
+  // Background caching is deferred to the first render() call.
+  // Starting it here would compete with cover rendering for heap memory,
+  // causing the parser to abort with "Insufficient memory for layout".
+
+  // Drain stale button events that queued during content loading.
+  // The center button used to open the book may still be held, generating
+  // ButtonLongPress/ButtonRelease events that would trigger settings/TOC overlay.
+  {
+    Event drain;
+    while (core.events.pop(drain)) {
+      // Keep system events (battery, USB), discard button events
+      if (drain.type != EventType::ButtonPress &&
+          drain.type != EventType::ButtonLongPress &&
+          drain.type != EventType::ButtonRelease) {
+        core.events.push(drain);
+      }
+    }
+  }
+  enterTime_ = millis();
 }
 
 void ReaderState::exit(Core& core) {
@@ -414,6 +440,12 @@ void ReaderState::exit(Core& core) {
     uint16_t progressPercent = libTotal > 0 ? (libCurrent * 100 / libTotal) : 0;
     RecentBooks::updateProgress(core, contentPath_, progressPercent);
 
+    // Persist thumbnail path so home screen never loses it
+    std::string thumbPath = core.content.getThumbnailPath();
+    if (!thumbPath.empty()) {
+      RecentBooks::updateThumbPath(core, contentPath_, thumbPath.c_str());
+    }
+
     // Safe to reset - task is stopped, we own pageCache_/parser_
     parser_.reset();
     parserSpineIndex_ = -1;
@@ -421,9 +453,10 @@ void ReaderState::exit(Core& core) {
     core.content.close();
   }
 
+  MemoryArena::fallbackBuffer = nullptr;
+
   // Unload custom reader fonts to free memory
-  // Note: device may restart after this (dual-boot system), but explicit cleanup
-  // ensures predictable memory behavior and better logging
+  // Explicit cleanup ensures predictable memory behavior and better logging
   FONT_MANAGER.unloadReaderFonts();
 
   contentLoaded_ = false;
@@ -434,6 +467,10 @@ void ReaderState::exit(Core& core) {
 
   // Reset orientation to Portrait for UI
   renderer_.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  // Re-enable periodic refresh for non-reader states
+  renderer_.setPeriodicRefreshInterval(core.settings.getPagesPerRefreshValue());
+  renderer_.resetPeriodicRefreshCounter();
 }
 
 StateTransition ReaderState::update(Core& core) {
@@ -462,11 +499,13 @@ StateTransition ReaderState::update(Core& core) {
       case EventType::ButtonPress:
         if (landscapeScroll_) {
           // Landscape scroll: Up/Down scroll within page, Left/Right navigate pages
-          const int scrollStep = renderer_.getScreenHeight() * 3 / 4;  // 75% of viewport
+          // Divide content into exactly 3 scroll sections (top, middle, bottom)
+          const int screenH = renderer_.getScreenHeight();
+          const int maxScroll = pageContentHeight_ - screenH;
+          const int scrollStep = (maxScroll > 0) ? ((maxScroll + 1) / 2) : screenH;
           switch (e.button) {
             case Button::Down:
-            case Button::Right: {
-              const int maxScroll = pageContentHeight_ - renderer_.getScreenHeight();
+            case Button::Left: {
               if (maxScroll > 0 && scrollY_ < maxScroll) {
                 scrollY_ = std::min(scrollY_ + scrollStep, maxScroll);
                 needsRender_ = true;
@@ -478,7 +517,7 @@ StateTransition ReaderState::update(Core& core) {
               break;
             }
             case Button::Up:
-            case Button::Left:
+            case Button::Right:
               if (scrollY_ > 0) {
                 scrollY_ = std::max(0, scrollY_ - scrollStep);
                 needsRender_ = true;
@@ -493,10 +532,9 @@ StateTransition ReaderState::update(Core& core) {
               break;
             case Button::Back:
               exitToUI(core);
-              return StateTransition::stay(StateId::Reader);
+              return StateTransition::to(exitTarget_);
             case Button::Power:
               if (core.settings.shortPwrBtn == Settings::PowerPageTurn) {
-                const int maxScroll = pageContentHeight_ - renderer_.getScreenHeight();
                 if (maxScroll > 0 && scrollY_ < maxScroll) {
                   scrollY_ = std::min(scrollY_ + scrollStep, maxScroll);
                   needsRender_ = true;
@@ -528,8 +566,7 @@ StateTransition ReaderState::update(Core& core) {
             break;
           case Button::Back:
             exitToUI(core);
-            // Won't reach here after restart
-            return StateTransition::stay(StateId::Reader);
+            return StateTransition::to(exitTarget_);
           case Button::Power:
             if (core.settings.shortPwrBtn == Settings::PowerPageTurn) {
               navigateNext(core);
@@ -543,7 +580,10 @@ StateTransition ReaderState::update(Core& core) {
         break;
 
       case EventType::ButtonLongPress:
-        if (e.button == Button::Center) {
+        if (e.button == Button::Center && millis() - enterTime_ > 1500) {
+          // Guard: ignore stale long-press from button that opened the book.
+          // Event queue is drained in enter(), but InputManager may still fire
+          // a new long-press if center is held during the first render cycle.
           centerLongPressFired_ = true;
           enterSettingsMode(core);
         }
@@ -554,8 +594,8 @@ StateTransition ReaderState::update(Core& core) {
           if (centerLongPressFired_) {
             // Long press already handled — suppress short-press action
             centerLongPressFired_ = false;
-          } else if (!settingsMode_ && !tocMode_) {
-            // Short press Center: open TOC
+          } else if (!settingsMode_ && !tocMode_ && millis() - enterTime_ > 1500) {
+            // Short press Center: open TOC (guard prevents stale release from book-open button)
             if (core.content.tocCount() > 0) {
               enterTocMode(core);
             }
@@ -573,19 +613,51 @@ StateTransition ReaderState::update(Core& core) {
   if (ble::isReady() && ble::isConnected()) {
     BleKey bk;
     while ((bk = ble::poll()) != BleKey::NONE) {
+      bool isNext = false, isPrev = false;
       switch (bk) {
         case BleKey::PAGE_NEXT:
         case BleKey::KEY_RIGHT:
         case BleKey::KEY_DOWN:
-          navigateNext(core);
+        case BleKey::KEY_CHAR:
+          isNext = true;
           break;
         case BleKey::PAGE_PREV:
         case BleKey::KEY_LEFT:
         case BleKey::KEY_UP:
-          navigatePrev(core);
+          isPrev = true;
           break;
         default:
           break;
+      }
+      if (isNext || isPrev) {
+        if (landscapeScroll_) {
+          // Scroll within page before turning, same as physical buttons
+          const int screenH = renderer_.getScreenHeight();
+          const int maxScroll = pageContentHeight_ - screenH;
+          const int scrollStep = (maxScroll > 0) ? ((maxScroll + 1) / 2) : screenH;
+          if (isNext) {
+            if (maxScroll > 0 && scrollY_ < maxScroll) {
+              scrollY_ = std::min(scrollY_ + scrollStep, maxScroll);
+              needsRender_ = true;
+            } else {
+              scrollY_ = 0;
+              pageContentHeight_ = 0;
+              navigateNext(core);
+            }
+          } else {
+            if (scrollY_ > 0) {
+              scrollY_ = std::max(0, scrollY_ - scrollStep);
+              needsRender_ = true;
+            } else {
+              scrollY_ = 0;
+              pageContentHeight_ = 0;
+              navigatePrev(core);
+            }
+          }
+        } else {
+          if (isNext) navigateNext(core);
+          else navigatePrev(core);
+        }
       }
     }
   }
@@ -608,6 +680,11 @@ void ReaderState::render(Core& core) {
     // Track last successfully rendered position for progress saving
     lastRenderedSpineIndex_ = currentSpineIndex_;
     lastRenderedSectionPage_ = currentSectionPage_;
+
+    // Reset guard timer after first render completes. Cover rendering can take 2+ seconds,
+    // during which InputManager may fire new long-press events. Without this reset, the
+    // 1500ms guard set in enter() expires during render and those events trigger settings/TOC.
+    enterTime_ = millis();
   }
 
   needsRender_ = false;
@@ -619,8 +696,8 @@ void ReaderState::navigateNext(Core& core) {
 
   ContentType type = core.content.metadata().type;
 
-  // XTC uses flatPage navigation, not spine/section - skip to navigation logic
-  if (type == ContentType::Xtc) {
+  // XTC/Comic uses flatPage navigation, not spine/section
+  if (type == ContentType::Xtc || type == ContentType::Comic) {
     ReaderNavigation::Position pos;
     pos.flatPage = currentPage_;
     auto result = ReaderNavigation::next(type, pos, nullptr, core.content.pageCount());
@@ -664,8 +741,8 @@ void ReaderState::navigatePrev(Core& core) {
 
   ContentType type = core.content.metadata().type;
 
-  // XTC uses flatPage navigation, not spine/section - skip to navigation logic
-  if (type == ContentType::Xtc) {
+  // XTC/Comic uses flatPage navigation, not spine/section
+  if (type == ContentType::Xtc || type == ContentType::Comic) {
     ReaderNavigation::Position pos;
     pos.flatPage = currentPage_;
     auto result = ReaderNavigation::prev(type, pos, nullptr);
@@ -736,6 +813,10 @@ void ReaderState::renderCurrentPage(Core& core) {
     if (core.settings.showImages) {
       if (renderCoverPage(core)) {
         hasCover_ = true;
+        // Start background caching now that cover render is done and heap is free
+        if (!cacheTask_.isRunning()) {
+          startBackgroundCaching(core);
+        }
         core.display.markDirty();
         return;
       }
@@ -766,6 +847,9 @@ void ReaderState::renderCurrentPage(Core& core) {
       break;
     case ContentType::Xtc:
       renderXtcPage(core);
+      break;
+    case ContentType::Comic:
+      renderComicPage(core);
       break;
     default:
       break;
@@ -834,18 +918,21 @@ void ReaderState::renderCachedPage(Core& core) {
         }
       }
 
-      // Clear overlay
+      // Clear overlay and force a clean refresh on the next page render
       renderer_.clearScreen(theme.backgroundColor);
+      pagesUntilFullRefresh_ = 1;  // HALF_REFRESH to clear indexing text ghosting
     }
 
-    // Clamp page number (handle negative values and out-of-bounds)
-    if (pageCache_) {
-      const int cachedPages = static_cast<int>(pageCache_->pageCount());
-      if (currentSectionPage_ < 0) {
-        currentSectionPage_ = 0;
-      } else if (currentSectionPage_ >= cachedPages) {
-        currentSectionPage_ = cachedPages > 0 ? cachedPages - 1 : 0;
-      }
+  }
+
+  // Clamp page number (handle negative values and out-of-bounds)
+  // Must run outside if(!pageCache_) — background task may have already loaded cache
+  if (pageCache_) {
+    const int cachedPages = static_cast<int>(pageCache_->pageCount());
+    if (currentSectionPage_ < 0) {
+      currentSectionPage_ = 0;
+    } else if (currentSectionPage_ >= cachedPages) {
+      currentSectionPage_ = cachedPages > 0 ? cachedPages - 1 : 0;
     }
   }
 
@@ -956,8 +1043,13 @@ bool ReaderState::ensurePageCached(Core& core, uint16_t pageNum) {
   if (pageNum < pageCount) {
     // Check if we should pre-extend (approaching end of partial cache)
     if (needsExtension) {
-      Serial.printf("[READER] Pre-extending cache at page %d\n", pageNum);
-      createOrExtendCache(core);
+      const size_t freeTotal = ESP.getFreeHeap();
+      if (freeTotal >= 12288) {
+        Serial.printf("[READER] Pre-extending cache at page %d\n", pageNum);
+        createOrExtendCache(core);
+      } else {
+        Serial.printf("[READER] Deferring pre-extend — low memory (%zu bytes)\n", freeTotal);
+      }
     }
     return true;
   }
@@ -1046,7 +1138,22 @@ void ReaderState::createOrExtendCache(Core& core) {
     }
   }
 
+  // Release primary buffer (32KB) before parsing when heap is tight or BLE is active.
+  // Parser uses framebuffer as ZIP dict (fallbackBuffer), not zipBuffer — safe to free.
+  // When BLE is connected, heap is fragmented (~110KB free vs ~160KB) and parser needs
+  // contiguous space for XML elements. Releasing 32KB gives the parser room to work.
+  const bool releasedPrimary = sumi::MemoryArena::primaryBuffer != nullptr
+                                && (ESP.getFreeHeap() < 30000
+                                    || sumi::MemoryArena::fallbackBuffer != nullptr);
+  if (releasedPrimary) {
+    sumi::MemoryArena::releasePrimary();
+  }
+
   createOrExtendCacheImpl(*parser_, cachePath, config);
+
+  if (releasedPrimary) {
+    sumi::MemoryArena::reclaimPrimary();
+  }
 }
 
 void ReaderState::renderPageContents(Core& core, Page& page, int marginTop, int marginRight, int marginBottom,
@@ -1071,6 +1178,10 @@ void ReaderState::renderStatusBar(Core& core, int marginRight, int marginBottom,
   // Battery
   const uint16_t millivolts = batteryMonitor.readMillivolts();
   data.batteryPercent = (millivolts < 100) ? -1 : BatteryMonitor::percentageFromMillivolts(millivolts);
+
+#if FEATURE_BLUETOOTH
+  data.bleConnected = ble::isReady() && ble::isConnected();
+#endif
 
   // Page info
   // Note: renderCachedPage() already stopped the task, so we own pageCache_
@@ -1120,6 +1231,77 @@ void ReaderState::renderXtcPage(Core& core) {
     case XtcPageRenderer::RenderResult::PageLoadFailed:
       ui::centeredMessage(renderer_, theme, theme.uiFontId, "Page load error");
       break;
+  }
+}
+
+void ReaderState::renderComicPage(Core& core) {
+  auto* provider = core.content.asComic();
+  if (!provider) return;
+
+  const Theme& theme = THEME_MANAGER.current();
+  auto& reader = provider->getReader();
+
+  if (currentPage_ >= reader.pageCount()) {
+    ui::centeredMessage(renderer_, theme, theme.uiFontId, "End of book");
+    displayWithRefresh(core);
+    return;
+  }
+
+  // Set content height for scroll logic
+  pageContentHeight_ = reader.pageHeight(currentPage_);
+  const int screenH = renderer_.getScreenHeight();
+  const int screenW = renderer_.getScreenWidth();
+
+  // Clear screen
+  renderer_.clearScreen(theme.backgroundColor);
+
+  // Render BW pass
+  renderer_.setRenderMode(GfxRenderer::BW);
+  if (!reader.renderPage(currentPage_, renderer_, scrollY_)) {
+    ui::centeredMessage(renderer_, theme, theme.uiFontId, "Page load error");
+    displayWithRefresh(core);
+    return;
+  }
+
+  // Draw scroll indicator if content extends beyond viewport
+  if (pageContentHeight_ > screenH) {
+    const int barX = screenW - 3;
+    const int trackH = screenH - 4;
+    const int thumbH = std::max(8, trackH * screenH / pageContentHeight_);
+    const int maxScroll = pageContentHeight_ - screenH;
+    const int thumbY = 2 + (maxScroll > 0 ? (scrollY_ * (trackH - thumbH) / maxScroll) : 0);
+    for (int y = thumbY; y < thumbY + thumbH && y < screenH - 2; y++) {
+      renderer_.drawPixel(barX, y);
+      renderer_.drawPixel(barX - 1, y);
+    }
+  }
+
+  // Show page number
+  char pageStr[16];
+  snprintf(pageStr, sizeof(pageStr), "%d/%d", currentPage_ + 1, reader.pageCount());
+  const int tw = renderer_.getTextWidth(theme.smallFontId, pageStr);
+  renderer_.drawText(theme.smallFontId, screenW - tw - 8, screenH - 12, pageStr, true);
+
+  displayWithRefresh(core);
+
+  // Grayscale rendering for 4-level gray (2-bit comics)
+  if (renderer_.storeBwBuffer()) {
+    // LSB pass (dark gray)
+    renderer_.clearScreen(0x00);
+    renderer_.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+    reader.renderPage(currentPage_, renderer_, scrollY_);
+    renderer_.copyGrayscaleLsbBuffers();
+
+    // MSB pass (light gray)
+    renderer_.clearScreen(0x00);
+    renderer_.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+    reader.renderPage(currentPage_, renderer_, scrollY_);
+    renderer_.copyGrayscaleMsbBuffers();
+
+    const bool turnOffScreen = core.settings.sunlightFadingFix != 0;
+    renderer_.displayGrayBuffer(turnOffScreen);
+    renderer_.restoreBwBuffer();
+    renderer_.setRenderMode(GfxRenderer::BW);
   }
 }
 
@@ -1176,8 +1358,9 @@ bool ReaderState::renderCoverPage(Core& core) {
 }
 
 void ReaderState::startBackgroundCaching(Core& core) {
-  // XTC content uses pre-rendered bitmaps — no page cache or thumbnail support
-  if (core.content.metadata().type == ContentType::Xtc) {
+  // XTC/Comic content uses pre-rendered bitmaps — no page cache or thumbnail support
+  if (core.content.metadata().type == ContentType::Xtc ||
+      core.content.metadata().type == ContentType::Comic) {
     thumbnailDone_ = true;
     return;
   }
@@ -1186,6 +1369,14 @@ void ReaderState::startBackgroundCaching(Core& core) {
   if (cacheTask_.isRunning()) {
     Serial.println("[READER] Warning: Previous cache task still running, stopping first");
     stopBackgroundCaching();
+  }
+
+  // Skip background task if heap is too low for the 24KB task stack + parser memory.
+  // When BLE is connected, arena task stack is unavailable and heap is fragmented.
+  // Need ~24KB stack + ~20KB parser working memory = ~44KB minimum.
+  if (!sumi::MemoryArena::taskStackRegion && ESP.getFreeHeap() < 50000) {
+    Serial.printf("[READER] Skipping background cache — low heap (%zu bytes)\n", ESP.getFreeHeap());
+    return;
   }
 
   Serial.println("[READER] Starting background page cache task");
@@ -1198,9 +1389,7 @@ void ReaderState::startBackgroundCaching(Core& core) {
   const int textStart = textStartIndex_;
   const bool isLandscapeScroll = landscapeScroll_;
 
-  cacheTask_.start(
-      "PageCache", kCacheTaskStackSize,
-      [this, sectionPage, spineIndex, coverExists, textStart, isLandscapeScroll]() {
+  auto taskBody = [this, sectionPage, spineIndex, coverExists, textStart, isLandscapeScroll]() {
         const Theme& theme = THEME_MANAGER.current();
         Serial.println("[READER] Background cache task started");
 
@@ -1270,8 +1459,15 @@ void ReaderState::startBackgroundCaching(Core& core) {
         } else {
           Serial.println("[READER] Background cache task stopped");
         }
-      },
-      0);  // priority 0 (idle)
+  };
+
+  // Use arena task stack to avoid heap fragmentation from 24KB xTaskCreate allocation
+  if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::taskStackRegion) {
+    cacheTask_.startStatic("PageCache", sumi::MemoryArena::taskStackRegion,
+                           sumi::MemoryArena::TASK_STACK_SIZE, std::move(taskBody), 0);
+  } else {
+    cacheTask_.start("PageCache", kCacheTaskStackSize, std::move(taskBody), 0);
+  }
 }
 
 void ReaderState::stopBackgroundCaching() {
@@ -1509,6 +1705,7 @@ void ReaderState::jumpToTocEntry(Core& core, int tocIndex) {
           if (!pageCache_ || pageCache_->pageCount() <= pagesBefore) break;
           page = loadAnchorPage(cachePath, tocItem.anchor);
         }
+        pagesUntilFullRefresh_ = 1;  // HALF_REFRESH to clear indexing text ghosting
       }
 
       if (page >= 0) {
@@ -1601,6 +1798,13 @@ void ReaderState::handleSettingsInput(Core& core, const Event& e) {
       break;
 
     case Button::Left:
+#if FEATURE_BLUETOOTH
+      if (settingsView_.DEFS[settingsView_.selected].type ==
+          ui::InReaderSettingsView::SettingType::Action) {
+        handleBleAction(core);
+        break;
+      }
+#endif
       settingsView_.cycleValue(-1);
       applyInReaderSettings(core);
       needsRender_ = true;
@@ -1608,6 +1812,13 @@ void ReaderState::handleSettingsInput(Core& core, const Event& e) {
 
     case Button::Right:
     case Button::Center:
+#if FEATURE_BLUETOOTH
+      if (settingsView_.DEFS[settingsView_.selected].type ==
+          ui::InReaderSettingsView::SettingType::Action) {
+        handleBleAction(core);
+        break;
+      }
+#endif
       settingsView_.cycleValue(1);
       applyInReaderSettings(core);
       needsRender_ = true;
@@ -1632,37 +1843,75 @@ void ReaderState::renderSettingsOverlay(Core& core) {
 
 void ReaderState::loadInReaderSettings(Core& core) {
   const auto& s = core.settings;
-  // Matches InReaderSettingsView::DEFS order
-  settingsView_.values[0] = s.fontSize;
-  settingsView_.values[1] = s.textLayout;
-  settingsView_.values[2] = s.lineSpacing;
-  settingsView_.values[3] = s.paragraphAlignment;
-  settingsView_.values[4] = s.hyphenation;
-  settingsView_.values[5] = s.textAntiAliasing;
-  settingsView_.values[6] = s.showImages;
-  settingsView_.values[7] = s.statusBar;
+
+  // Index 0: Font (FontSelect) - load available .epdfont families
+  settingsView_.fontCount = 0;
+  settingsView_.currentFontIndex = 0;
+  strncpy(settingsView_.fontNames[0], "Default", sizeof(settingsView_.fontNames[0]) - 1);
+  settingsView_.fontCount = 1;
+  auto fonts = FONT_MANAGER.listAvailableFonts();
+  for (size_t i = 0; i < fonts.size() && settingsView_.fontCount < ui::InReaderSettingsView::MAX_FONTS; i++) {
+    if (!FontManager::isBinFont(fonts[i].c_str())) {
+      int idx = settingsView_.fontCount;
+      strncpy(settingsView_.fontNames[idx], fonts[i].c_str(), sizeof(settingsView_.fontNames[idx]) - 1);
+      settingsView_.fontNames[idx][sizeof(settingsView_.fontNames[idx]) - 1] = '\0';
+      if (s.readerFont[0] && strcmp(fonts[i].c_str(), s.readerFont) == 0) {
+        settingsView_.currentFontIndex = idx;
+      }
+      settingsView_.fontCount++;
+    }
+  }
+  settingsView_.values[0] = 0;  // Not used for FontSelect
+
+  // Matches InReaderSettingsView::DEFS order (shifted +1 for Font at index 0)
+  settingsView_.values[1] = s.fontSize;
+  settingsView_.values[2] = s.textLayout;
+  settingsView_.values[3] = s.lineSpacing;
+  settingsView_.values[4] = s.paragraphAlignment;
+  settingsView_.values[5] = s.hyphenation;
+  settingsView_.values[6] = s.textAntiAliasing;
+  settingsView_.values[7] = s.showImages;
+  settingsView_.values[8] = s.statusBar;
+
+#if FEATURE_BLUETOOTH
+  // Index 9: Bluetooth action — show current connection state
+  if (ble::isReady() && ble::isConnected()) {
+    strncpy(settingsView_.actionStatus, "Connected", sizeof(settingsView_.actionStatus) - 1);
+  } else if (s.blePageTurner[0] != '\0' || s.bleKeyboard[0] != '\0') {
+    strncpy(settingsView_.actionStatus, "Connect", sizeof(settingsView_.actionStatus) - 1);
+  } else {
+    strncpy(settingsView_.actionStatus, "No saved device", sizeof(settingsView_.actionStatus) - 1);
+  }
+#endif
 }
 
 void ReaderState::applyInReaderSettings(Core& core) {
   auto& s = core.settings;
 
-  // Detect if layout-affecting settings changed (requires cache rebuild)
-  bool cacheInvalid = (s.fontSize != settingsView_.values[0] ||
-                        s.textLayout != settingsView_.values[1] ||
-                        s.lineSpacing != settingsView_.values[2] ||
-                        s.paragraphAlignment != settingsView_.values[3] ||
-                        s.hyphenation != settingsView_.values[4] ||
-                        s.showImages != settingsView_.values[6]);
+  // Index 0: Font (FontSelect) - detect font change
+  const char* selectedFont = settingsView_.getCurrentFontName();
+  bool fontChanged = (strcmp(s.readerFont, selectedFont) != 0);
+  strncpy(s.readerFont, selectedFont, sizeof(s.readerFont) - 1);
+  s.readerFont[sizeof(s.readerFont) - 1] = '\0';
 
-  // Apply all values
-  s.fontSize = settingsView_.values[0];
-  s.textLayout = settingsView_.values[1];
-  s.lineSpacing = settingsView_.values[2];
-  s.paragraphAlignment = settingsView_.values[3];
-  s.hyphenation = settingsView_.values[4];
-  s.textAntiAliasing = settingsView_.values[5];
-  s.showImages = settingsView_.values[6];
-  s.statusBar = settingsView_.values[7];
+  // Detect if layout-affecting settings changed (requires cache rebuild)
+  bool cacheInvalid = (fontChanged ||
+                        s.fontSize != settingsView_.values[1] ||
+                        s.textLayout != settingsView_.values[2] ||
+                        s.lineSpacing != settingsView_.values[3] ||
+                        s.paragraphAlignment != settingsView_.values[4] ||
+                        s.hyphenation != settingsView_.values[5] ||
+                        s.showImages != settingsView_.values[7]);
+
+  // Apply all values (shifted +1 for Font at index 0)
+  s.fontSize = settingsView_.values[1];
+  s.textLayout = settingsView_.values[2];
+  s.lineSpacing = settingsView_.values[3];
+  s.paragraphAlignment = settingsView_.values[4];
+  s.hyphenation = settingsView_.values[5];
+  s.textAntiAliasing = settingsView_.values[6];
+  s.showImages = settingsView_.values[7];
+  s.statusBar = settingsView_.values[8];
 
   // Invalidate page cache if layout changed
   if (cacheInvalid) {
@@ -1675,59 +1924,136 @@ void ReaderState::applyInReaderSettings(Core& core) {
   s.save(core.storage);
 }
 
-void ReaderState::exitToUI(Core& core) {
-  Serial.println("[READER] Exiting to UI mode via restart");
+#if FEATURE_BLUETOOTH
+void ReaderState::handleBleAction(Core& core) {
+  if (ble::isConnected()) {
+    // Already connected — disconnect
+    ble::disconnect();
+    strncpy(settingsView_.actionStatus, "Disconnected", sizeof(settingsView_.actionStatus) - 1);
+    needsRender_ = true;
+    settingsView_.needsRender = true;
+    return;
+  }
 
-  // Stop background caching first - BackgroundTask::stop() waits properly
-  stopBackgroundCaching();
+  // Show "Connecting..." while we try
+  strncpy(settingsView_.actionStatus, "Connecting...", sizeof(settingsView_.actionStatus) - 1);
+  needsRender_ = true;
+  settingsView_.needsRender = true;
+  renderSettingsOverlay(core);
+  renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
 
-  // Save progress at last rendered position
-  if (contentLoaded_) {
-    // Generate thumbnail on exit (not during background task) to avoid buffer conflicts
-    if (!thumbnailDone_) {
-      Serial.println("[READER] Generating thumbnail on exit...");
-      core.content.generateThumbnail();
-      thumbnailDone_ = true;
+  // Release arena to free heap for NimBLE stack init
+  if (sumi::MemoryArena::isInitialized()) {
+    sumi::MemoryArena::release();
+  }
+  ble::init();
+
+  bool connected = false;
+  const char* savedPt = core.settings.blePageTurner;
+  const char* savedKb = core.settings.bleKeyboard;
+
+  // Fast path: try direct reconnect by saved address
+  if (savedPt[0] != '\0') {
+    connected = ble::reconnect(savedPt);
+  }
+  if (!connected && savedKb[0] != '\0') {
+    connected = ble::reconnect(savedKb);
+  }
+
+  // Slow path: scan and connect (handles re-pairing, address rotation, etc.)
+  if (!connected) {
+    strncpy(settingsView_.actionStatus, "Scanning...", sizeof(settingsView_.actionStatus) - 1);
+    renderSettingsOverlay(core);
+    renderer_.displayBuffer(EInkDisplay::FAST_REFRESH);
+
+    ble::startScan(10);
+
+    // Auto-connect to known page turner if found during scan
+    int ptIdx = ble::foundPageTurnerIndex();
+    if (ptIdx >= 0) {
+      const BleDevice* ptDev = ble::scanResult(ptIdx);
+      Serial.printf("[READER] Found page turner in scan: %s\n",
+                    ptDev ? ptDev->name : "?");
+      connected = ble::connectTo(ptIdx);
+      if (connected && ptDev) {
+        strncpy(core.settings.blePageTurner, ptDev->addr,
+                sizeof(core.settings.blePageTurner) - 1);
+        core.settings.save(core.storage);
+      }
     }
 
-    ProgressManager::Progress progress;
-    progress.spineIndex = (lastRenderedSectionPage_ == -1) ? 0 : lastRenderedSpineIndex_;
-    progress.sectionPage = (lastRenderedSectionPage_ == -1) ? 0 : lastRenderedSectionPage_;
-    progress.flatPage = currentPage_;
-    ProgressManager::save(core, core.content.cacheDir(), core.content.metadata().type, progress);
+    // Try connecting to any saved device found in scan results
+    if (!connected) {
+      for (int i = 0; i < ble::scanResultCount() && !connected; i++) {
+        const BleDevice* dev = ble::scanResult(i);
+        if (!dev) continue;
+        if ((savedPt[0] != '\0' && strcmp(dev->addr, savedPt) == 0) ||
+            (savedKb[0] != '\0' && strcmp(dev->addr, savedKb) == 0)) {
+          Serial.printf("[READER] Found saved device in scan: %s\n", dev->name);
+          connected = ble::connectTo(i);
+        }
+      }
+    }
 
-    // Update library index for file browser progress bars
-    uint16_t libCurrent = 0, libTotal = 0;
-    if (core.content.metadata().type == ContentType::Epub) {
-      libCurrent = static_cast<uint16_t>(lastRenderedSpineIndex_ + 1);
-      libTotal = static_cast<uint16_t>(core.content.pageCount());
+    // Try any HID device as last resort
+    if (!connected) {
+      for (int i = 0; i < ble::scanResultCount() && !connected; i++) {
+        const BleDevice* dev = ble::scanResult(i);
+        if (dev && dev->hasHID) {
+          Serial.printf("[READER] Connecting to HID device: %s\n", dev->name);
+          connected = ble::connectTo(i);
+          if (connected) {
+            // Save as keyboard by default
+            String nameLower = String(dev->name);
+            nameLower.toLowerCase();
+            bool isPageTurner = nameLower.indexOf("page") >= 0 ||
+                                nameLower.indexOf("remote") >= 0 ||
+                                nameLower.indexOf("clicker") >= 0 ||
+                                nameLower.indexOf("shutter") >= 0 ||
+                                nameLower.indexOf("free") >= 0;
+            if (isPageTurner) {
+              strncpy(core.settings.blePageTurner, dev->addr,
+                      sizeof(core.settings.blePageTurner) - 1);
+            } else {
+              strncpy(core.settings.bleKeyboard, dev->addr,
+                      sizeof(core.settings.bleKeyboard) - 1);
+            }
+            core.settings.save(core.storage);
+          }
+        }
+      }
+    }
+  }
+
+  if (connected) {
+    ble::setInactivityTimeout(core.settings.getBleTimeoutMs());
+    strncpy(settingsView_.actionStatus, "Connected", sizeof(settingsView_.actionStatus) - 1);
+    Serial.println("[READER] BLE connected from reader settings");
+  } else {
+    ble::deinit();
+    if (savedPt[0] == '\0' && savedKb[0] == '\0') {
+      strncpy(settingsView_.actionStatus, "No saved device", sizeof(settingsView_.actionStatus) - 1);
     } else {
-      libTotal = static_cast<uint16_t>(std::min(core.content.pageCount(), uint32_t(65535)));
-      libCurrent = static_cast<uint16_t>(std::min(currentPage_ + 1, uint32_t(65535)));
+      strncpy(settingsView_.actionStatus, "Not found", sizeof(settingsView_.actionStatus) - 1);
     }
-    LibraryIndex::updateEntry(core, contentPath_, libCurrent, libTotal,
-                              static_cast<uint8_t>(core.content.metadata().hint));
-
-    // Skip pageCache_.reset() and content.close() — ESP.restart() follows,
-    // and if stopBackgroundCaching() timed out the task still uses them.
+    Serial.println("[READER] BLE connect failed");
   }
 
-  // Determine return destination from cached transition or fall back to sourceState_
-  ReturnTo returnTo = ReturnTo::HOME;
-  const auto& transition = getTransition();
-  if (transition.isValid()) {
-    returnTo = transition.returnTo;
-  } else if (sourceState_ == StateId::FileList) {
-    returnTo = ReturnTo::FILE_MANAGER;
+  // Re-allocate arena for reading (deinit freed BLE stack if not connected)
+  if (!sumi::MemoryArena::isInitialized()) {
+    sumi::MemoryArena::init();
   }
 
-  // Show notification and restart
-  showTransitionNotification("Returning to library...");
-  saveTransition(BootMode::UI, nullptr, returnTo);
+  needsRender_ = true;
+  settingsView_.needsRender = true;
+}
+#endif
 
-  // Brief delay to ensure SD writes complete before restart
-  vTaskDelay(50 / portTICK_PERIOD_MS);
-  ESP.restart();
+void ReaderState::exitToUI(Core& core) {
+  Serial.println("[READER] Exiting to Home");
+  exitTarget_ = StateId::Home;
+  // exit() will be called by the state machine during transition,
+  // which handles progress saving, thumbnail generation, and cleanup.
 }
 
 }  // namespace sumi

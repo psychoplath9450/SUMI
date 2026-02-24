@@ -12,6 +12,7 @@
 #include "JpegToBmpConverter.h"
 
 #include <HardwareSerial.h>
+#include <MemoryArena.h>
 #include <SdFat.h>
 #include <JPEGDEC.h>
 #include <BitmapHelpers.h>
@@ -421,11 +422,22 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
                 millis(), totalNeeded, outWidth, outHeight);
   
   // Create ditherer if not in quick mode
+  // Use arena-backed memory when available to avoid heap fragmentation
   if (!quickMode) {
     if (oneBit) {
-      g_1bitDitherer = new Atkinson1BitDitherer(outWidth);
+      if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::ditherRegion) {
+        g_1bitDitherer = new Atkinson1BitDitherer(outWidth, sumi::MemoryArena::ditherRegion,
+                                                   sumi::MemoryArena::DITHER_REGION_SIZE);
+      } else {
+        g_1bitDitherer = new Atkinson1BitDitherer(outWidth);
+      }
     } else {
-      g_ditherer = new AtkinsonDitherer(outWidth);
+      if (sumi::MemoryArena::isInitialized() && sumi::MemoryArena::ditherRegion) {
+        g_ditherer = new AtkinsonDitherer(outWidth, sumi::MemoryArena::ditherRegion,
+                                          sumi::MemoryArena::DITHER_REGION_SIZE);
+      } else {
+        g_ditherer = new AtkinsonDitherer(outWidth);
+      }
     }
   }
   

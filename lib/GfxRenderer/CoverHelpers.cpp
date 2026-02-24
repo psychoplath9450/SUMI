@@ -1,5 +1,6 @@
 #include "CoverHelpers.h"
 
+#include <Arduino.h>
 #include <Bitmap.h>
 #include <BitmapHelpers.h>
 #include <GfxRenderer.h>
@@ -94,8 +95,9 @@ bool renderCoverFromBmp(GfxRenderer& renderer, const std::string& bmpPath, int m
     pagesUntilFullRefresh--;
   }
 
-  // Grayscale rendering (if bitmap supports it and buffer can be stored)
-  if (bitmap.hasGreyscale() && renderer.storeBwBuffer()) {
+  // Grayscale rendering (if bitmap supports it and enough heap for 6x8KB BW backup)
+  // Skip grayscale when heap is tight (e.g. BLE connected) to avoid fragmentation
+  if (bitmap.hasGreyscale() && ESP.getFreeHeap() >= 60000 && renderer.storeBwBuffer()) {
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
@@ -156,7 +158,7 @@ bool generateThumbFromCover(const std::string& coverBmpPath, const std::string& 
   if (!SdMan.exists(coverBmpPath.c_str())) return false;
 
   const auto thumbTempPath = thumbBmpPath + ".tmp";
-  if (bmpTo1BitBmpScaled(coverBmpPath.c_str(), thumbTempPath.c_str(), THUMB_WIDTH, THUMB_HEIGHT)) {
+  if (bmpTo2BitBmpScaled(coverBmpPath.c_str(), thumbTempPath.c_str(), THUMB_WIDTH, THUMB_HEIGHT)) {
     FsFile tempFile = SdMan.open(thumbTempPath.c_str(), O_RDWR);
     if (tempFile) {
       tempFile.rename(thumbBmpPath.c_str());

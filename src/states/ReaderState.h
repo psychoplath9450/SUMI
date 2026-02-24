@@ -103,6 +103,7 @@ class ReaderState : public State {
   void renderCurrentPage(Core& core);
   void renderCachedPage(Core& core);
   void renderXtcPage(Core& core);
+  void renderComicPage(Core& core);
   bool renderCoverPage(Core& core);
 
   // Helpers
@@ -157,6 +158,7 @@ class ReaderState : public State {
   // In-reader settings overlay (long-press Select)
   bool settingsMode_ = false;
   bool centerLongPressFired_ = false;  // Suppress short-press TOC on release after long-press settings
+  uint32_t enterTime_ = 0;  // millis() at enter() — suppress stale long-press from previous state
   ui::InReaderSettingsView settingsView_;
 
   void enterSettingsMode(Core& core);
@@ -165,9 +167,13 @@ class ReaderState : public State {
   void renderSettingsOverlay(Core& core);
   void loadInReaderSettings(Core& core);
   void applyInReaderSettings(Core& core);
+#if FEATURE_BLUETOOTH
+  void handleBleAction(Core& core);
+#endif
 
-  // Boot mode transition - exit to UI via restart
+  // Exit reader back to UI (Home or FileList)
   void exitToUI(Core& core);
+  StateId exitTarget_ = StateId::Reader;  // Set by exitToUI to trigger transition
 };
 
 }  // namespace sumi

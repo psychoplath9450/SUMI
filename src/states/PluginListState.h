@@ -7,10 +7,13 @@
 #if FEATURE_PLUGINS
 
 #include "../plugins/PluginInterface.h"
+#include "../plugins/PluginRenderer.h"
 #include "PluginHostState.h"
 #include "State.h"
 
 namespace sumi {
+
+struct Settings;  // Forward declaration for visibility filtering
 
 // Registry entry for a plugin
 struct PluginEntry {
@@ -39,8 +42,18 @@ class PluginListState : public State {
   // Register a plugin (called from main.cpp)
   static bool registerPlugin(const char* name, const char* category, PluginFactory factory, const char* savePath = nullptr);
 
+  // Scan /custom/*.lua and register each as a LuaPlugin
+  static void scanLuaPlugins(PluginRenderer& renderer);
+
   // Get a reference to the host state for launching
   void setHostState(PluginHostState* host) { hostState_ = host; }
+
+  // Storage for Lua plugin paths and names (static so factory functions can reference them)
+  static constexpr int MAX_LUA_PLUGINS = 8;
+  static char luaPaths_[MAX_LUA_PLUGINS][64];
+  static char luaNames_[MAX_LUA_PLUGINS][24];
+  static int luaPluginCount_;
+  static PluginRenderer* luaRenderer_;
 
  private:
   GfxRenderer& renderer_;
@@ -51,6 +64,11 @@ class PluginListState : public State {
   bool needsRender_ = true;
   bool goHome_ = false;
   bool launchPlugin_ = false;
+
+  // Filtered list of visible plugin indices (excludes hidden apps)
+  int8_t visiblePlugins_[MAX_PLUGINS];
+  int8_t visiblePluginCount_ = 0;
+  void buildVisibleList(const Settings& settings);
 
   // How many items fit on screen
   int visibleCount() const;

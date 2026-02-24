@@ -62,6 +62,47 @@ bool BackgroundTask::start(const char* name, uint32_t stackSize, TaskFunction fu
   return true;
 }
 
+bool BackgroundTask::startStatic(const char* name, uint8_t* stackBuffer, uint32_t stackSize, TaskFunction func,
+                                 int priority) {
+  // Use CAS loop to safely transition from IDLE, COMPLETE, or ERROR to STARTING
+  State expected = State::IDLE;
+  while (
+      !state_.compare_exchange_weak(expected, State::STARTING, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (expected == State::COMPLETE || expected == State::ERROR) {
+      continue;
+    }
+    Serial.printf("[TASK] %s: already running (state=%d)\n", name, static_cast<int>(expected));
+    return false;
+  }
+
+  if (!eventGroup_) {
+    Serial.printf("[TASK] %s: no event group\n", name);
+    state_.store(State::ERROR, std::memory_order_release);
+    return false;
+  }
+
+  xEventGroupClearBits(eventGroup_, EVENT_EXITED);
+
+  func_ = std::move(func);
+  name_ = name ? name : "";
+  stopRequested_.store(false, std::memory_order_release);
+  usedStaticAlloc_ = true;
+
+  handle_ = xTaskCreateStatic(&BackgroundTask::trampoline, name, stackSize, this, priority,
+                               reinterpret_cast<StackType_t*>(stackBuffer), &staticTaskTCB_);
+
+  if (!handle_) {
+    Serial.printf("[TASK] %s: static creation failed\n", name);
+    state_.store(State::ERROR, std::memory_order_release);
+    usedStaticAlloc_ = false;
+    return false;
+  }
+
+  state_.store(State::RUNNING, std::memory_order_release);
+  Serial.printf("[TASK] %s: started static (handle=%p)\n", name, handle_);
+  return true;
+}
+
 bool BackgroundTask::stop(uint32_t maxWaitMs) {
   State current = state_.load(std::memory_order_acquire);
 

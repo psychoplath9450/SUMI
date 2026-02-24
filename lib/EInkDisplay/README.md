@@ -72,6 +72,16 @@ display.displayGrayBuffer();
 // All done :)
 ```
 
+### Grayscale cleanup
+
+After grayscale rendering, `cleanupGrayscaleBuffers(bwBuffer)` must be called to restore normal display state. This function writes the BW content to **both** BW RAM and RED RAM, and clears the `inGrayscaleMode` flag. If either step is skipped, the next `displayBuffer()` call will trigger a spurious `grayscaleRevert()` against mismatched RAM contents, producing a visible washout.
+
+```cpp
+display.cleanupGrayscaleBuffers(bwFrameBuffer);
+// Both RAMs now contain matching BW data, inGrayscaleMode is false.
+// Next displayBuffer() will render normally without revert artifacts.
+```
+
 ### Power off
 
 To ensure the display locks the image in, it's important to power off the display before exiting the program.

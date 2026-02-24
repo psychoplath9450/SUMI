@@ -6,11 +6,13 @@
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
+#include <SD.h>
 #include <SDCardManager.h>
 
 #include <cstring>
 
 #include "../core/Core.h"
+#include "../plugins/LuaPlugin.h"
 #include "../ui/Elements.h"
 #include "ThemeManager.h"
 
@@ -18,6 +20,12 @@ namespace sumi {
 
 int PluginListState::pluginCount = 0;
 PluginEntry PluginListState::plugins[PluginListState::MAX_PLUGINS] = {};
+
+// Lua plugin static storage
+char PluginListState::luaPaths_[MAX_LUA_PLUGINS][64] = {};
+char PluginListState::luaNames_[MAX_LUA_PLUGINS][24] = {};
+int PluginListState::luaPluginCount_ = 0;
+PluginRenderer* PluginListState::luaRenderer_ = nullptr;
 
 bool PluginListState::registerPlugin(const char* name, const char* category, PluginFactory factory, const char* savePath) {
   if (pluginCount >= MAX_PLUGINS) return false;
@@ -27,13 +35,103 @@ bool PluginListState::registerPlugin(const char* name, const char* category, Plu
   return true;
 }
 
-PluginListState::PluginListState(GfxRenderer& renderer) : renderer_(renderer) {}
+// Factory functions for each Lua plugin slot (up to 8)
+// These are plain function pointers — no captures — using static index storage
+static sumi::PluginInterface* luaFactory0() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[0]); }
+static sumi::PluginInterface* luaFactory1() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[1]); }
+static sumi::PluginInterface* luaFactory2() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[2]); }
+static sumi::PluginInterface* luaFactory3() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[3]); }
+static sumi::PluginInterface* luaFactory4() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[4]); }
+static sumi::PluginInterface* luaFactory5() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[5]); }
+static sumi::PluginInterface* luaFactory6() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[6]); }
+static sumi::PluginInterface* luaFactory7() { return new sumi::LuaPlugin(*sumi::PluginListState::luaRenderer_, sumi::PluginListState::luaPaths_[7]); }
+
+static sumi::PluginFactory luaFactories[sumi::PluginListState::MAX_LUA_PLUGINS] = {
+  luaFactory0, luaFactory1, luaFactory2, luaFactory3,
+  luaFactory4, luaFactory5, luaFactory6, luaFactory7
+};
+
+void PluginListState::scanLuaPlugins(PluginRenderer& renderer) {
+  luaRenderer_ = &renderer;
+  luaPluginCount_ = 0;
+
+  File dir = SD.open(PLUGINS_CUSTOM_DIR);
+  if (!dir || !dir.isDirectory()) {
+    Serial.println("[LUA] No /custom directory found, skipping Lua scan");
+    if (dir) dir.close();
+    return;
+  }
+
+  Serial.println("[LUA] Scanning /custom/ for .lua plugins...");
+
+  File entry;
+  while ((entry = dir.openNextFile()) && luaPluginCount_ < MAX_LUA_PLUGINS) {
+    if (entry.isDirectory()) { entry.close(); continue; }
+
+    const char* fname = entry.name();
+    size_t len = strlen(fname);
+
+    // Check for .lua extension
+    if (len < 5 || strcasecmp(fname + len - 4, ".lua") != 0) {
+      entry.close();
+      continue;
+    }
+
+    // Build full path
+    snprintf(luaPaths_[luaPluginCount_], sizeof(luaPaths_[0]),
+             "%s/%s", PLUGINS_CUSTOM_DIR, fname);
+
+    // Derive display name from filename
+    const char* base = fname;
+    size_t nameLen = len - 4;  // strip .lua
+    if (nameLen >= sizeof(luaNames_[0])) nameLen = sizeof(luaNames_[0]) - 1;
+    memcpy(luaNames_[luaPluginCount_], base, nameLen);
+    luaNames_[luaPluginCount_][nameLen] = '\0';
+
+    // Replace underscores with spaces, capitalize first char
+    for (size_t i = 0; i < nameLen; i++) {
+      if (luaNames_[luaPluginCount_][i] == '_')
+        luaNames_[luaPluginCount_][i] = ' ';
+    }
+    char& first = luaNames_[luaPluginCount_][0];
+    if (first >= 'a' && first <= 'z') first -= 32;
+
+    Serial.printf("[LUA] Found: %s -> \"%s\"\n",
+                  luaPaths_[luaPluginCount_], luaNames_[luaPluginCount_]);
+
+    registerPlugin(luaNames_[luaPluginCount_], "Custom",
+                   luaFactories[luaPluginCount_]);
+
+    luaPluginCount_++;
+    entry.close();
+  }
+
+  dir.close();
+  Serial.printf("[LUA] Registered %d Lua plugin(s)\n", luaPluginCount_);
+}
+
+PluginListState::PluginListState(GfxRenderer& renderer) : renderer_(renderer) {
+  visiblePluginCount_ = 0;
+}
+
+void PluginListState::buildVisibleList(const Settings& settings) {
+  visiblePluginCount_ = 0;
+  for (int i = 0; i < pluginCount && visiblePluginCount_ < MAX_PLUGINS; i++) {
+    if (!settings.isPluginHidden(i)) {
+      visiblePlugins_[visiblePluginCount_++] = static_cast<int8_t>(i);
+    }
+  }
+}
 
 void PluginListState::enter(Core& core) {
   needsRender_ = true;
   goHome_ = false;
   launchPlugin_ = false;
-  if (selected_ >= pluginCount && pluginCount > 0) selected_ = pluginCount - 1;
+
+  // Build filtered list based on visibility settings
+  buildVisibleList(core.settings);
+
+  if (selected_ >= visiblePluginCount_ && visiblePluginCount_ > 0) selected_ = visiblePluginCount_ - 1;
   if (selected_ < 0) selected_ = 0;
 }
 
@@ -55,8 +153,8 @@ StateTransition PluginListState::update(Core& core) {
 
     switch (e.button) {
       case Button::Up:
-        if (pluginCount > 0) {
-          selected_ = (selected_ == 0) ? pluginCount - 1 : selected_ - 1;
+        if (visiblePluginCount_ > 0) {
+          selected_ = (selected_ == 0) ? visiblePluginCount_ - 1 : selected_ - 1;
           if (selected_ < scrollOffset_) scrollOffset_ = selected_;
           // Wrap: if jumped to bottom, adjust scroll
           int vis2 = visibleCount();
@@ -66,8 +164,8 @@ StateTransition PluginListState::update(Core& core) {
         break;
 
       case Button::Down:
-        if (pluginCount > 0) {
-          selected_ = (selected_ + 1) % pluginCount;
+        if (visiblePluginCount_ > 0) {
+          selected_ = (selected_ + 1) % visiblePluginCount_;
           int vis = visibleCount();
           if (selected_ >= scrollOffset_ + vis) scrollOffset_ = selected_ - vis + 1;
           // Wrap: if jumped to top, reset scroll
@@ -83,7 +181,7 @@ StateTransition PluginListState::update(Core& core) {
 
       case Button::Center:
       case Button::Right:
-        if (pluginCount > 0 && selected_ < pluginCount) launchPlugin_ = true;
+        if (visiblePluginCount_ > 0 && selected_ < visiblePluginCount_) launchPlugin_ = true;
         break;
 
       case Button::Power:
@@ -101,7 +199,9 @@ StateTransition PluginListState::update(Core& core) {
 
   if (launchPlugin_ && hostState_) {
     launchPlugin_ = false;
-    hostState_->setPluginFactory(plugins[selected_].factory);
+    // Map from visible index to actual plugin index
+    int actualIdx = visiblePlugins_[selected_];
+    hostState_->setPluginFactory(plugins[actualIdx].factory);
     return StateTransition::to(StateId::PluginHost);
   }
 
@@ -125,15 +225,17 @@ void PluginListState::drawList() const {
   ui::title(renderer_, t, t.screenMarginTop, "Apps");
 
   // Items - using standard menuItem (matches Settings menu exactly)
+  // Now iterates over the filtered visiblePlugins_ array
   const int startY = 60;
   int vis = visibleCount();
 
-  for (int i = scrollOffset_; i < pluginCount && i < scrollOffset_ + vis; i++) {
+  for (int i = scrollOffset_; i < visiblePluginCount_ && i < scrollOffset_ + vis; i++) {
+    int actualIdx = visiblePlugins_[i];
     const int y = startY + (i - scrollOffset_) * (t.menuItemHeight + t.itemSpacing);
-    ui::menuItem(renderer_, t, y, plugins[i].name, i == selected_);
+    ui::menuItem(renderer_, t, y, plugins[actualIdx].name, i == selected_);
 
     // Show "Continue" right-aligned for games with saved progress
-    if (plugins[i].savePath && SdMan.exists(plugins[i].savePath)) {
+    if (plugins[actualIdx].savePath && SdMan.exists(plugins[actualIdx].savePath)) {
       const int h = t.menuItemHeight;
       const int textY = y + (h - renderer_.getLineHeight(t.smallFontId)) / 2;
       const int rightEdge = renderer_.getScreenWidth() - t.screenMarginSide - t.itemPaddingX;
@@ -145,13 +247,12 @@ void PluginListState::drawList() const {
 
   // Scroll indicators
   const int W = renderer_.getScreenWidth();
-  const int mx = t.screenMarginSide + 10;
   if (scrollOffset_ > 0) {
     int cx = W / 2;
     renderer_.drawLine(cx, startY - 6, cx - 6, startY - 1, true);
     renderer_.drawLine(cx, startY - 6, cx + 6, startY - 1, true);
   }
-  if (scrollOffset_ + vis < pluginCount) {
+  if (scrollOffset_ + vis < visiblePluginCount_) {
     int cx = W / 2;
     int ay = renderer_.getScreenHeight() - 38;
     renderer_.drawLine(cx, ay, cx - 6, ay - 6, true);

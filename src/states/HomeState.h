@@ -40,6 +40,8 @@ class HomeState : public State {
   void drawBackground(Core& core);
   void drawBackgroundFromSD(const char* themeName);
   void renderCoverToCard();
+
+  bool pendingOpen_ = false;  // Set by openSelectedBook to trigger Reader transition
 };
 
 }  // namespace sumi

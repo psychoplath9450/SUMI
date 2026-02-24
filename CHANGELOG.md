@@ -2,6 +2,34 @@
 
 Built on [Papyrix](https://github.com/pliashkou/papyrix) by Pavel Liashkov (@bigbag), itself based on CrossPoint Reader by Dave Allie.
 
+## [0.4.2-dev] — In Development
+
+**Memory Arena Restructure** — The 80KB single-block arena is now three independent allocations: 32KB primary + 26KB work + 24KB task stack (82KB total). Splitting into three blocks survives heap fragmentation when BLE NimBLE is connected (~48KB held), where a single 82KB contiguous allocation would fail. The 24KB task stack is optional — if it can't be allocated, `BackgroundTask` falls back to heap-based `xTaskCreate`. The 58KB essential allocation (32+26) must succeed for inline images. Primary buffer sized to exactly match TINFL_LZ_DICT_SIZE (32KB) — previously 50KB with 18KB wasted.
+
+**BLE Coexistence** — Arena is released before BLE init (`ble::init()`) and re-allocated when leaving Settings. NimBLE needs large contiguous heap blocks that overlap with the arena. On Settings exit, if BLE HID is connected, the keyboard stays paired while the arena reclaims memory for image processing.
+
+**BackgroundTask Static Allocation** — New `startStatic()` method uses `xTaskCreateStatic` with the arena's 24KB task stack region, avoiding heap fragmentation from FreeRTOS task stack malloc. Falls back to `start()` with heap allocation when arena task stack is unavailable.
+
+**PageCache Hot Extend** — Cache extension now has a "hot path" that resumes the suspended XML parser instead of re-parsing from byte 0. Cuts extend time from O(totalPages) to O(chunk). Added heap guards (8KB threshold) to prevent OOM `abort()` crashes during hot extend on the main thread.
+
+**Inline EPUB Images** — Images embedded in EPUB chapters now render inline during reading. The parser extracts and caches BMP/JPEG/PNG images from the EPUB ZIP, converts them to 1-bit dithered BMPs, and stores them on SD card. Tall images get dedicated pages. The `zipBuffer` (alias for arena's primaryBuffer) provides the 32KB LZ77 dictionary for ZIP decompression without heap allocation.
+
+**Landscape Scroll Mode** — Scanned documents and comics with `sumi:scanned`, `sumi:comic`, or `sumi:webtoon` content hints automatically enter landscape scroll mode. Pages extend beyond viewport height and scroll with Up/Down buttons.
+
+**Lua Plugin System** — User scripts in `/custom/*.lua` are auto-discovered at boot and registered as plugins. Lua 5.4 VM with 40KB memory limit per script. Binding API exposes display drawing, input handling, and file I/O. Scripts run sandboxed within the existing plugin host.
+
+**Text Shaping** — Arabic text shaping with contextual glyph forms (initial/medial/final/isolated), Thai word breaking with dictionary-based segmentation, and script detection for automatic shaper selection. Handles mixed-script text within paragraphs.
+
+**OrderedDither** — Replaced multiple old ditherer classes (Atkinson, Floyd-Steinberg, etc.) with a single `OrderedDither` using 8×8 threshold matrices. Seven density levels from D75 to D12. Stateless lookup-based approach — no error diffusion buffer needed, uses arena's `ditherRegion`.
+
+**Parser Memory Safety** — `ChapterHtmlSlimParser::parseLoop()` now proactively checks heap pressure every yield interval, aborting cleanly if largest free block drops below `MIN_FREE_HEAP`. Previously only checked during emergency text splits, leaving a window where `std::vector` or `std::string` allocation could trigger `abort()`.
+
+**BLE Page Turner (Free 2)** — Hybrid report decoder for page turners that send accelerometer + button data in a single 6-byte HID report. Byte 0 is a button bitmask (bit 0 = forward, bit 1 = back), bytes 1-5 are accelerometer data. Rising-edge detection prevents repeat triggers. Previously, the sensor filter discarded all 6-byte reports, blocking both noise and real button presses.
+
+**Parser OOM with BLE** — `createOrExtendCache()` now releases the 32KB primary buffer whenever BLE is connected (`fallbackBuffer != nullptr`), not just when free heap drops below 30KB. The display framebuffer serves as the ZIP dictionary while BLE fragments the heap. Background task heap threshold raised from 30KB to 50KB to prevent futile allocation attempts when arena task stack is unavailable.
+
+**Grayscale Washout Fix** — Fixed `cleanupGrayscaleBuffers()` to write both BW RAM and RED RAM after grayscale rendering, and clear `inGrayscaleMode`. Previously only wrote RED RAM, leaving stale LSB data in BW RAM. The next `displayBuffer()` saw `inGrayscaleMode == true` and triggered a spurious `grayscaleRevert()` against mismatched RAMs, producing a visible washout ~1 second after every grayscale render.
+
 ## [0.4.1] — 2026-02-19
 
 **App Bug Fixes** — Fixed multiple bugs across Chess, Sudoku, and Flashcards:

@@ -17,10 +17,10 @@ namespace {
 constexpr uint32_t SETTINGS_MAGIC = 0x53585050;
 // Minimum version we can read (allows backward compatibility)
 constexpr uint8_t MIN_SETTINGS_VERSION = 3;
-// Version 10: Added BLE saved device addresses
-constexpr uint8_t SETTINGS_FILE_VERSION = 10;
+// Version 13: Added reader font family override
+constexpr uint8_t SETTINGS_FILE_VERSION = 13;
 // Increment this when adding new persisted settings fields
-constexpr uint8_t SETTINGS_COUNT = 28;
+constexpr uint8_t SETTINGS_COUNT = 32;
 }  // namespace
 
 Result<void> Settings::save(drivers::Storage& storage) const {
@@ -67,6 +67,9 @@ Result<void> Settings::save(drivers::Storage& storage) const {
   outputFile.write(reinterpret_cast<const uint8_t*>(blePageTurner), sizeof(blePageTurner));
   outputFile.write(reinterpret_cast<const uint8_t*>(homeArtTheme), sizeof(homeArtTheme));
   serialization::writePod(outputFile, showTables);
+  outputFile.write(reinterpret_cast<const uint8_t*>(hiddenPluginMask), sizeof(hiddenPluginMask));
+  serialization::writePod(outputFile, bleTimeout);
+  outputFile.write(reinterpret_cast<const uint8_t*>(readerFont), sizeof(readerFont));
   outputFile.close();
 
   Serial.printf("[%lu] [SET] Settings saved to file\n", millis());
@@ -178,6 +181,13 @@ Result<void> Settings::load(drivers::Storage& storage) {
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPodValidated(inputFile, showTables, uint8_t(2));
     if (++settingsRead >= fileSettingsCount) break;
+    inputFile.read(reinterpret_cast<uint8_t*>(hiddenPluginMask), sizeof(hiddenPluginMask));
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPodValidated(inputFile, bleTimeout, uint8_t(5));
+    if (++settingsRead >= fileSettingsCount) break;
+    inputFile.read(reinterpret_cast<uint8_t*>(readerFont), sizeof(readerFont));
+    readerFont[sizeof(readerFont) - 1] = '\0';
+    if (++settingsRead >= fileSettingsCount) break;
   } while (false);
 
   // Migrate font size from version < 8 (enum values shifted +1 for FontXSmall)
@@ -194,33 +204,38 @@ Result<void> Settings::load(drivers::Storage& storage) {
 }
 
 int Settings::getReaderFontId(const Theme& theme) const {
+  // If user has selected a specific font, override theme's choice
+  const char* family = nullptr;
+  int builtinId = 0;
   switch (fontSize) {
     case FontXSmall:
-      return FONT_MANAGER.getReaderFontId(theme.readerFontFamilyXSmall, theme.readerFontIdXSmall);
+      family = readerFont[0] ? readerFont : theme.readerFontFamilyXSmall;
+      builtinId = theme.readerFontIdXSmall;
+      break;
     case FontMedium:
-      return FONT_MANAGER.getReaderFontId(theme.readerFontFamilyMedium, theme.readerFontIdMedium);
+      family = readerFont[0] ? readerFont : theme.readerFontFamilyMedium;
+      builtinId = theme.readerFontIdMedium;
+      break;
     case FontLarge:
-      return FONT_MANAGER.getReaderFontId(theme.readerFontFamilyLarge, theme.readerFontIdLarge);
+      family = readerFont[0] ? readerFont : theme.readerFontFamilyLarge;
+      builtinId = theme.readerFontIdLarge;
+      break;
     default:  // FontSmall
-      return FONT_MANAGER.getReaderFontId(theme.readerFontFamilySmall, theme.readerFontId);
+      family = readerFont[0] ? readerFont : theme.readerFontFamilySmall;
+      builtinId = theme.readerFontId;
+      break;
   }
+  return FONT_MANAGER.getReaderFontId(family, builtinId);
 }
 
 bool Settings::hasExternalReaderFont(const Theme& theme) const {
+  if (readerFont[0]) return true;  // User-selected font always counts
   const char* family = nullptr;
   switch (fontSize) {
-    case FontXSmall:
-      family = theme.readerFontFamilyXSmall;
-      break;
-    case FontMedium:
-      family = theme.readerFontFamilyMedium;
-      break;
-    case FontLarge:
-      family = theme.readerFontFamilyLarge;
-      break;
-    default:
-      family = theme.readerFontFamilySmall;
-      break;
+    case FontXSmall:  family = theme.readerFontFamilyXSmall; break;
+    case FontMedium:  family = theme.readerFontFamilyMedium; break;
+    case FontLarge:   family = theme.readerFontFamilyLarge;  break;
+    default:          family = theme.readerFontFamilySmall;  break;
   }
   return family && *family;
 }
@@ -273,6 +288,9 @@ bool Settings::saveToFile() const {
   outputFile.write(reinterpret_cast<const uint8_t*>(blePageTurner), sizeof(blePageTurner));
   outputFile.write(reinterpret_cast<const uint8_t*>(homeArtTheme), sizeof(homeArtTheme));
   serialization::writePod(outputFile, showTables);
+  outputFile.write(reinterpret_cast<const uint8_t*>(hiddenPluginMask), sizeof(hiddenPluginMask));
+  serialization::writePod(outputFile, bleTimeout);
+  outputFile.write(reinterpret_cast<const uint8_t*>(readerFont), sizeof(readerFont));
   outputFile.close();
 
   Serial.printf("[%lu] [SET] Settings saved to file\n", millis());
@@ -379,6 +397,13 @@ bool Settings::loadFromFile() {
     homeArtTheme[sizeof(homeArtTheme) - 1] = '\0';
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPodValidated(inputFile, showTables, uint8_t(2));
+    if (++settingsRead >= fileSettingsCount) break;
+    inputFile.read(reinterpret_cast<uint8_t*>(hiddenPluginMask), sizeof(hiddenPluginMask));
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPodValidated(inputFile, bleTimeout, uint8_t(5));
+    if (++settingsRead >= fileSettingsCount) break;
+    inputFile.read(reinterpret_cast<uint8_t*>(readerFont), sizeof(readerFont));
+    readerFont[sizeof(readerFont) - 1] = '\0';
     if (++settingsRead >= fileSettingsCount) break;
   } while (false);
 
