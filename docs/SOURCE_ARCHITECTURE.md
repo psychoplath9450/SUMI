@@ -8,7 +8,7 @@ src/
 ├── config.h                 # Build configuration, feature flags
 │
 ├── core/                    # Core systems
-│   ├── MemoryArena.h/cpp    # Pre-allocated buffer pool (82KB: 32+26+24) + bump allocator
+│   ├── MemoryArena.h/cpp    # Pre-allocated buffer pool (76KB: 32+20+24) + bump allocator
 │   ├── Core.h/cpp           # Global state container
 │   ├── StateMachine.h/cpp   # State transitions
 │   ├── EventQueue.h         # Input event queue
@@ -154,7 +154,7 @@ setup()
 │   ├── SD card mount
 │   ├── Settings load
 │   ├── LittleFS mount
-│   └── MemoryArena::init()  ← 3-block allocation (32+26+24KB)
+│   └── MemoryArena::init()  ← 3-block allocation (32+20+24KB)
 │
 ├── detectBootMode()
 │   └── Check RTC for UI/READER flag

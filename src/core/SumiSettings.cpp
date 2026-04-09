@@ -139,7 +139,7 @@ Result<void> Settings::load(drivers::Storage& storage) {
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPodValidated(inputFile, textAntiAliasing, uint8_t(2));
     if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPodValidated(inputFile, showImages, uint8_t(2));
+    serialization::readPodValidated(inputFile, showImages, uint8_t(3));
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPodValidated(inputFile, startupBehavior, uint8_t(2));
     if (++settingsRead >= fileSettingsCount) break;
@@ -357,7 +357,7 @@ bool Settings::loadFromFile() {
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPodValidated(inputFile, textAntiAliasing, uint8_t(2));
     if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPodValidated(inputFile, showImages, uint8_t(2));
+    serialization::readPodValidated(inputFile, showImages, uint8_t(3));
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPodValidated(inputFile, startupBehavior, uint8_t(2));
     if (++settingsRead >= fileSettingsCount) break;

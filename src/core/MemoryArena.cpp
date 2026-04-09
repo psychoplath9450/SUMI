@@ -23,7 +23,7 @@ bool MemoryArena::init() {
     return true;
   }
 
-  Serial.printf("[%lu] [MEM] Allocating arena (58KB essential + 24KB task stack)\n", millis());
+  Serial.printf("[%lu] [MEM] Allocating arena (52KB essential + 24KB task stack)\n", millis());
   Serial.printf("[%lu] [MEM] Heap before: free=%lu, largest=%lu\n", millis(), ESP.getFreeHeap(),
                 ESP.getMaxAllocHeap());
 
@@ -66,8 +66,6 @@ bool MemoryArena::init() {
   imageRowRegion = workBase_ + offset;
   offset += IMAGE_ROW_REGION_SIZE;
 
-  // Remaining 6KB is spare (not mapped to a pointer)
-
   // TASK STACK (24KB) — separate allocation (may be null)
   taskStackRegion = taskStackBase_;
 
@@ -81,7 +79,7 @@ bool MemoryArena::init() {
 
   Serial.printf("[%lu] [MEM] Heap after: free=%lu, largest=%lu\n", millis(), ESP.getFreeHeap(),
                 ESP.getMaxAllocHeap());
-  Serial.printf("[%lu] [MEM] Arena ready (32+26%s)\n", millis(),
+  Serial.printf("[%lu] [MEM] Arena ready (32+20%s)\n", millis(),
                 taskStackBase_ ? "+24KB" : "KB, task stack on heap");
 
   return true;
@@ -174,7 +172,7 @@ size_t MemoryArena::scratchRemaining() {
 
 void MemoryArena::printStatus() {
   if (initialized_) {
-    Serial.println("[MEM] === Arena Status (32+26+24KB) ===");
+    Serial.println("[MEM] === Arena Status (32+20+24KB) ===");
     Serial.printf("[MEM] PRIMARY (32KB): %p\n", primaryBuffer);
     Serial.printf("[MEM] WORK (26KB): scratch=%p dither=%p imgrow=%p\n",
                   scratchBuffer, ditherRegion, imageRowRegion);

@@ -21,6 +21,15 @@ struct Settings {
   // Status bar display modes
   enum StatusBarMode : uint8_t { StatusNone = 0, StatusShow = 1 };
 
+  // Status bar field flags (bitmask, CrossPoint #733)
+  enum StatusBarField : uint8_t {
+    SBF_TITLE    = 1 << 0,
+    SBF_PAGES    = 1 << 1,
+    SBF_BATTERY  = 1 << 2,
+    SBF_PROGRESS = 1 << 3,
+  };
+  static constexpr uint8_t SBF_ALL = SBF_TITLE | SBF_PAGES | SBF_BATTERY | SBF_PROGRESS;
+
   // Screen orientation
   enum Orientation : uint8_t {
     Portrait = 0,      // 480x800 logical coordinates (current default)
@@ -55,6 +64,13 @@ struct Settings {
 
   // Short power button press actions
   enum PowerButtonAction : uint8_t { PowerIgnore = 0, PowerSleep = 1, PowerPageTurn = 2, PowerRefresh = 3 };
+
+  // Image display mode (CrossPoint #1291)
+  // Values chosen for binary compatibility: old showImages=0 maps to Suppress, showImages=1 maps to Show
+  enum ImageDisplay : uint8_t { ImageSuppress = 0, ImageShow = 1, ImagePlaceholder = 2 };
+
+  // Auto page turn speed (CrossPoint #1219)
+  enum AutoPageTurn : uint8_t { AutoTurnOff = 0, AutoTurn1PPM = 1, AutoTurn3PPM = 2, AutoTurn6PPM = 3, AutoTurn12PPM = 4 };
 
   // Startup behavior
   enum StartupBehavior : uint8_t { StartupLastDocument = 0, StartupHome = 1 };
@@ -103,6 +119,15 @@ struct Settings {
   char blePageTurner[18] = "";   // "AA:BB:CC:DD:EE:FF"
   uint8_t bleTimeout = Ble3Min;  // BLE disconnect timeout
 
+  // Show hidden files (dotfiles) in file browser (CrossPoint #1288)
+  uint8_t showHiddenFiles = 0;
+
+  // Auto page turn speed (0=off, 1-4 = speed presets)
+  uint8_t autoPageTurn = AutoTurnOff;
+
+  // Status bar field visibility bitmask (which elements to show)
+  uint8_t statusBarFields = SBF_ALL;
+
   // Custom reader font family (empty = use theme/builtin font)
   // Name of directory under /config/fonts/ containing regular.epdfont
   char readerFont[32] = "";
@@ -147,6 +172,16 @@ struct Settings {
       case Ble30Min: return 30 * 60 * 1000;
       case BleNever: return 0;
       default:       return 3 * 60 * 1000;
+    }
+  }
+
+  uint32_t getAutoPageTurnMs() const {
+    switch (autoPageTurn) {
+      case AutoTurn1PPM:  return 60000;   // 1 page per minute
+      case AutoTurn3PPM:  return 20000;   // 3 pages per minute
+      case AutoTurn6PPM:  return 10000;   // 6 pages per minute
+      case AutoTurn12PPM: return 5000;    // 12 pages per minute
+      default:            return 0;       // off
     }
   }
 

@@ -65,9 +65,9 @@ bool ZipFile::loadAllFileStatSlims() {
     file.seekCur(8);
     file.read(&fileStat.localHeaderOffset, 4);
 
-    // Bounds check: buffer is 256 bytes, need room for null terminator
-    if (nameLen > 255) {
-      file.seekCur(nameLen + m + k);  // Skip this entry entirely
+    // Bounds check: skip entries with names that don't fit in the buffer
+    if (nameLen >= sizeof(itemName)) {
+      file.seekCur(nameLen + m + k);
       continue;
     }
 
@@ -76,7 +76,6 @@ bool ZipFile::loadAllFileStatSlims() {
 
     fileStatSlimCache.emplace(itemName, fileStat);
 
-    // Skip the rest of this entry (extra field + comment)
     file.seekCur(m + k);
   }
 
@@ -130,9 +129,9 @@ bool ZipFile::loadFileStatSlim(const char* filename, FileStatSlim* fileStat) {
     file.seekCur(8);
     file.read(&fileStat->localHeaderOffset, 4);
 
-    // Bounds check: buffer is 256 bytes, need room for null terminator
-    if (nameLen > 255) {
-      file.seekCur(nameLen + m + k);  // Skip this entry entirely
+    // Bounds check: skip entries with names that don't fit in the buffer
+    if (nameLen >= sizeof(itemName)) {
+      file.seekCur(nameLen + m + k);
       continue;
     }
 
@@ -341,9 +340,9 @@ int ZipFile::fillUncompressedSizes(std::vector<SizeTarget>& targets, std::vector
     // Skip: comment len already read in k, disk# (2), internal attr (2), external attr (4), local header offset (4)
     file.seekCur(12);
 
-    // Bounds check: buffer is 256 bytes, need room for null terminator
-    if (nameLen > 255) {
-      file.seekCur(nameLen + m + k);  // Skip this entry entirely
+    // Bounds check: skip entries with names that don't fit in the buffer
+    if (nameLen >= sizeof(itemName)) {
+      file.seekCur(nameLen + m + k);
       continue;
     }
 

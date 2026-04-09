@@ -6,14 +6,14 @@ This was the planning document for v0.4.0. Here's what was implemented:
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| 1 | Memory Arena (82KB: 32+26+24) | ✅ Implemented |
+| 1 | Memory Arena (76KB: 32+20+24) | ✅ Implemented |
 | 2 | JPEGDEC Integration | ✅ Implemented (v0.4.1) |
 | 3 | Flash Thumbnail Cache | ✅ Implemented |
 | 4 | Arena Migration | ✅ Complete |
 
 ### Implemented
 
-- **MemoryArena** — 82KB as 3 independent allocations (32+26+24KB), 24KB task stack optional (`src/core/MemoryArena.h/cpp`)
+- **MemoryArena** — 76KB as 3 independent allocations (32+20+24KB), 24KB task stack optional (`src/core/MemoryArena.h/cpp`)
 - **ThumbnailCache** — LittleFS storage for instant home screen (`src/content/ThumbnailCache.h/cpp`)
 - **JpegToBmpConverter** — Uses arena for decode buffers, JPEGDEC with built-in dithering
 - **PngToBmpConverter** — Uses arena for decode buffers

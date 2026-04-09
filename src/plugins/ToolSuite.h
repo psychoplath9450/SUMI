@@ -276,6 +276,7 @@ bool ToolSuiteApp::handleMenu(PluginButton btn) {
             if (_menuCursor < 2) _menuCursor++;
             needsFullRedraw = true;
             return true;
+        case PluginButton::Right:
         case PluginButton::Center:
             needsFullRedraw = true;
             if (_menuCursor == 0) { _tool = TOOL_CALC; resetCalc(); }

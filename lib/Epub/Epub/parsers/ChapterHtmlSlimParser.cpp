@@ -101,7 +101,8 @@ void ChapterHtmlSlimParser::startNewTextBlock(const TextBlock::BLOCK_STYLE style
     makePages();
     pendingEmergencySplit_ = false;
   }
-  currentTextBlock.reset(new ParsedText(style, config.indentLevel, config.hyphenation, false, pendingRtl_));
+  currentTextBlock.reset(new ParsedText(style, config.indentLevel, config.hyphenation, false, pendingRtl_, pendingTextIndentPx_));
+  pendingTextIndentPx_ = 0;  // consume
 }
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
@@ -191,8 +192,27 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               self->depth += 1;
               return;
             }
-            Serial.printf("[%lu] [EHP] Image loaded: %dx%d\n", millis(), bitmap.getWidth(), bitmap.getHeight());
-            auto imageBlock = std::make_shared<ImageBlock>(cachedPath, bitmap.getWidth(), bitmap.getHeight());
+            int imgW = bitmap.getWidth();
+            int imgH = bitmap.getHeight();
+
+            // Clamp to viewport while preserving aspect ratio (CrossPoint #1002).
+            // Without this, images larger than the screen overflow the page layout.
+            if (imgW > 0 && imgH > 0) {
+              const int maxW = self->config.viewportWidth;
+              const int maxH = self->config.viewportHeight;
+              float scaleX = (imgW > maxW) ? static_cast<float>(maxW) / imgW : 1.0f;
+              float scaleY = (imgH > maxH) ? static_cast<float>(maxH) / imgH : 1.0f;
+              float scale = (scaleX < scaleY) ? scaleX : scaleY;
+              if (scale < 1.0f) {
+                imgW = static_cast<int>(imgW * scale);
+                imgH = static_cast<int>(imgH * scale);
+                if (imgW < 1) imgW = 1;
+                if (imgH < 1) imgH = 1;
+              }
+            }
+
+            Serial.printf("[%lu] [EHP] Image loaded: %dx%d\n", millis(), imgW, imgH);
+            auto imageBlock = std::make_shared<ImageBlock>(cachedPath, imgW, imgH);
             bmpFile.close();
 
             // Flush any pending text block before adding image
@@ -422,6 +442,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         // User-selected alignment: always override CSS
         blockStyle = static_cast<TextBlock::BLOCK_STYLE>(self->config.paragraphAlignment);
       }
+      // Capture CSS text-indent for this block
+      self->pendingTextIndentPx_ = cssStyle.hasTextIndent ? cssStyle.textIndentPx : 0;
       self->startNewTextBlock(blockStyle);
     }
   } else if (matches(name, BOLD_TAGS, NUM_BOLD_TAGS)) {
@@ -529,8 +551,28 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       }
     }
 
-    // If we're about to run out of space, then cut the word off and start a new one
+    // If we're about to run out of space, truncate at a valid UTF-8 boundary
+    // and start a new word. Without this, a multi-byte sequence split across the
+    // buffer boundary produces an invalid UTF-8 string → load access fault.
     if (self->partWordBufferIndex >= MAX_WORD_SIZE) {
+      // Walk back to the start of the last complete UTF-8 character
+      int idx = self->partWordBufferIndex;
+      while (idx > 0 && (self->partWordBuffer[idx - 1] & 0xC0) == 0x80) {
+        idx--;  // skip continuation bytes (10xxxxxx)
+      }
+      // If we found a lead byte, check if the sequence is complete
+      if (idx > 0) {
+        uint8_t lead = static_cast<uint8_t>(self->partWordBuffer[idx - 1]);
+        int expectedLen = 1;
+        if ((lead & 0xE0) == 0xC0) expectedLen = 2;
+        else if ((lead & 0xF0) == 0xE0) expectedLen = 3;
+        else if ((lead & 0xF8) == 0xF0) expectedLen = 4;
+        int actualLen = self->partWordBufferIndex - (idx - 1);
+        if (actualLen < expectedLen) {
+          // Incomplete sequence — truncate before it
+          self->partWordBufferIndex = idx - 1;
+        }
+      }
       self->flushPartWordBuffer();
     }
 

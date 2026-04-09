@@ -6,6 +6,8 @@
 #include <SDCardManager.h>
 #include <Serialization.h>
 
+bool ImageBlock::placeholderMode = false;
+
 void ImageBlock::render(GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   auto renderPlaceholder = [&]() {
     const char* placeholder = "[Image]";
@@ -16,7 +18,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int fontId, const int x, co
     renderer.drawText(fontId, textX, textY, placeholder, true);
   };
 
-  if (cachedBmpPath.empty()) {
+  if (placeholderMode || cachedBmpPath.empty()) {
     renderPlaceholder();
     return;
   }

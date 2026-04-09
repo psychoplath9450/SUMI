@@ -30,4 +30,8 @@ class ImageBlock final : public Block {
   void render(GfxRenderer& renderer, int fontId, int x, int y) const;
   bool serialize(FsFile& file) const;
   static std::unique_ptr<ImageBlock> deserialize(FsFile& file);
+
+  // Global placeholder mode — set by ReaderState before rendering.
+  // When true, render() draws a bordered box instead of loading the BMP.
+  static bool placeholderMode;
 };

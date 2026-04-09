@@ -11,7 +11,7 @@ SUMI uses a pre-allocated memory arena to eliminate heap fragmentation during im
 | ESP32-C3 SRAM | ~400KB | Total available |
 | Static BSS | ~115KB | Global variables, FreeRTOS |
 | Display framebuffer | 48KB | 800×480 ÷ 8 |
-| Memory Arena | 58–82KB | 32+26KB essential, +24KB task stack (optional) |
+| Memory Arena | 52–76KB | 32+20KB essential, +24KB task stack (optional) |
 | NimBLE (when connected) | ~48KB | BLE HID keyboard/page turner |
 | **Available for app** | **~100–150KB** | Fonts, page cache, UI, plugins |
 
@@ -28,11 +28,10 @@ The arena is allocated at boot and released when BLE needs large contiguous heap
 │   zipBuffer     │      │ Alias for primaryBuffer             │
 │                 │      │ 32KB used as LZ77 dictionary        │
 ├──────────────────────────────────────────────────────────────┤
-│ ALLOCATION 2: WORK BUFFER (26KB)                             │
+│ ALLOCATION 2: WORK BUFFER (20KB)                             │
 │   scratchBuffer  │  8KB │ Bump allocator (DP arrays, temp)   │
 │   ditherRegion   │  8KB │ Ditherer error rows (3× ~1.6KB)    │
 │   imageRowRegion │  4KB │ Bitmap row I/O buffers             │
-│   (spare)        │  6KB │ Unmapped headroom                  │
 ├──────────────────────────────────────────────────────────────┤
 │ ALLOCATION 3: TASK STACK (24KB) — OPTIONAL                   │
 │   taskStackRegion │ 24KB │ PageCache background task stack   │
@@ -49,9 +48,9 @@ When BLE is connected and fragments the heap, the 48KB display framebuffer doubl
 |--------|------|-----|
 | `fallbackBuffer` | 48KB | Alias for display framebuffer, used as ZIP dict when BLE is active |
 
-**Why three blocks?** After BLE connects, NimBLE holds ~48KB of heap. The largest contiguous free block is typically ~82KB. A single 82KB allocation would fail. Three smaller blocks (32+26+24) each fit in whatever contiguous space remains. The 24KB task stack is optional — if it can't be allocated, `BackgroundTask` falls back to `xTaskCreate` with heap allocation.
+**Why three blocks?** After BLE connects, NimBLE holds ~48KB of heap. A single 76KB allocation would likely fail in fragmented heap. Three smaller blocks (32+20+24) each fit in whatever contiguous space remains. The 24KB task stack is optional — if it can't be allocated, `BackgroundTask` falls back to `xTaskCreate` with heap allocation.
 
-**Essential vs optional:** The 32KB primary and 26KB work buffers (58KB total) MUST succeed for inline images to work. The `zipBuffer` alias on `primaryBuffer` provides the 32KB LZ77 dictionary for ZIP decompression. Without it, deflated inline images in EPUBs fail.
+**Essential vs optional:** The 32KB primary and 20KB work buffers (52KB total) MUST succeed for inline images to work. The `zipBuffer` alias on `primaryBuffer` provides the 32KB LZ77 dictionary for ZIP decompression. Without it, deflated inline images in EPUBs fail.
 
 ### Bump Allocator
 
@@ -109,9 +108,9 @@ Enter BLE settings:
 
 Exit settings (BLE connected):
   MemoryArena::init()           ← Re-allocate alongside NimBLE
-    32KB primary  → succeeds    ← largest free ~82KB
-    26KB work     → succeeds    ← ~50KB remains
-    24KB task     → succeeds    ← ~26KB remains
+    32KB primary  → succeeds    ← largest free ~88KB
+    20KB work     → succeeds    ← ~50KB remains
+    24KB task     → succeeds    ← ~32KB remains
 
 Enter reader (BLE HID connected):
   ReaderState::enter()
@@ -231,7 +230,7 @@ setup()
        ├─ LittleFS mount
        └─ MemoryArena::init()  ← 3 independent heap_caps_malloc calls
            ├─ 32KB primary buffer
-           ├─ 26KB work buffer
+           ├─ 20KB work buffer
            └─ 24KB task stack (optional)
 ```
 
@@ -245,12 +244,12 @@ sumi::MemoryArena::printStatus();
 
 Output:
 ```
-[MEM] === Arena Status (32+26+24KB) ===
+[MEM] === Arena Status (32+20+24KB) ===
 [MEM] PRIMARY (32KB): 0x3FC80000
-[MEM] WORK (26KB): scratch=0x3FC8C800 dither=0x3FC8E800 imgrow=0x3FC90800
+[MEM] WORK (20KB): scratch=0x3FC8C800 dither=0x3FC8E800 imgrow=0x3FC90800
 [MEM] TASK STACK (24KB): 0x3FC91800
 [MEM] Scratch: 0/8192 bytes used
-[MEM] Heap free: 100240, largest: 81908
+[MEM] Heap free: 106384, largest: 88052
 ```
 
 ## Design Rationale
@@ -259,20 +258,19 @@ Output:
 
 ESP32 malloc/free cycles cause fragmentation. After enough image operations, the heap becomes swiss cheese — plenty of total free bytes but no single block large enough for the next allocation. Pre-allocating fixed buffers eliminates this failure mode entirely.
 
-### Why 32+26+24KB?
+### Why 32+20+24KB?
 
-- **32KB `primaryBuffer`**: Serves as the TINFL_LZ_DICT_SIZE (32KB) dictionary for ZIP decompression. Also used as scratch space for BMP scaling row buffers during thumbnailing (time-shared — ZIP decompression finishes before image operations start).
-- **8KB `scratchBuffer`**: Thumbnails, Group5 compression, bump allocator for DP arrays.
+- **32KB `primaryBuffer`**: Serves as the TINFL_LZ_DICT_SIZE (32KB) dictionary for ZIP decompression. Also used as scratch space for BMP scaling row buffers during thumbnailing (time-shared — ZIP decompression finishes before image operations start). Also used by Flashcards plugin for card storage (avoids heap fragmentation after EPUB reading).
+- **8KB `scratchBuffer`**: Thumbnails, Group5 compression, bump allocator for DP arrays (supports up to 1024 words per paragraph).
 - **8KB `ditherRegion`**: Ordered dithering error rows (3 rows × ~1.6KB each for 800px width).
 - **4KB `imageRowRegion`**: BMP row I/O buffer (max 800×4 bytes).
-- **6KB spare**: Headroom in work buffer for future needs.
 - **24KB `taskStackRegion`** (optional): PageCache background task stack. Avoids 24KB heap `xTaskCreate` allocation. Falls back to heap when unavailable.
 
-Total 58KB essential + 24KB optional = 82KB. With BLE connected (~48KB held by NimBLE), the 58KB essential portion easily fits in the remaining ~100KB heap.
+Total 52KB essential + 24KB optional = 76KB. With BLE connected (~48KB held by NimBLE), the 52KB essential portion easily fits in the remaining ~100KB heap.
 
 ### Why three blocks instead of one?
 
-After NimBLE connects, it holds ~48KB in the middle of the heap. The largest contiguous free block is typically ~82KB. A single 82KB allocation fails. Three smaller allocations (32+26+24) each fit in the available contiguous space. The 24KB task stack is optional — if heap is too fragmented for even that, the task falls back to heap allocation.
+After NimBLE connects, it holds ~48KB in the middle of the heap. A single 76KB allocation would fail. Three smaller allocations (32+20+24) each fit in the available contiguous space. The 24KB task stack is optional — if heap is too fragmented for even that, the task falls back to heap allocation.
 
 ### Why not use PSRAM?
 

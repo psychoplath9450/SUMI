@@ -10,6 +10,7 @@
 #include "PluginHelpers.h"
 #include "PluginInterface.h"
 #include "PluginRenderer.h"
+#include "../core/MemoryArena.h"
 
 namespace sumi {
 
@@ -116,7 +117,7 @@ public:
   const char* name() const override { return "Flashcards"; }
   PluginRunMode runMode() const override { return PluginRunMode::Simple; }
     static const int MAX_DECKS = 20;
-    static const int MAX_CARDS = 100;   // Doubled from 50 (conservative for 380KB RAM)
+    static const int MAX_CARDS = 80;    // Fits in 32KB arena primaryBuffer (80 * 404 = 32,320)
     static const int MAX_TEXT = 200;    // Increased for longer text with pronunciation (was 80)
     
     struct Card {
@@ -153,6 +154,7 @@ public:
     
     // Card data
     Card* cards;
+    bool usingArena_;          // True when cards points to arena memory (don't free)
     int cardCount;
     int cardIndex;
     int sessionCorrect;
@@ -173,7 +175,8 @@ public:
     // ==========================================================================
     // Constructor / Destructor
     // ==========================================================================
-    explicit FlashcardsApp(PluginRenderer& renderer) : d_(renderer), cards(nullptr), cardCount(0), cardIndex(0),
+    explicit FlashcardsApp(PluginRenderer& renderer) : d_(renderer), cards(nullptr), usingArena_(false),
+                      cardCount(0), cardIndex(0),
                       sessionCorrect(0), sessionIncorrect(0),
                       deckCount(0),
                       currentDeckIndex(-1), menuCursor(0), deckCursor(0),
@@ -1627,7 +1630,7 @@ public:
     void startStudySession() {
         currentDeckIndex = deckCursor;
         loadDeck();
-        
+
         if (cardCount > 0) {
             if (cfgShuffle) {
                 shuffleCards();
@@ -1641,28 +1644,31 @@ public:
     
     void loadDeck() {
         closeDeck();
-        
+
         if (deckCursor < 0 || deckCursor >= deckCount) return;
-        
+
         char path[64];
         snprintf(path, sizeof(path), "/flashcards/%s", decks[deckCursor].name);
-        
+
         DeckFormat fmt = decks[deckCursor].format;
-        
-        // Use heap allocation for card storage
+
+        // Use arena primaryBuffer (32KB) for card storage to avoid heap fragmentation.
+        // After opening an EPUB, the heap is too fragmented for a ~32KB contiguous malloc.
+        // The primaryBuffer is idle during plugin execution (no ZIP/image work happening).
         const size_t needed = sizeof(Card) * MAX_CARDS;
-        if (true) {
-            cards = (Card*)malloc(needed);
-            
+        if (MemoryArena::isInitialized() && MemoryArena::primaryBuffer &&
+            needed <= MemoryArena::PRIMARY_BUFFER_SIZE) {
+            cards = reinterpret_cast<Card*>(MemoryArena::primaryBuffer);
+            usingArena_ = true;
         } else {
-            cards = new(::std::nothrow) Card[MAX_CARDS];
-            
+            cards = (Card*)malloc(needed);
+            usingArena_ = false;
         }
         if (!cards) return;
-        
+
         memset(cards, 0, sizeof(Card) * MAX_CARDS);
         cardCount = 0;
-        
+
         bool success = false;
         if (fmt == FMT_TXT) {
             success = loadTxtDeck(path);
@@ -1673,7 +1679,7 @@ public:
         } else if (fmt == FMT_JSON) {
             success = loadJsonDeck(path);
         }
-        
+
         if (!success || cardCount == 0) {
             closeDeck();
         }
@@ -1681,9 +1687,11 @@ public:
     
     void closeDeck() {
         if (cards) {
-            free(cards);
+            if (!usingArena_) {
+                free(cards);
+            }
             cards = nullptr;
-            
+            usingArena_ = false;
         }
         cardCount = 0;
         cardIndex = 0;

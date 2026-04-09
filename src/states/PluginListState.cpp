@@ -6,7 +6,6 @@
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
-#include <SD.h>
 #include <SDCardManager.h>
 
 #include <cstring>
@@ -55,20 +54,20 @@ void PluginListState::scanLuaPlugins(PluginRenderer& renderer) {
   luaRenderer_ = &renderer;
   luaPluginCount_ = 0;
 
-  File dir = SD.open(PLUGINS_CUSTOM_DIR);
-  if (!dir || !dir.isDirectory()) {
+  FsFile dir;
+  if (!SdMan.exists(PLUGINS_CUSTOM_DIR) || !dir.open(PLUGINS_CUSTOM_DIR, O_RDONLY)) {
     Serial.println("[LUA] No /custom directory found, skipping Lua scan");
-    if (dir) dir.close();
     return;
   }
 
   Serial.println("[LUA] Scanning /custom/ for .lua plugins...");
 
-  File entry;
-  while ((entry = dir.openNextFile()) && luaPluginCount_ < MAX_LUA_PLUGINS) {
+  FsFile entry;
+  char fname[64];
+  while (luaPluginCount_ < MAX_LUA_PLUGINS && entry.openNext(&dir, O_RDONLY)) {
     if (entry.isDirectory()) { entry.close(); continue; }
 
-    const char* fname = entry.name();
+    entry.getName(fname, sizeof(fname));
     size_t len = strlen(fname);
 
     // Check for .lua extension

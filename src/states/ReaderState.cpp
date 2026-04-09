@@ -5,6 +5,7 @@
 #include <ContentParser.h>
 #include <CoverHelpers.h>
 #include <Epub/Page.h>
+#include <Epub/blocks/ImageBlock.h>
 #include <EpubChapterParser.h>
 #include <GfxRenderer.h>
 #include <MarkdownParser.h>
@@ -485,6 +486,9 @@ StateTransition ReaderState::update(Core& core) {
 
   Event e;
   while (core.events.pop(e)) {
+    // Any manual input resets auto page turn timer
+    autoTurnLastMs_ = 0;
+
     // Route input to overlay handlers
     if (settingsMode_) {
       handleSettingsInput(core, e);
@@ -663,6 +667,21 @@ StateTransition ReaderState::update(Core& core) {
   }
 #endif
 
+  // Auto page turn (CrossPoint #1219): advance one page on timer expiry.
+  // Reset timer on any manual input (handled by event loop setting autoTurnLastMs_=0).
+  const uint32_t autoInterval = core.settings.getAutoPageTurnMs();
+  if (autoInterval > 0 && !settingsMode_ && !tocMode_) {
+    const uint32_t now = millis();
+    if (autoTurnLastMs_ == 0) {
+      autoTurnLastMs_ = now;  // Initialize on first check
+    } else if (now - autoTurnLastMs_ >= autoInterval) {
+      navigateNext(core);
+      autoTurnLastMs_ = now;
+    }
+  } else {
+    autoTurnLastMs_ = 0;
+  }
+
   return StateTransition::stay(StateId::Reader);
 }
 
@@ -804,6 +823,9 @@ void ReaderState::applyNavResult(const ReaderNavigation::NavResult& result, Core
 void ReaderState::renderCurrentPage(Core& core) {
   ContentType type = core.content.metadata().type;
   const Theme& theme = THEME_MANAGER.current();
+
+  // Set image placeholder mode based on user setting
+  ImageBlock::placeholderMode = (core.settings.showImages == sumi::Settings::ImagePlaceholder);
 
   // Always clear screen first (prevents previous content from showing through)
   renderer_.clearScreen(theme.backgroundColor);
@@ -1161,6 +1183,19 @@ void ReaderState::renderPageContents(Core& core, Page& page, int marginTop, int 
   (void)marginRight;
   (void)marginBottom;
 
+  // Detect large images for refresh mode selection (CrossPoint: double FAST_REFRESH fix).
+  // Large dithered images wash out on single FAST_REFRESH — e-ink particles don't settle.
+  pageHasLargeImage_ = false;
+  const int halfViewport = renderer_.getScreenHeight() / 3;
+  for (const auto& el : page.elements) {
+    if (el->getTag() == TAG_PageImage) {
+      if (static_cast<const PageImage*>(el.get())->getImageHeight() > halfViewport) {
+        pageHasLargeImage_ = true;
+        break;
+      }
+    }
+  }
+
   const Theme& theme = THEME_MANAGER.current();
   const int fontId = core.settings.getReaderFontId(theme);
   page.render(renderer_, fontId, marginLeft, marginTop, theme.primaryTextBlack);
@@ -1173,6 +1208,7 @@ void ReaderState::renderStatusBar(Core& core, int marginRight, int marginBottom,
   // Build status bar data
   ui::ReaderStatusBarData data{};
   data.mode = core.settings.statusBar;
+  data.fieldMask = core.settings.statusBarFields;
   data.title = core.content.metadata().title;
 
   // Battery
@@ -1318,6 +1354,10 @@ void ReaderState::displayWithRefresh(Core& core) {
   } else if (pagesUntilFullRefresh_ == 1) {
     renderer_.displayBuffer(EInkDisplay::HALF_REFRESH, turnOffScreen);
     pagesUntilFullRefresh_ = ppr;
+  } else if (pageHasLargeImage_) {
+    // Large dithered images wash out on single FAST_REFRESH — use HALF for better quality
+    renderer_.displayBuffer(EInkDisplay::HALF_REFRESH, turnOffScreen);
+    pagesUntilFullRefresh_--;
   } else {
     renderer_.displayBuffer(EInkDisplay::FAST_REFRESH, turnOffScreen);
     pagesUntilFullRefresh_--;
@@ -1448,6 +1488,36 @@ void ReaderState::startBackgroundCaching(Core& core) {
 
           if (parser_ && !cachePath.empty() && !cacheTask_.shouldStop()) {
             backgroundCacheImpl(*parser_, cachePath, config);
+          }
+
+          // Silent pre-indexing: after caching current chapter, pre-cache the NEXT chapter
+          // so chapter transitions are instant (CrossPoint: Mar 2026).
+          // Only for EPUB (multi-chapter); reuses the same task stack and arena buffers.
+          if (type == ContentType::Epub && !cacheTask_.shouldStop() && pageCache_) {
+            auto* provider = coreRef.content.asEpub();
+            if (provider && provider->getEpub()) {
+              const auto* epub = provider->getEpub();
+              int nextSpine = spineIndex + 1;
+              if (sectionPage == -1) {
+                nextSpine = calcFirstContentSpine(coverExists, textStart, epub->getSpineItemsCount()) + 1;
+              }
+              if (nextSpine < epub->getSpineItemsCount()) {
+                std::string nextCachePath = epubSectionCachePath(epub->getCachePath(), nextSpine);
+                // Only pre-index if cache doesn't already exist
+                if (!SdMan.exists(nextCachePath.c_str()) && !cacheTask_.shouldStop()) {
+                  Serial.printf("[READER] Pre-indexing next chapter (spine %d)\n", nextSpine);
+                  std::string imageCachePath = coreRef.settings.showImages ? (epub->getCachePath() + "/images") : "";
+                  parser_.reset(new EpubChapterParser(provider->getEpubShared(), nextSpine, renderer_, config, imageCachePath));
+                  parserSpineIndex_ = nextSpine;
+                  // Release current cache — we're done with it, and building a new one
+                  pageCache_.reset();
+                  backgroundCacheImpl(*parser_, nextCachePath, config);
+                  // Don't keep the next chapter's cache in memory — it's saved to SD.
+                  // When the user actually navigates there, it loads from SD instantly.
+                  pageCache_.reset();
+                }
+              }
+            }
           }
         }
 

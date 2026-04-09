@@ -421,6 +421,28 @@ bool earlyInit() {
   // Detect first boot (no .sumi folder yet) — used for welcome overlay on home screen
   sumi::core.settings.isFirstBoot = !SdMan.exists(SUMI_DIR);
 
+  // Crash report to SD (CrossPoint #1145): log reset reason for post-mortem debugging.
+  // Users without USB serial can check /.sumi/crash.log for crash info.
+  {
+    esp_reset_reason_t reason = esp_reset_reason();
+    if (reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT || reason == ESP_RST_TASK_WDT ||
+        reason == ESP_RST_WDT || bootLoopRecovered) {
+      SdMan.mkdir(SUMI_DIR);
+      FsFile crashFile;
+      if (SdMan.openFileForWrite("CRS", SUMI_DIR "/crash.log", crashFile)) {
+        crashFile.seekEnd();  // append
+        char buf[128];
+        snprintf(buf, sizeof(buf), "[%s] Reset reason: %d%s, boot count: %d, uptime: %lu ms\n",
+                 SUMI_VERSION, reason,
+                 bootLoopRecovered ? " (BOOT LOOP RECOVERED)" : "",
+                 rtcBootCount, millis());
+        crashFile.write(buf, strlen(buf));
+        crashFile.close();
+        Serial.printf("[BOOT] Crash logged to %s/crash.log\n", SUMI_DIR);
+      }
+    }
+  }
+
   // Load settings before wakeup verification - without this, a full power cycle
   // (no USB) resets RTC memory and the short power button setting is ignored
   sumi::core.settings.loadFromFile();
@@ -651,6 +673,62 @@ void loop() {
 
   // Apply sunlight fading fix setting to renderer (like CrossPoint's fadingFix)
   renderer.setFadingFix(sumi::core.settings.sunlightFadingFix != 0);
+
+  // Screenshot: simultaneous Up+Down press saves framebuffer as BMP to SD (CrossPoint #759)
+  if (inputManager.isPressed(InputManager::BTN_UP) && inputManager.isPressed(InputManager::BTN_DOWN)) {
+    static unsigned long lastScreenshotMs = 0;
+    if (millis() - lastScreenshotMs > 3000) {  // debounce 3s
+      lastScreenshotMs = millis();
+      SdMan.mkdir("/screenshots");
+      char path[48];
+      snprintf(path, sizeof(path), "/screenshots/%lu.bmp", millis());
+
+      // Write 1-bit BMP: 480x800 portrait (rotated from 800x480 physical buffer)
+      const uint8_t* fb = einkDisplay.getFrameBuffer();
+      const int W = 480, H = 800;  // output dimensions (portrait)
+      const int rowBytes = (W + 31) / 32 * 4;  // BMP row stride (4-byte aligned)
+      const int imageSize = rowBytes * H;
+      const int fileSize = 62 + imageSize;  // 14 (file hdr) + 40 (info hdr) + 8 (palette) + image
+
+      FsFile f;
+      if (SdMan.openFileForWrite("SCR", path, f)) {
+        // BMP file header (14 bytes)
+        uint8_t hdr[62] = {};
+        hdr[0] = 'B'; hdr[1] = 'M';
+        memcpy(hdr + 2, &fileSize, 4);
+        uint32_t offset = 62; memcpy(hdr + 10, &offset, 4);
+        // DIB header (40 bytes)
+        uint32_t dibSize = 40; memcpy(hdr + 14, &dibSize, 4);
+        int32_t w = W; memcpy(hdr + 18, &w, 4);
+        int32_t h = H; memcpy(hdr + 22, &h, 4);  // positive = bottom-up
+        uint16_t planes = 1; memcpy(hdr + 26, &planes, 2);
+        uint16_t bpp = 1; memcpy(hdr + 28, &bpp, 2);
+        memcpy(hdr + 34, &imageSize, 4);
+        // Palette: black and white (8 bytes)
+        hdr[54] = 0; hdr[55] = 0; hdr[56] = 0; hdr[57] = 0;       // black
+        hdr[58] = 0xFF; hdr[59] = 0xFF; hdr[60] = 0xFF; hdr[61] = 0;  // white
+        f.write(hdr, 62);
+
+        // Write rows bottom-up, rotating 90deg CCW from 800x480 physical to 480x800 portrait
+        uint8_t row[64];  // 480/8 = 60 bytes, padded to 64
+        for (int outY = H - 1; outY >= 0; outY--) {
+          memset(row, 0, sizeof(row));
+          for (int outX = 0; outX < W; outX++) {
+            // Map portrait (outX, outY) → physical (inX, inY)
+            int inX = outY;               // portrait Y maps to physical X
+            int inY = W - 1 - outX;       // portrait X maps to inverted physical Y
+            int srcByte = inY * 100 + (inX / 8);  // 800/8 = 100 bytes per row
+            int srcBit = 7 - (inX % 8);
+            int pixel = (fb[srcByte] >> srcBit) & 1;
+            if (pixel) row[outX / 8] |= (0x80 >> (outX % 8));  // BMP MSB-first
+          }
+          f.write(row, rowBytes);
+        }
+        f.close();
+        Serial.printf("[%lu] [SCR] Screenshot saved: %s\n", millis(), path);
+      }
+    }
+  }
 
   if (Serial && millis() - lastMemPrint >= 10000) {
     Serial.printf("[%lu] [MEM] Free: %d bytes, Total: %d bytes, Min Free: %d bytes\n", millis(), ESP.getFreeHeap(),

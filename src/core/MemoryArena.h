@@ -6,13 +6,13 @@
 namespace sumi {
 
 /**
- * Pre-allocated memory arena - 82KB for image/cache and text layout operations.
- * Split into three independent allocations (32KB + 26KB + 24KB) to avoid requiring
+ * Pre-allocated memory arena - 76KB for image/cache and text layout operations.
+ * Split into three independent allocations (32KB + 20KB + 24KB) to avoid requiring
  * large contiguous heap blocks, which fail when BLE fragments memory.
  *
  * Layout:
  *   Primary    (32KB): ZIP LZ77 decompression dictionary
- *   Work       (26KB): scratch (8KB) + dither (8KB) + image rows (4KB) + 6KB spare
+ *   Work       (20KB): scratch (8KB) + dither (8KB) + image rows (4KB)
  *   Task Stack (24KB): PageCache background task stack (for xTaskCreateStatic)
  *
  * The arena can be released when not needed (e.g., BLE transfer, emulator)
@@ -26,15 +26,16 @@ class MemoryArena {
   // === PRIMARY BUFFER (32KB) ===
   static constexpr size_t PRIMARY_BUFFER_SIZE = 32 * 1024;
 
-  // === WORK BUFFER (26KB) ===
-  static constexpr size_t WORK_BUFFER_SIZE = 26 * 1024;
+  // === WORK BUFFER (20KB) ===
+  // Reduced from 26KB — the old layout had 6KB of unmapped spare that was allocated
+  // but never used. On a 380KB device, 6KB back to the heap matters.
+  static constexpr size_t WORK_BUFFER_SIZE = 20 * 1024;
 
-  // Work buffer regions (must fit in WORK_BUFFER_SIZE = 26KB)
-  static constexpr size_t SCRATCH_BUFFER_SIZE = 8 * 1024;     // 8KB - text layout DP arrays
+  // Work buffer regions (must fit in WORK_BUFFER_SIZE = 20KB)
+  static constexpr size_t SCRATCH_BUFFER_SIZE = 8 * 1024;     // 8KB - text layout DP arrays (1024 words)
   static constexpr size_t DITHER_REGION_SIZE = 8 * 1024;      // 8KB - ditherer error rows (3x ~1.6KB)
   static constexpr size_t IMAGE_ROW_REGION_SIZE = 4 * 1024;   // 4KB - GfxRenderer bitmap row buffers
-  // Remaining: 6KB spare
-  // Total: 8 + 8 + 4 + 6 = 26KB
+  // Total: 8 + 8 + 4 = 20KB (exact fit, no waste)
 
   // === TASK STACK (24KB) - separate allocation ===
   static constexpr size_t TASK_STACK_SIZE = 24 * 1024;        // 24KB - PageCache background task stack

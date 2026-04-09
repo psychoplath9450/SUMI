@@ -1,5 +1,6 @@
 #include "Hyphenator.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "HyphenationCommon.h"
@@ -9,7 +10,18 @@ const LanguageHyphenator* Hyphenator::cachedHyphenator_ = nullptr;
 
 namespace {
 
-// Maps a BCP-47 language tag to a language-specific hyphenator.
+// ISO 639-2 (three-letter) to ISO 639-1 (two-letter) mapping.
+// EPUBs may use either form in dc:language metadata (CrossPoint #1037).
+struct Iso639Mapping {
+  const char* iso639_2;
+  const char* iso639_1;
+};
+static constexpr Iso639Mapping kIso639Mappings[] = {
+    {"eng", "en"}, {"fra", "fr"}, {"fre", "fr"}, {"deu", "de"}, {"ger", "de"},
+    {"rus", "ru"}, {"spa", "es"}, {"ita", "it"}, {"ukr", "uk"},
+};
+
+// Maps a BCP-47 or ISO 639-2 language tag to a language-specific hyphenator.
 const LanguageHyphenator* hyphenatorForLanguage(const std::string& langTag) {
   if (langTag.empty()) return nullptr;
 
@@ -22,6 +34,14 @@ const LanguageHyphenator* hyphenatorForLanguage(const std::string& langTag) {
     primary.push_back(c);
   }
   if (primary.empty()) return nullptr;
+
+  // Normalize ISO 639-2 three-letter codes to two-letter equivalents.
+  for (const auto& mapping : kIso639Mappings) {
+    if (primary == mapping.iso639_2) {
+      primary = mapping.iso639_1;
+      break;
+    }
+  }
 
   return getLanguageHyphenatorForPrimaryTag(primary);
 }
@@ -46,6 +66,88 @@ std::vector<Hyphenator::BreakInfo> buildExplicitBreakInfos(const std::vector<Cod
   return breaks;
 }
 
+// Checks if a codepoint is a segment separator (hyphen or apostrophe).
+// Used to split compound words into segments for per-segment hyphenation.
+bool isSegmentSeparator(const uint32_t cp) { return isExplicitHyphen(cp) || isApostrophe(cp); }
+
+// Runs language-specific hyphenation on each alphabetic segment between separators.
+// e.g. "US-Satellitensystems" → segments ["US", "Satellitensystems"], each hyphenated independently.
+void appendSegmentPatternBreaks(const std::vector<CodepointInfo>& cps, const LanguageHyphenator& hyphenator,
+                                const bool includeFallback, std::vector<Hyphenator::BreakInfo>& outBreaks) {
+  size_t segStart = 0;
+
+  for (size_t i = 0; i <= cps.size(); ++i) {
+    const bool atEnd = i == cps.size();
+    const bool atSeparator = !atEnd && isSegmentSeparator(cps[i].value);
+    if (!atEnd && !atSeparator) continue;
+
+    if (i > segStart) {
+      std::vector<CodepointInfo> segment(cps.begin() + segStart, cps.begin() + i);
+      auto segIndexes = hyphenator.breakIndexes(segment);
+
+      if (includeFallback && segIndexes.empty()) {
+        const size_t minPrefix = hyphenator.minPrefix();
+        const size_t minSuffix = hyphenator.minSuffix();
+        for (size_t idx = minPrefix; idx + minSuffix <= segment.size(); ++idx) {
+          segIndexes.push_back(idx);
+        }
+      }
+
+      for (const size_t idx : segIndexes) {
+        if (idx == 0 || idx >= segment.size()) continue;
+        const size_t cpIdx = segStart + idx;
+        if (cpIdx < cps.size()) {
+          outBreaks.push_back({cps[cpIdx].byteOffset, true});
+        }
+      }
+    }
+
+    segStart = i + 1;
+  }
+}
+
+// Adds break points at apostrophe positions in contractions, but only when both sides
+// are long enough to avoid stranding short clitics (CrossPoint #1318, #1405).
+// e.g. "don't" → no break (right segment "t" too short), "all'improvviso" → break after apostrophe.
+void appendApostropheContractionBreaks(const std::vector<CodepointInfo>& cps,
+                                       std::vector<Hyphenator::BreakInfo>& outBreaks) {
+  constexpr size_t kMinLeftSegmentLen = 3;
+  constexpr size_t kMinRightSegmentLen = 3;
+  size_t segmentStart = 0;
+
+  for (size_t i = 0; i < cps.size(); ++i) {
+    if (isSegmentSeparator(cps[i].value)) {
+      if (isApostrophe(cps[i].value) && i > 0 && i + 1 < cps.size() &&
+          isAlphabetic(cps[i - 1].value) && isAlphabetic(cps[i + 1].value)) {
+        size_t leftLen = 0;
+        for (size_t j = segmentStart; j < i; ++j) {
+          if (isAlphabetic(cps[j].value)) ++leftLen;
+        }
+        size_t rightLen = 0;
+        for (size_t j = i + 1; j < cps.size() && !isSegmentSeparator(cps[j].value); ++j) {
+          if (isAlphabetic(cps[j].value)) ++rightLen;
+        }
+        if (leftLen >= kMinLeftSegmentLen && rightLen >= kMinRightSegmentLen) {
+          outBreaks.push_back({cps[i + 1].byteOffset, false});
+        }
+      }
+      segmentStart = i + 1;
+    }
+  }
+}
+
+void sortAndDedupeBreakInfos(std::vector<Hyphenator::BreakInfo>& infos) {
+  std::sort(infos.begin(), infos.end(), [](const Hyphenator::BreakInfo& a, const Hyphenator::BreakInfo& b) {
+    if (a.byteOffset != b.byteOffset) return a.byteOffset < b.byteOffset;
+    return a.requiresInsertedHyphen < b.requiresInsertedHyphen;
+  });
+  infos.erase(std::unique(infos.begin(), infos.end(),
+                          [](const Hyphenator::BreakInfo& a, const Hyphenator::BreakInfo& b) {
+                            return a.byteOffset == b.byteOffset;
+                          }),
+              infos.end());
+}
+
 }  // namespace
 
 std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string& word, const bool includeFallback) {
@@ -57,10 +159,39 @@ std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string& w
   trimSurroundingPunctuationAndFootnote(cps);
   const auto* hyphenator = cachedHyphenator_;
 
+  // Detect apostrophe-like separators early (CrossPoint #1318).
+  bool hasApostrophe = false;
+  for (const auto& cp : cps) {
+    if (isApostrophe(cp.value)) {
+      hasApostrophe = true;
+      break;
+    }
+  }
+
   // Explicit hyphen markers (soft or hard) take precedence over language breaks.
   auto explicitBreakInfos = buildExplicitBreakInfos(cps);
   if (!explicitBreakInfos.empty()) {
+    // Also run patterns on each alphabetic segment between explicit hyphens,
+    // so "US-Satellitensystems" can break within "Satellitensystems".
+    if (hyphenator) {
+      appendSegmentPatternBreaks(cps, *hyphenator, false, explicitBreakInfos);
+    }
+    if (hasApostrophe) {
+      appendApostropheContractionBreaks(cps, explicitBreakInfos);
+    }
+    sortAndDedupeBreakInfos(explicitBreakInfos);
     return explicitBreakInfos;
+  }
+
+  // Apostrophe compounds: split into segments and hyphenate each independently.
+  if (hasApostrophe) {
+    std::vector<BreakInfo> segmentedBreaks;
+    if (hyphenator) {
+      appendSegmentPatternBreaks(cps, *hyphenator, includeFallback, segmentedBreaks);
+    }
+    appendApostropheContractionBreaks(cps, segmentedBreaks);
+    sortAndDedupeBreakInfos(segmentedBreaks);
+    return segmentedBreaks;
   }
 
   // Ask language hyphenator for legal break points.

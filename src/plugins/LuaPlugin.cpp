@@ -5,7 +5,7 @@
 #if FEATURE_PLUGINS
 
 #include <Arduino.h>
-#include <SD.h>
+#include <SDCardManager.h>
 
 extern "C" {
 #include <lua.h>
@@ -191,8 +191,8 @@ void LuaPlugin::cleanup() {
 // Script loading
 // ---------------------------------------------------------------------------
 bool LuaPlugin::loadScript() {
-  File f = SD.open(scriptPath_, FILE_READ);
-  if (!f) {
+  FsFile f;
+  if (!SdMan.openFileForRead("LUA", scriptPath_, f)) {
     snprintf(errorMsg_, sizeof(errorMsg_), "Cannot open: %s", scriptPath_);
     hasError_ = true;
     Serial.printf("[LUA] ERROR: %s\n", errorMsg_);

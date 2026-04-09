@@ -84,6 +84,11 @@ struct CssStyle {
   CssTextDecoration textDecoration = CssTextDecoration::None;
   bool hasTextDecoration = false;
 
+  // Text indent in pixels (positive = first-line indent, negative = hanging indent)
+  // Supports px values directly; em values approximated as em * 16
+  int16_t textIndentPx = 0;
+  bool hasTextIndent = false;
+
   // Merge another style into this one (other style takes precedence)
   void merge(const CssStyle& other) {
     if (other.hasTextAlign) {
@@ -110,6 +115,10 @@ struct CssStyle {
       textDecoration = other.textDecoration;
       hasTextDecoration = true;
     }
+    if (other.hasTextIndent) {
+      textIndentPx = other.textIndentPx;
+      hasTextIndent = true;
+    }
   }
 
   void reset() {
@@ -125,5 +134,7 @@ struct CssStyle {
     hasDisplay = false;
     textDecoration = CssTextDecoration::None;
     hasTextDecoration = false;
+    textIndentPx = 0;
+    hasTextIndent = false;
   }
 };

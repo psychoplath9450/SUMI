@@ -126,10 +126,12 @@ Drop your EPUBs anywhere — the file browser walks everything from root. These 
 │   └── themes/         ← Home art themes (800×480 1-bit BMP)
 ├── custom/             ← Lua plugin scripts (.lua)
 ├── flashcards/         ← .tsv decks (auto-created by plugin)
+├── games/              ← Game Boy ROMs (.gb, .gbc) for SumiBoy
 ├── images/             ← .bmp files for Images app (auto-created)
 ├── sleep/              ← .bmp files for random sleep screens (480×800)
 ├── maps/               ← Map tile BMPs (auto-created)
 ├── notes/              ← Notes plugin saves here (auto-created)
+├── screenshots/        ← Screenshots saved here (Up+Down combo)
 └── .sumi/              ← System, don't touch
     ├── settings.bin    ← User preferences
     ├── library.bin     ← Per-book progress + content hints
@@ -191,13 +193,13 @@ function onButton(btn)
 end
 ```
 
-Up to 8 Lua plugins are scanned at boot. The VM runs with a 40KB memory cap and a 100K instruction limit per call.
+Up to 8 Lua plugins are scanned at boot. The VM runs with a 40KB memory cap and a 100K instruction limit per call. Lua plugins are only discovered at startup — after adding or removing `.lua` files, restart the device for changes to take effect.
 
 ## Memory
 
 ESP32-C3 has ~400KB SRAM. With WiFi disabled and BLE-only, SUMI has ~300KB available for application use.
 
-**Memory Arena (82KB)** — Three independent allocations at boot (32+26+24KB) to survive heap fragmentation alongside BLE. Eliminates malloc/free cycles during image processing:
+**Memory Arena (76KB)** — Three independent allocations at boot (32+20+24KB) to survive heap fragmentation alongside BLE. Eliminates malloc/free cycles during image processing:
 - `primaryBuffer` / `zipBuffer` (32KB) — ZIP LZ77 dictionary and BMP scaling row buffers (time-shared)
 - `scratchBuffer` (8KB) — Thumbnails, bump allocator for DP arrays
 - `ditherRegion` (8KB) — Ordered dithering error rows

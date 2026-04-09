@@ -349,6 +349,24 @@ void CssParser::parseProperty(const std::string& name, const std::string& value,
       style.textDecoration = CssTextDecoration::None;
       style.hasTextDecoration = true;
     }
+  } else if (name == "text-indent") {
+    // Parse text-indent: supports px and em units (CrossPoint #1229)
+    // Negative values = hanging indent, positive = first-line indent
+    std::string v = trim(value);
+    float num = 0;
+    char* end = nullptr;
+    num = strtof(v.c_str(), &end);
+    if (end && end != v.c_str()) {
+      std::string unit(end);
+      unit = toLower(trim(unit));
+      if (unit == "em" || unit == "rem") {
+        style.textIndentPx = static_cast<int16_t>(num * 16);  // approximate 1em = 16px
+      } else {
+        // px, pt, or unitless — treat as pixels
+        style.textIndentPx = static_cast<int16_t>(num);
+      }
+      style.hasTextIndent = true;
+    }
   }
 }
 

@@ -3,7 +3,6 @@
 #include <EpdFontFamily.h>
 
 #include <functional>
-#include <list>
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,11 +18,12 @@ class GfxRenderer;
 using AbortCallback = std::function<bool()>;
 
 class ParsedText {
-  std::list<std::string> words;
-  std::list<EpdFontFamily::Style> wordStyles;
-  std::list<uint8_t> wordDecorations;
+  std::vector<std::string> words;
+  std::vector<EpdFontFamily::Style> wordStyles;
+  std::vector<uint8_t> wordDecorations;
   TextBlock::BLOCK_STYLE style;
   uint8_t indentLevel;
+  int16_t textIndentPx = 0;  // CSS text-indent: positive = first-line indent, negative = hanging indent
   bool hyphenationEnabled;
   bool useGreedyBreaking = false;  // Default to DP (minimum-raggedness) for better line breaking
   bool isRtl = false;
@@ -44,9 +44,11 @@ class ParsedText {
 
  public:
   explicit ParsedText(const TextBlock::BLOCK_STYLE style, const uint8_t indentLevel,
-                      const bool hyphenationEnabled = true, const bool useGreedy = false, const bool rtl = false)
+                      const bool hyphenationEnabled = true, const bool useGreedy = false, const bool rtl = false,
+                      const int16_t cssTextIndent = 0)
       : style(style),
         indentLevel(indentLevel),
+        textIndentPx(cssTextIndent),
         hyphenationEnabled(hyphenationEnabled),
         useGreedyBreaking(useGreedy),
         isRtl(rtl) {}

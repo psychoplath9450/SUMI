@@ -496,6 +496,14 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
       xpos = (spareSpace - static_cast<int>(actualGapCount) * spaceWidth) / 2;
     }
 
+    // CSS text-indent: offset the first line (CrossPoint #1229)
+    if (breakIndex == 0 && textIndentPx != 0) {
+      int indent = textIndentPx;
+      if (indent > 0 && indent > pageWidth / 2) indent = pageWidth / 2;  // clamp sanity
+      if (indent < 0 && indent < -(pageWidth / 2)) indent = -(pageWidth / 2);
+      xpos = static_cast<uint16_t>(std::max(0, static_cast<int>(xpos) + indent));
+    }
+
     for (size_t wordIdx = 0; wordIdx < lineWordCount; wordIdx++) {
       const uint16_t currentWordWidth = wordWidths[lastBreakAt + wordIdx];
       lineData.push_back({std::move(*wordIt), xpos, *styleIt, *decoIt});

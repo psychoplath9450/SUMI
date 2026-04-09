@@ -500,10 +500,11 @@ void fileEntry(const GfxRenderer& r, const Theme& t, int y, const char* name, bo
   // Truncate if too long
   const auto truncated = r.truncatedText(t.menuFontId, displayName, maxTextW);
 
-  // Draw filename (dimmed for unsupported files)
+  // Draw filename — bold for directories, dimmed for unsupported files
   const bool textColor = selected ? t.selectionTextBlack : t.primaryTextBlack;
   r.drawText(t.menuFontId, x + t.itemPaddingX, textY, truncated.c_str(),
-             unsupported ? t.secondaryTextBlack : textColor);
+             unsupported ? t.secondaryTextBlack : textColor,
+             isDir ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
 
   // Draw right-aligned tag
   if (tagText[0] != '\0' && !showConvert) {
@@ -675,61 +676,69 @@ void readerStatusBar(const GfxRenderer& r, const Theme& t, int marginLeft, int m
   const int textY = screenHeight - marginBottom + 2;
   int percentageTextWidth = 0;
 
-  // 1. Battery (left side)
-  char percentageText[8];
+  // 1. Battery (left side) — respects fieldMask
+  char percentageText[8] = {};
   int percentage = data.batteryPercent;
-  if (percentage < 0) {
-    snprintf(percentageText, sizeof(percentageText), "--%%");
-    percentage = 0;
-  } else {
-    snprintf(percentageText, sizeof(percentageText), "%d%%", percentage);
+  const bool showBattery = data.fieldMask & 0x04;  // SBF_BATTERY
+  if (showBattery) {
+    if (percentage < 0) {
+      snprintf(percentageText, sizeof(percentageText), "--%%");
+      percentage = 0;
+    } else {
+      snprintf(percentageText, sizeof(percentageText), "%d%%", percentage);
+    }
+    percentageTextWidth = r.getTextWidth(t.smallFontId, percentageText);
+    r.drawText(t.smallFontId, 20 + marginLeft, textY, percentageText, t.primaryTextBlack);
+
+    // BLE indicator (after battery percentage)
+    if (data.bleConnected) {
+      const int bleX = 20 + marginLeft + percentageTextWidth + 4;
+      r.drawText(t.smallFontId, bleX, textY, "BLE", t.primaryTextBlack);
+      percentageTextWidth += 4 + r.getTextWidth(t.smallFontId, "BLE");
+    }
+
+    // Battery icon (15x10 px)
+    constexpr int batteryWidth = 15;
+    constexpr int batteryHeight = 10;
+    const int x = marginLeft;
+    const int y = screenHeight - marginBottom + 5;
+
+    // Draw battery outline
+    r.drawLine(x, y, x + batteryWidth - 4, y, t.primaryTextBlack);
+    r.drawLine(x, y + batteryHeight - 1, x + batteryWidth - 4, y + batteryHeight - 1, t.primaryTextBlack);
+    r.drawLine(x, y, x, y + batteryHeight - 1, t.primaryTextBlack);
+    r.drawLine(x + batteryWidth - 4, y, x + batteryWidth - 4, y + batteryHeight - 1, t.primaryTextBlack);
+    // Battery terminal
+    r.drawLine(x + batteryWidth - 3, y + 2, x + batteryWidth - 1, y + 2, t.primaryTextBlack);
+    r.drawLine(x + batteryWidth - 3, y + batteryHeight - 3, x + batteryWidth - 1, y + batteryHeight - 3,
+               t.primaryTextBlack);
+    r.drawLine(x + batteryWidth - 1, y + 2, x + batteryWidth - 1, y + batteryHeight - 3, t.primaryTextBlack);
+
+    // Fill level
+    int filledWidth = percentage * (batteryWidth - 5) / 100 + 1;
+    if (filledWidth > batteryWidth - 5) filledWidth = batteryWidth - 5;
+    if (filledWidth > 0) {
+      r.fillRect(x + 1, y + 1, filledWidth, batteryHeight - 2, t.primaryTextBlack);
+    }
   }
-  percentageTextWidth = r.getTextWidth(t.smallFontId, percentageText);
-  r.drawText(t.smallFontId, 20 + marginLeft, textY, percentageText, t.primaryTextBlack);
 
-  // BLE indicator (after battery percentage)
-  if (data.bleConnected) {
-    const int bleX = 20 + marginLeft + percentageTextWidth + 4;
-    r.drawText(t.smallFontId, bleX, textY, "BLE", t.primaryTextBlack);
-    percentageTextWidth += 4 + r.getTextWidth(t.smallFontId, "BLE");
+  // 2. Page numbers (right side) — respects fieldMask
+  char pageStr[16] = {};
+  int pageTextWidth = 0;
+  const bool showPages = data.fieldMask & 0x02;  // SBF_PAGES
+  if (showPages) {
+    if (data.isPartial || data.totalPages == 0) {
+      snprintf(pageStr, sizeof(pageStr), "%d/-", data.currentPage);
+    } else {
+      snprintf(pageStr, sizeof(pageStr), "%d/%d", data.currentPage, data.totalPages);
+    }
+    pageTextWidth = r.getTextWidth(t.smallFontId, pageStr);
+    r.drawText(t.smallFontId, screenWidth - marginRight - pageTextWidth, textY, pageStr, t.primaryTextBlack);
   }
 
-  // Battery icon (15x10 px)
-  constexpr int batteryWidth = 15;
-  constexpr int batteryHeight = 10;
-  const int x = marginLeft;
-  const int y = screenHeight - marginBottom + 5;
-
-  // Draw battery outline
-  r.drawLine(x, y, x + batteryWidth - 4, y, t.primaryTextBlack);
-  r.drawLine(x, y + batteryHeight - 1, x + batteryWidth - 4, y + batteryHeight - 1, t.primaryTextBlack);
-  r.drawLine(x, y, x, y + batteryHeight - 1, t.primaryTextBlack);
-  r.drawLine(x + batteryWidth - 4, y, x + batteryWidth - 4, y + batteryHeight - 1, t.primaryTextBlack);
-  // Battery terminal
-  r.drawLine(x + batteryWidth - 3, y + 2, x + batteryWidth - 1, y + 2, t.primaryTextBlack);
-  r.drawLine(x + batteryWidth - 3, y + batteryHeight - 3, x + batteryWidth - 1, y + batteryHeight - 3,
-             t.primaryTextBlack);
-  r.drawLine(x + batteryWidth - 1, y + 2, x + batteryWidth - 1, y + batteryHeight - 3, t.primaryTextBlack);
-
-  // Fill level
-  int filledWidth = percentage * (batteryWidth - 5) / 100 + 1;
-  if (filledWidth > batteryWidth - 5) filledWidth = batteryWidth - 5;
-  if (filledWidth > 0) {
-    r.fillRect(x + 1, y + 1, filledWidth, batteryHeight - 2, t.primaryTextBlack);
-  }
-
-  // 2. Page numbers (right side)
-  char pageStr[16];
-  if (data.isPartial || data.totalPages == 0) {
-    snprintf(pageStr, sizeof(pageStr), "%d/-", data.currentPage);
-  } else {
-    snprintf(pageStr, sizeof(pageStr), "%d/%d", data.currentPage, data.totalPages);
-  }
-  int pageTextWidth = r.getTextWidth(t.smallFontId, pageStr);
-  r.drawText(t.smallFontId, screenWidth - marginRight - pageTextWidth, textY, pageStr, t.primaryTextBlack);
-
-  // 3. Title (center)
-  if (data.title && data.title[0] != '\0') {
+  // 3. Title (center) — respects fieldMask
+  const bool showTitle = data.fieldMask & 0x01;  // SBF_TITLE
+  if (showTitle && data.title && data.title[0] != '\0') {
     const int batteryAreaWidth = 20 + percentageTextWidth;
     const int titleMarginLeft = batteryAreaWidth + 30 + marginLeft;
     const int titleMarginRight = marginRight + pageTextWidth + 10;

@@ -63,6 +63,7 @@ class ChapterHtmlSlimParser {
   bool pendingEmergencySplit_ = false;
   bool pendingRtl_ = false;
   int rtlUntilDepth_ = INT_MAX;
+  int16_t pendingTextIndentPx_ = 0;  // CSS text-indent for current block
   bool aborted_ = false;
 
   // External abort callback for cooperative cancellation

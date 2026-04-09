@@ -86,6 +86,8 @@ class ReaderState : public State {
   std::unique_ptr<ContentParser> parser_;
   int parserSpineIndex_ = -1;
   uint8_t pagesUntilFullRefresh_;
+  bool pageHasLargeImage_ = false;  // Set during render for refresh mode selection
+  uint32_t autoTurnLastMs_ = 0;    // Auto page turn timer (0 = reset on next check)
 
   // Background caching (uses BackgroundTask for proper lifecycle management)
   BackgroundTask cacheTask_;

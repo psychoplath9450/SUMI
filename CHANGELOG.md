@@ -2,9 +2,9 @@
 
 Built on [Papyrix](https://github.com/pliashkou/papyrix) by Pavel Liashkov (@bigbag), itself based on CrossPoint Reader by Dave Allie.
 
-## [0.4.2-dev] — In Development
+## [0.5.0] — April 2026
 
-**Memory Arena Restructure** — The 80KB single-block arena is now three independent allocations: 32KB primary + 26KB work + 24KB task stack (82KB total). Splitting into three blocks survives heap fragmentation when BLE NimBLE is connected (~48KB held), where a single 82KB contiguous allocation would fail. The 24KB task stack is optional — if it can't be allocated, `BackgroundTask` falls back to heap-based `xTaskCreate`. The 58KB essential allocation (32+26) must succeed for inline images. Primary buffer sized to exactly match TINFL_LZ_DICT_SIZE (32KB) — previously 50KB with 18KB wasted.
+**Memory Arena Restructure** — The 80KB single-block arena is now three independent allocations: 32KB primary + 20KB work + 24KB task stack (76KB total). Splitting into three blocks survives heap fragmentation when BLE NimBLE is connected (~48KB held), where a single contiguous allocation would fail. The 24KB task stack is optional — if it can't be allocated, `BackgroundTask` falls back to heap-based `xTaskCreate`. The 52KB essential allocation (32+20) must succeed for inline images. Primary buffer sized to exactly match TINFL_LZ_DICT_SIZE (32KB). Work buffer is exactly 20KB (8KB scratch + 8KB dither + 4KB image rows, no waste).
 
 **BLE Coexistence** — Arena is released before BLE init (`ble::init()`) and re-allocated when leaving Settings. NimBLE needs large contiguous heap blocks that overlap with the arena. On Settings exit, if BLE HID is connected, the keyboard stays paired while the arena reclaims memory for image processing.
 

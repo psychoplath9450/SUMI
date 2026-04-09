@@ -3,7 +3,7 @@
 ## Status: v0.4.1 Complete
 
 What we implemented:
-- ✅ Memory Arena (82KB: 32+26+24, releasable for BLE)
+- ✅ Memory Arena (76KB: 32+20+24, releasable for BLE)
 - ✅ Flash Thumbnail Cache (instant home screen for opened books)
 - ✅ Arena migration for JPEG/PNG converters
 - ✅ HomeState uses arena scratchBuffer
@@ -137,7 +137,7 @@ Right: Jump to N-Z
 
 ## Notes
 
-- All TODO items use the existing 82KB arena (32+26+24)
+- All TODO items use the existing 76KB arena (32+20+24)
 - Flash cache may need expansion for full library
 - Consider moving flash cache limit to config.h
 - LibraryIndex v2 already has most metadata needed for carousel

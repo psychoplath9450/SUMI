@@ -217,9 +217,13 @@ void FileListState::loadFiles(Core& core) {
 }
 
 bool FileListState::isHidden(const char* name) const {
-  if (name[0] == '.') return true;
-  if (FsHelpers::isHiddenFsItem(name)) return true;
+  // Always hide FOUND.* (filesystem recovery artifacts)
   if (strncmp(name, "FOUND.", 6) == 0) return true;
+  // Dotfiles and FS hidden items: respect user setting
+  if (!sumi::core.settings.showHiddenFiles) {
+    if (name[0] == '.') return true;
+    if (FsHelpers::isHiddenFsItem(name)) return true;
+  }
   return false;
 }
 

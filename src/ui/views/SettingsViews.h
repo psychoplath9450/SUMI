@@ -196,13 +196,14 @@ struct ReaderSettingsView {
   static constexpr const char* const TEXT_LAYOUT_VALUES[] = {"Compact", "Standard", "Large"};
   static constexpr const char* const LINE_SPACING_VALUES[] = {"Compact", "Normal", "Relaxed", "Large"};
   static constexpr const char* const ALIGNMENT_VALUES[] = {"Justified", "Left", "Center", "Right", "Book's Style"};
+  static constexpr const char* const IMAGE_DISPLAY_VALUES[] = {"Off", "Show", "Placeholder"};
   static constexpr const char* const STATUS_BAR_VALUES[] = {"None", "Show"};
   static constexpr const char* const ORIENTATION_VALUES[] = {"Portrait", "Landscape CW", "Inverted", "Landscape CCW"};
 
   static constexpr int SETTING_COUNT = 12;
   static constexpr int MAX_THEMES = 16;
   static constexpr int MAX_FONTS = 16;
-  static constexpr int VISIBLE_ITEMS = 11;
+  static constexpr int VISIBLE_ITEMS = 10;  // 800px screen: (800 - 60 header - 45 footer) / 68px per item = 10
   static const SettingDef DEFS[SETTING_COUNT];
 
   ButtonBar buttons{"Back", "", "<", ">"};

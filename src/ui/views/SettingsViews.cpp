@@ -12,6 +12,7 @@ constexpr const char* const ReaderSettingsView::FONT_SIZE_VALUES[];
 constexpr const char* const ReaderSettingsView::TEXT_LAYOUT_VALUES[];
 constexpr const char* const ReaderSettingsView::LINE_SPACING_VALUES[];
 constexpr const char* const ReaderSettingsView::ALIGNMENT_VALUES[];
+constexpr const char* const ReaderSettingsView::IMAGE_DISPLAY_VALUES[];
 constexpr const char* const ReaderSettingsView::STATUS_BAR_VALUES[];
 constexpr const char* const ReaderSettingsView::ORIENTATION_VALUES[];
 
@@ -24,7 +25,7 @@ const ReaderSettingsView::SettingDef ReaderSettingsView::DEFS[SETTING_COUNT] = {
     {"Text Anti-Aliasing", SettingType::Toggle, nullptr, 0},
     {"Paragraph Alignment", SettingType::Enum, ALIGNMENT_VALUES, 5},
     {"Hyphenation", SettingType::Toggle, nullptr, 0},
-    {"Show Images", SettingType::Toggle, nullptr, 0},
+    {"Show Images", SettingType::Enum, IMAGE_DISPLAY_VALUES, 3},
     {"Show Tables", SettingType::Toggle, nullptr, 0},
     {"Status Bar", SettingType::Enum, STATUS_BAR_VALUES, 2},
     {"Reading Orientation", SettingType::Enum, ORIENTATION_VALUES, 4},
@@ -50,7 +51,7 @@ const InReaderSettingsView::SettingDef InReaderSettingsView::DEFS[SETTING_COUNT]
     {"Alignment", SettingType::Enum, ReaderSettingsView::ALIGNMENT_VALUES, 5},
     {"Hyphenation", SettingType::Toggle, nullptr, 0},
     {"Anti-Aliasing", SettingType::Toggle, nullptr, 0},
-    {"Show Images", SettingType::Toggle, nullptr, 0},
+    {"Show Images", SettingType::Enum, ReaderSettingsView::IMAGE_DISPLAY_VALUES, 3},
     {"Status Bar", SettingType::Enum, ReaderSettingsView::STATUS_BAR_VALUES, 2},
 #if FEATURE_BLUETOOTH
     {"Bluetooth", SettingType::Action, nullptr, 0},
