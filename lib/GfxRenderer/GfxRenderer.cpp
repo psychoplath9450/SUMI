@@ -413,6 +413,19 @@ void GfxRenderer::displayBuffer(EInkDisplay::RefreshMode refreshMode, bool turnO
     }
   }
 
+  // X3 grayscale washout fix (CrossPoint 1.3.0 parity). On X3, every
+  // HALF_REFRESH must force a full sync + one settle pass; otherwise the
+  // fast-diff path accumulates residue and AA pixels turn into haze after
+  // a handful of partial refreshes. requestResync() self-gates on
+  // _x3Mode (no-op on X4). The README's "X3 grayscale/AA may show
+  // artifacts — turn off Text Anti-Aliasing" caveat goes away once this
+  // is in place. EInkDisplay already has the consumer side wired up
+  // (lib/EInkDisplay/src/EInkDisplay.cpp:813,873,919) — nothing in src/
+  // had been calling requestResync() yet.
+  if (refreshMode == EInkDisplay::HALF_REFRESH) {
+    einkDisplay.requestResync(1);
+  }
+
   einkDisplay.displayBuffer(refreshMode, turnOffScreen || fadingFix_);
 }
 
@@ -723,7 +736,15 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { einkDisplay.copyGrayscaleLsb
 
 void GfxRenderer::copyGrayscaleMsbBuffers() const { einkDisplay.copyGrayscaleMsbBuffers(frameBuffer); }
 
-void GfxRenderer::displayGrayBuffer(bool turnOffScreen) const { einkDisplay.displayGrayBuffer(turnOffScreen || fadingFix_); }
+void GfxRenderer::displayGrayBuffer(bool turnOffScreen) const {
+  // X3: force a fresh sync before flushing the grayscale composite. The
+  // 2-pass AA pipeline (LSB + MSB grayscale renders) is the path that
+  // most reliably triggers X3 washout under partial-refresh accumulation
+  // — see displayBuffer above for the broader rationale. requestResync()
+  // is a no-op on X4.
+  einkDisplay.requestResync(1);
+  einkDisplay.displayGrayBuffer(turnOffScreen || fadingFix_);
+}
 
 void GfxRenderer::freeBwBufferChunks() {
   for (auto& bwBufferChunk : bwBufferChunks) {

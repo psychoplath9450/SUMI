@@ -1865,6 +1865,15 @@ void ReaderState::startBackgroundCaching(Core& core) {
           Serial.printf("[MEM] PageCache stack high-water: %u bytes free of %u (peak %u used)\n",
                         free, total, peak);
         }
+
+        // Clear the published handle now that the bg task is exiting under
+        // its own power. If we don't, `s_cacheTaskHandle_` stays pointing at
+        // a freed task handle and the next main-task renderer call logs a
+        // spurious "[GFX] BUG: clearScreen ... cacheTask is still active"
+        // (CONCURRENCY.md C1) — false positive seen on Issue #23. The
+        // stopBackgroundCaching() path also clears this, but it early-returns
+        // when isRunning() is already false, so natural exit must clear here.
+        GfxRenderer::s_cacheTaskHandle_ = nullptr;
   };
 
   // Use arena task stack to avoid heap fragmentation from 24KB xTaskCreate allocation
@@ -1884,28 +1893,28 @@ void ReaderState::startBackgroundCaching(Core& core) {
 }
 
 void ReaderState::stopBackgroundCaching() {
-  if (!cacheTask_.isRunning()) {
-    return;
+  if (cacheTask_.isRunning()) {
+    // BackgroundTask::stop() uses event-based waiting (no polling)
+    // and NEVER force-deletes the task
+    if (!cacheTask_.stop(kCacheTaskStopTimeoutMs)) {
+      Serial.println("[READER] WARNING: Cache task did not stop within timeout");
+      Serial.println("[READER] Task may be blocked on SD card I/O");
+    }
+
+    // Yield to allow FreeRTOS idle task to clean up the deleted task's TCB.
+    // The background task self-deletes via vTaskDelete(NULL), but the idle task
+    // must run to free its resources. Without this, parser_.reset() or
+    // pageCache_.reset() can trigger mutex ownership violations
+    // (assert failed: xQueueGenericSend queue.c:832).
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 
-  // BackgroundTask::stop() uses event-based waiting (no polling)
-  // and NEVER force-deletes the task
-  if (!cacheTask_.stop(kCacheTaskStopTimeoutMs)) {
-    Serial.println("[READER] WARNING: Cache task did not stop within timeout");
-    Serial.println("[READER] Task may be blocked on SD card I/O");
-  }
-
-  // Yield to allow FreeRTOS idle task to clean up the deleted task's TCB.
-  // The background task self-deletes via vTaskDelete(NULL), but the idle task
-  // must run to free its resources. Without this, parser_.reset() or
-  // pageCache_.reset() can trigger mutex ownership violations
-  // (assert failed: xQueueGenericSend queue.c:832).
-  vTaskDelay(10 / portTICK_PERIOD_MS);
-
-  // Clear the handle AFTER the task is provably stopped so any racing
-  // renderer call from cacheTask still sees its own handle. Once we
-  // clear, future main-task renderer calls find nullptr (no warning,
-  // because there's no bg task to be racing).
+  // Always clear the handle, even on the early-exit path. The bg task body
+  // also clears it on natural exit, but a stale handle can survive (a) if
+  // the task self-deleted between an earlier isRunning() check and now,
+  // or (b) if we never observed the task's last moments before it cleared
+  // its own handle. Either way, by the time stopBackgroundCaching() returns
+  // there must be no bg task and no handle.
   GfxRenderer::s_cacheTaskHandle_ = nullptr;
 }
 

@@ -564,11 +564,16 @@ StateTransition FileListState::update(Core& core) {
               }
               break;
             case Button::Right:
-              // Show the file-action popup (Index / Delete / Cancel). The
-              // popup teaches users that "Index for faster reading"
-              // exists; selecting Delete from it leads into the same
-              // confirmation dialog as before.
-              promptFileAction(core);
+              // Straight to delete-confirm (pre-0.6.0 behavior). The
+              // file-action popup that briefly hosted "Index for faster
+              // reading" was retired in 0.6.2 — on-device cold-extend
+              // indexing was too inconsistent on long books under heap
+              // pressure (Issue #23), and the right path is to pre-build
+              // the cache off-device via sumi.page/process. The popup
+              // code (promptFileAction / FileActionMenuView / Screen::
+              // FileAction handler) is intentionally left in place but
+              // unreachable from UI; a follow-up sweep can remove it.
+              promptDelete(core);
               break;
             case Button::Center:
               openSelected(core);

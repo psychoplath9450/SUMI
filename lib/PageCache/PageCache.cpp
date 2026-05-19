@@ -135,7 +135,22 @@ bool PageCache::loadLut(std::vector<uint32_t>& lut) {
 }
 
 bool PageCache::load(const RenderConfig& config) {
+  // Check for an aborted-extend marker BEFORE reading. If present, the
+  // previous session's cold extend on this cache crashed mid-parse
+  // (uncaught std::bad_alloc → terminate → abort, with -fno-exceptions).
+  // Without intervention the next page turn would re-trigger the same
+  // crash, looping the user forever. Sealing the cache here forces nav
+  // to advance into the next spine at the partial cache's last page
+  // instead of attempting another cold extend. Issue #23.
+  const std::string markerPath = cachePath_ + ".attempt";
+  const bool abortedExtendDetected = SdMan.exists(markerPath.c_str());
+
   if (!SdMan.openFileForRead("CACHE", cachePath_, file_)) {
+    if (abortedExtendDetected) {
+      // Orphan marker (no cache file) — clean it up so we don't keep
+      // tripping on it next session.
+      SdMan.remove(markerPath.c_str());
+    }
     return false;
   }
 
@@ -146,6 +161,7 @@ bool PageCache::load(const RenderConfig& config) {
     file_.close();
     Serial.printf("[CACHE] Version mismatch: got %u, expected %u\n", version, CACHE_FILE_VERSION);
     clear();
+    if (abortedExtendDetected) SdMan.remove(markerPath.c_str());
     return false;
   }
 
@@ -166,6 +182,7 @@ bool PageCache::load(const RenderConfig& config) {
     file_.close();
     Serial.printf("[CACHE] Config mismatch, invalidating cache\n");
     clear();
+    if (abortedExtendDetected) SdMan.remove(markerPath.c_str());
     return false;
   }
 
@@ -175,6 +192,7 @@ bool PageCache::load(const RenderConfig& config) {
     Serial.printf("[CACHE] Implausible pageCount %u in load(), discarding cache\n", pageCount_);
     file_.close();
     clear();
+    if (abortedExtendDetected) SdMan.remove(markerPath.c_str());
     return false;
   }
   uint8_t partial;
@@ -183,6 +201,35 @@ bool PageCache::load(const RenderConfig& config) {
   config_ = config;
 
   file_.close();
+
+  // If an extend attempt aborted last session, seal the cache as complete
+  // both in memory and on disk. Without this seal, ensurePageCached would
+  // detect needsExtension() at the prefetch threshold and run cold extend
+  // again — same heap profile, same abort, same reboot loop. Sealing
+  // means the user can read the partially-built cache (pages 0..N-1) and
+  // forward-nav at page N-1 advances to the next spine instead of
+  // looping. To pick the parser back up they can convert / pre-render the
+  // book via sumi.page/process. Issue #23.
+  if (abortedExtendDetected && isPartial_) {
+    Serial.printf("[CACHE] Aborted-extend marker present — sealing %u-page cache as complete\n", pageCount_);
+    isPartial_ = false;
+    // In-place isPartial byte rewrite. The byte lives at:
+    //   HEADER_SIZE - 4 (lutOffset) - 1 (isPartial) = offset 22
+    // openFileForWrite would O_TRUNC and destroy the cache; we need a
+    // non-truncating O_RDWR open (same pattern as create()'s append path).
+    if (file_.open(cachePath_.c_str(), O_RDWR)) {
+      file_.seek(HEADER_SIZE - 4 - 1);
+      const uint8_t partialByte = 0;
+      serialization::writePod(file_, partialByte);
+      SdMan.syncAndClose(file_);
+    } else {
+      Serial.printf("[CACHE] WARNING: could not reopen cache to persist seal — partial flag will revert on reboot\n");
+    }
+  }
+  if (abortedExtendDetected) {
+    SdMan.remove(markerPath.c_str());
+  }
+
   Serial.printf("[CACHE] Loaded: %d pages, partial=%d\n", pageCount_, isPartial_);
   return true;
 }
@@ -359,8 +406,28 @@ bool PageCache::extend(ContentParser& parser, uint16_t additionalPages, const Ab
   const uint16_t targetPages = pageCount_ + chunk;
   Serial.printf("[CACHE] Cold extend from %d to %d pages\n", currentPages, targetPages);
 
+  // Write an aborted-extend marker BEFORE the parser runs. If the parser
+  // throws an uncaught std::bad_alloc mid-call (the typical failure mode
+  // under heap pressure with -fno-exceptions), terminate→abort skips the
+  // marker delete below and we reboot. PageCache::load() next session
+  // sees the marker and seals this cache as complete, preventing the
+  // user from looping the same abort on every page turn. Issue #23.
+  const std::string markerPath = cachePath_ + ".attempt";
+  {
+    FsFile marker;
+    if (SdMan.openFileForWrite("MARK", markerPath, marker)) {
+      SdMan.syncAndClose(marker);
+    }
+    // If marker write fails, proceed without — failing the extend on a
+    // best-effort defense would be worse than the rare abort it guards.
+  }
+
   parser.reset();
   bool result = create(parser, config_, targetPages, currentPages, shouldAbort);
+
+  // We survived the parse (success or clean failure return). Remove the
+  // marker; the next load() will see clean state.
+  SdMan.remove(markerPath.c_str());
 
   // No forward progress: either the parser truly finished the chapter,
   // or it bailed early (heap pressure, timeout, etc.). In both cases we
@@ -429,6 +496,12 @@ std::unique_ptr<Page> PageCache::loadPage(uint16_t pageNum) {
 }
 
 bool PageCache::clear() const {
+  // Also remove any aborted-extend marker so a future cache at this
+  // path doesn't inherit an old crash signal.
+  const std::string markerPath = cachePath_ + ".attempt";
+  if (SdMan.exists(markerPath.c_str())) {
+    SdMan.remove(markerPath.c_str());
+  }
   if (!SdMan.exists(cachePath_.c_str())) {
     return true;
   }

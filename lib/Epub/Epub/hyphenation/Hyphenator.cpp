@@ -10,6 +10,24 @@ const LanguageHyphenator* Hyphenator::cachedHyphenator_ = nullptr;
 
 namespace {
 
+// CJK ideograph / syllabary check. Same ranges used by ScriptDetector and
+// ParsedText (inlined here to avoid pulling those libraries into the
+// hyphenation translation unit just for one predicate). At a break
+// position whose adjacent character is CJK, no visible hyphen should be
+// drawn — CJK scripts permit line breaks anywhere between glyphs without
+// inserting any joining glyph. CrossPoint 1.3.0 fix.
+bool cjkAdjacentToBreak(uint32_t cp) {
+  if (cp >= 0x4E00 && cp <= 0x9FFF) return true;    // CJK Unified Ideographs
+  if (cp >= 0x3400 && cp <= 0x4DBF) return true;    // CJK Extension A
+  if (cp >= 0xF900 && cp <= 0xFAFF) return true;    // CJK Compatibility Ideographs
+  if (cp >= 0x3040 && cp <= 0x309F) return true;    // Hiragana
+  if (cp >= 0x30A0 && cp <= 0x30FF) return true;    // Katakana
+  if (cp >= 0xAC00 && cp <= 0xD7AF) return true;    // Hangul Syllables
+  if (cp >= 0x20000 && cp <= 0x2A6DF) return true;  // CJK Extension B+
+  if (cp >= 0xFF00 && cp <= 0xFFEF) return true;    // Fullwidth forms
+  return false;
+}
+
 // ISO 639-2 (three-letter) to ISO 639-1 (two-letter) mapping.
 // EPUBs may use either form in dc:language metadata (CrossPoint #1037).
 struct Iso639Mapping {
@@ -97,7 +115,15 @@ void appendSegmentPatternBreaks(const std::vector<CodepointInfo>& cps, const Lan
         if (idx == 0 || idx >= segment.size()) continue;
         const size_t cpIdx = segStart + idx;
         if (cpIdx < cps.size()) {
-          outBreaks.push_back({cps[cpIdx].byteOffset, true});
+          // CJK characters break without an inserted hyphen — if either
+          // the codepoint at the break or the one immediately before it
+          // is CJK, suppress the visible hyphen. Other scripts keep the
+          // hyphen because the Liang patterns there assume English-style
+          // word-break behavior. CrossPoint 1.3.0 fix.
+          const bool cjkBreak =
+              cjkAdjacentToBreak(cps[cpIdx].value) ||
+              (cpIdx > 0 && cjkAdjacentToBreak(cps[cpIdx - 1].value));
+          outBreaks.push_back({cps[cpIdx].byteOffset, !cjkBreak});
         }
       }
     }

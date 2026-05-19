@@ -51,6 +51,15 @@ void Display::flush(RefreshMode mode) {
       break;
   }
 
+  // X3 grayscale washout fix. GfxRenderer::displayBuffer covers most
+  // refresh paths, but this driver-level flush() bypasses it (used by
+  // states that paint directly to the framebuffer and request a refresh
+  // without going through the renderer). requestResync() self-gates on
+  // _x3Mode so it's a no-op on X4. CrossPoint 1.3.0 parity.
+  if (einkMode == EInkDisplay::HALF_REFRESH) {
+    display.requestResync(1);
+  }
+
   display.refreshDisplay(einkMode);
   dirty_ = false;
 }
